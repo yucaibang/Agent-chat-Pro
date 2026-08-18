@@ -41,14 +41,8 @@
     ],
     "win": {
       "icon": "build/icon.ico",
-      "target": [
-        {
-          "target": "nsis",
-          "arch": ["x64"],
-          "ext": "nsis"
-        }
-      ],
-      "artifactName": "${productName}-${version}-${arch}.${ext}"
+      "target": ["nsis"],
+      "artifactName": "${productName}-${version}-Setup.${ext}"
     },
     "nsis": {
       "oneClick": false,
