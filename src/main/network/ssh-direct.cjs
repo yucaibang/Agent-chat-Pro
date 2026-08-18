@@ -1,7 +1,7 @@
 "use strict";
 
 const { Client } = require("ssh2");
-const { Transport } = require("./transport-base");
+const { Transport } = require("./transport-base.cjs");
 const { shellQuote } = require("../protocol.cjs");
 
 const PING_COMMAND = "printf OK";

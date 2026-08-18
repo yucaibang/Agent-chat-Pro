@@ -1,6 +1,6 @@
 "use strict";
 
-const { SshDirectTransport } = require("./ssh-direct");
+const { SshDirectTransport } = require("./ssh-direct.cjs");
 const { writeLog } = require("../logger.cjs");
 
 /**
