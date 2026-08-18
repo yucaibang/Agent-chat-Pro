@@ -525,38 +525,65 @@ async function uploadAttachments(client, attachments, conversationId, onProgress
   return uploaded;
 }
 
+const SFTP_TIMEOUT_MS = 30_000;
+const RETRY_MAX_ATTEMPTS = 3;
+const RETRY_BASE_DELAY_MS = 600;
+const RETRY_MAX_DELAY_MS = 15_000;
+
+function withTimeout(promise, ms, message) {
+  let timer;
+  const timeout = new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(message)), ms); });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
 function openSftp(client) {
-  return new Promise((resolve, reject) => client.sftp((error, sftp) => error ? reject(error) : resolve(sftp)));
+  return withTimeout(
+    new Promise((resolve, reject) => client.sftp((error, sftp) => error ? reject(error) : resolve(sftp))),
+    SFTP_TIMEOUT_MS,
+    "SFTP 通道打开超时，请检查网络连接。"
+  );
 }
 
 function writeSftp(sftp, remotePath, data, onProgress) {
-  return new Promise((resolve, reject) => {
-    const stream = sftp.createWriteStream(remotePath, { mode: 0o600 });
-    stream.once("error", reject);
-    stream.once("close", resolve);
-    let offset = 0;
-    const writeNext = () => {
-      while (offset < data.length) {
-        const end = Math.min(offset + 64 * 1024, data.length);
-        const ready = stream.write(data.subarray(offset, end));
-        offset = end;
-        onProgress?.(offset);
-        if (!ready) return stream.once("drain", writeNext);
-      }
-      stream.end();
-    };
-    writeNext();
-  });
+  return withTimeout(
+    new Promise((resolve, reject) => {
+      const stream = sftp.createWriteStream(remotePath, { mode: 0o600 });
+      stream.once("error", reject);
+      stream.once("close", resolve);
+      let offset = 0;
+      const writeNext = () => {
+        while (offset < data.length) {
+          const end = Math.min(offset + 64 * 1024, data.length);
+          const ready = stream.write(data.subarray(offset, end));
+          offset = end;
+          onProgress?.(offset);
+          if (!ready) return stream.once("drain", writeNext);
+        }
+        stream.end();
+      };
+      writeNext();
+    }),
+    SFTP_TIMEOUT_MS,
+    "文件上传超时，请检查网络连接。"
+  );
 }
 
 function connectWithRetry(config, onUnknownHost, onLog, onStatus) {
-  return connect(config, onUnknownHost, onLog).catch(async (error) => {
-    if (!isTransientConnectionError(error)) throw error;
-    onLog?.("ssh_reconnect_attempt", { host: config.host, error: error.message });
-    onStatus?.("reconnecting");
-    await new Promise((resolve) => setTimeout(resolve, 600));
-    return connect(config, onUnknownHost, onLog);
-  });
+  let lastError;
+  const attempt = async (remaining) => {
+    try {
+      return await connect(config, onUnknownHost, onLog);
+    } catch (error) {
+      lastError = error;
+      if (remaining <= 1 || !isTransientConnectionError(error)) throw error;
+      const delay = Math.min(RETRY_BASE_DELAY_MS * Math.pow(2, RETRY_MAX_ATTEMPTS - remaining), RETRY_MAX_DELAY_MS);
+      onLog?.("ssh_reconnect_attempt", { host: config.host, attempt: RETRY_MAX_ATTEMPTS - remaining + 1, delay, error: error.message });
+      onStatus?.("reconnecting");
+      await new Promise((resolve) => setTimeout(resolve, delay));
+      return attempt(remaining - 1);
+    }
+  };
+  return attempt(RETRY_MAX_ATTEMPTS);
 }
 
 function isTransientConnectionError(error) {
@@ -688,6 +715,8 @@ function mimeFromPath(filePath) {
   return ({ png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif", webp: "image/webp", svg: "image/svg+xml", pdf: "application/pdf", txt: "text/plain", md: "text/markdown", json: "application/json", csv: "text/csv", zip: "application/zip", docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" })[extension] || "application/octet-stream";
 }
 
+const SSH_OPERATION_TIMEOUT_MS = 60_000;
+
 async function readRemoteFile(config, remotePath, maximumBytes, onUnknownHost, onLog) {
   if (!isSafeRemotePath(remotePath)) throw new Error("远程文件路径无效。");
   const client = await connectWithRetry(config, onUnknownHost, onLog);
@@ -720,15 +749,19 @@ async function downloadRemoteFile(config, remotePath, localPath, onUnknownHost, 
   return localPath;
 }
 
-function readSftp(sftp, remotePath, _expectedSize) {
-  return new Promise((resolve, reject) => {
-    const chunks = [];
-    let total = 0;
-    const stream = sftp.createReadStream(remotePath);
-    stream.on("data", (chunk) => { chunks.push(chunk); total += chunk.length; });
-    stream.once("error", reject);
-    stream.once("end", () => resolve(Buffer.concat(chunks, total)));
-  });
+function readSftp(sftp, remotePath, expectedSize) {
+  return withTimeout(
+    new Promise((resolve, reject) => {
+      const chunks = [];
+      let total = 0;
+      const stream = sftp.createReadStream(remotePath);
+      stream.on("data", (chunk) => { chunks.push(chunk); total += chunk.length; });
+      stream.once("error", reject);
+      stream.once("end", () => resolve(Buffer.concat(chunks, total)));
+    }),
+    Math.max(SFTP_TIMEOUT_MS, (expectedSize || 0) / 1024 * 500),
+    "文件下载超时，请检查网络连接。"
+  );
 }
 
 function fastGet(sftp, remotePath, localPath) {

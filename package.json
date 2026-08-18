@@ -1,0 +1,75 @@
+{
+  "name": "agent-chat-pro",
+  "version": "0.2.0-alpha",
+  "description": "Agent Chat Pro — 内网/外网双模式 SSH 远程 AI 聊天客户端",
+  "author": "Jiang",
+  "main": "src/main/main.cjs",
+  "scripts": {
+    "start": "electron .",
+    "pack": "electron-builder --dir",
+    "build:win:nsis": "electron-builder --win nsis",
+    "build:win:portable": "electron-builder --win portable",
+    "build:mac": "electron-builder --mac",
+    "build:linux": "electron-builder --linux"
+  },
+  "dependencies": {
+    "marked": "^15.0.12",
+    "sanitize-html": "^2.17.6",
+    "ssh2": "^1.17.0"
+  },
+  "devDependencies": {
+    "electron": "^35.0.0",
+    "electron-builder": "^26.0.0"
+  },
+  "build": {
+    "appId": "com.jiang.agentChatPro",
+    "productName": "Agent Chat Pro",
+    "copyright": "Copyright © 2026 Jiang",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "src/**",
+      "!src/bridge/node_modules"
+    ],
+    "extraResources": [
+      {
+        "from": "src/bridge/{agent-sdk-bridge.mjs,package.json,package-lock.json}",
+        "to": "bridge",
+        "filter": ["**/*"]
+      }
+    ],
+    "win": {
+      "icon": "build/icon.ico",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": ["x64"],
+          "ext": "nsis"
+        }
+      ],
+      "artifactName": "${productName}-${version}-${arch}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "allowElevation": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Agent Chat Pro",
+      "installerLanguages": ["zh_CN", "en_US"],
+      "language": 2052,
+      "unicode": true
+    },
+    "mac": {
+      "icon": "build/icon.icns",
+      "category": "public.app-category.productivity",
+      "target": "dmg"
+    },
+    "linux": {
+      "icon": "build/icon.png",
+      "target": "AppImage",
+      "category": "Network"
+    }
+  }
+}

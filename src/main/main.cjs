@@ -31,10 +31,14 @@ const activeRequests = new Map();
 function bundledBridgeFiles() {
   const fs = require("fs");
   const directory = path.join(__dirname, "../bridge");
-  return ["agent-sdk-bridge.mjs", "package.json", "package-lock.json"].map((name) => ({
-    name,
-    data: fs.readFileSync(path.join(directory, name))
-  }));
+  const required = ["agent-sdk-bridge.mjs", "package.json"];
+  const optional = ["package-lock.json"];
+  const files = required.map((name) => ({ name, data: fs.readFileSync(path.join(directory, name)) }));
+  for (const name of optional) {
+    const filePath = path.join(directory, name);
+    if (fs.existsSync(filePath)) files.push({ name, data: fs.readFileSync(filePath) });
+  }
+  return files;
 }
 
 function createWindow() {
@@ -67,7 +71,7 @@ function createWindow() {
 }
 
 app.whenReady().then(() => {
-  app.setAppUserModelId("com.jiang.claudeNasChat");
+  app.setAppUserModelId("com.jiang.agentChatPro");
   nativeTheme.themeSource = "dark";
   writeLog("app_start", { version: app.getVersion(), platform: process.platform, arch: process.arch });
   try {
@@ -309,7 +313,7 @@ app.whenReady().then(() => {
     return result.filePath;
   });
   ipcMain.handle("file:open", async (_event, file) => {
-    const directory = path.join(app.getPath("temp"), "Agent NAS Chat");
+    const directory = path.join(app.getPath("temp"), "Agent Chat Pro");
     require("fs").mkdirSync(directory, { recursive: true });
     const localPath = path.join(directory, `${randomUUID()}-${safeFileName(file?.name)}`);
     const config = file?.localPath ? null : getSshConnection();
@@ -440,9 +444,9 @@ function handleWindowAction(action) {
   else if (action === "fullscreen") window.setFullScreen(!window.isFullScreen());
   else if (action === "about") dialog.showMessageBox(window, {
     type: "info",
-    title: "关于 Agent NAS Chat",
-    message: "Agent NAS Chat",
-    detail: `版本 ${app.getVersion()}\n支持本机或 SSH 运行 Agent CLI；当前内置 Claude Code 适配器。`,
+    title: "关于 Agent Chat Pro",
+    message: "Agent Chat Pro",
+    detail: `版本 ${app.getVersion()}\n支持内网直连/外网穿透双模式 SSH 远程 AI 聊天；当前内置 Claude Code 适配器。`,
     buttons: ["确定"]
   });
   else return false;

@@ -86,6 +86,7 @@ async function handleControl(value) {
   if (value.type === "start" && !startConfig) {
     startConfig = value;
     messages.push(userMessage(value.prompt));
+    notifyStart(value);
     return;
   }
   if (value.type === "permission_result") {
@@ -113,17 +114,17 @@ input.on("line", (line) => {
 
 input.on("close", () => messages.close());
 
+const startPromise = { resolve: null, reject: null };
+const startReady = new Promise((resolve, reject) => { startPromise.resolve = resolve; startPromise.reject = reject; });
+
+function notifyStart(config) {
+  startPromise.resolve(config);
+}
+
 async function waitForStart() {
   if (startConfig) return startConfig;
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error("等待客户端启动消息超时。")), 15_000);
-    const check = () => {
-      if (!startConfig) return setTimeout(check, 10);
-      clearTimeout(timer);
-      resolve(startConfig);
-    };
-    check();
-  });
+  const timer = setTimeout(() => startPromise.reject(new Error("等待客户端启动消息超时。")), 15_000);
+  try { return await startReady; } finally { clearTimeout(timer); }
 }
 
 async function main() {
