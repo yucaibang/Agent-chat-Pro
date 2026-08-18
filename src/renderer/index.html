@@ -1,0 +1,236 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self'; script-src 'self'; img-src 'self' data:" />
+    <title>Agent NAS Chat</title>
+    <link rel="stylesheet" href="styles.css" />
+    <script defer src="renderer.js"></script>
+  </head>
+  <body>
+    <div class="window-shell">
+      <div class="titlebar">
+        <div class="titlebar-identity"><span>✦</span><strong>Agent NAS Chat</strong></div>
+        <nav class="app-menu" aria-label="应用菜单">
+          <div class="menu-group">
+            <button type="button" class="menu-trigger">文件</button>
+            <div class="menu-dropdown">
+              <button type="button" data-app-action="new-chat">新建会话 <kbd>Ctrl+N</kbd></button>
+              <hr />
+              <button type="button" data-window-action="quit">退出</button>
+            </div>
+          </div>
+          <div class="menu-group">
+            <button type="button" class="menu-trigger">编辑</button>
+            <div class="menu-dropdown">
+              <button type="button" data-window-action="undo">撤销</button>
+              <button type="button" data-window-action="redo">重做</button>
+              <hr />
+              <button type="button" data-window-action="cut">剪切</button>
+              <button type="button" data-window-action="copy">复制</button>
+              <button type="button" data-window-action="paste">粘贴</button>
+              <button type="button" data-window-action="selectAll">全选</button>
+            </div>
+          </div>
+          <div class="menu-group">
+            <button type="button" class="menu-trigger">查看</button>
+            <div class="menu-dropdown">
+              <button type="button" data-window-action="zoom-reset">恢复默认缩放</button>
+              <button type="button" data-window-action="zoom-in">放大</button>
+              <button type="button" data-window-action="zoom-out">缩小</button>
+              <hr />
+              <button type="button" data-window-action="fullscreen">全屏</button>
+            </div>
+          </div>
+          <div class="menu-group">
+            <button type="button" class="menu-trigger">设置</button>
+            <div class="menu-dropdown">
+              <button type="button" data-app-action="settings">连接设置</button>
+              <button type="button" data-app-action="archive">打开会话存档</button>
+              <button type="button" data-app-action="diagnostics">打开诊断日志</button>
+            </div>
+          </div>
+          <div class="menu-group">
+            <button type="button" class="menu-trigger">窗口</button>
+            <div class="menu-dropdown">
+              <button type="button" data-window-action="minimize">最小化</button>
+              <button type="button" data-window-action="toggle-maximize">最大化/还原</button>
+              <button type="button" data-window-action="close">关闭窗口</button>
+            </div>
+          </div>
+          <div class="menu-group">
+            <button type="button" class="menu-trigger">帮助</button>
+            <div class="menu-dropdown">
+              <button type="button" data-window-action="about">关于 Agent NAS Chat</button>
+            </div>
+          </div>
+        </nav>
+        <div class="window-controls" aria-label="窗口控制">
+          <button type="button" class="window-control window-minimize" data-window-action="minimize" title="最小化" aria-label="最小化">
+            <span class="window-control-icon" aria-hidden="true"></span>
+          </button>
+          <button type="button" class="window-control window-maximize" id="maximize-window" data-window-action="toggle-maximize" title="最大化" aria-label="最大化">
+            <span class="window-control-icon" aria-hidden="true"></span>
+          </button>
+          <button type="button" class="window-control window-close" data-window-action="close" title="关闭" aria-label="关闭">
+            <span class="window-control-icon" aria-hidden="true"></span>
+          </button>
+        </div>
+      </div>
+
+      <div class="app-content">
+    <aside class="sidebar">
+      <div class="brand">
+        <span class="spark">✦</span>
+        <span>Agent NAS</span>
+      </div>
+      <button id="new-chat" class="new-chat">＋ 新对话</button>
+      <section class="history">
+        <div class="history-heading"><p>历史对话</p><span id="history-count"></span></div>
+        <div class="history-search"><span>⌕</span><input id="conversation-search" type="search" placeholder="搜索对话" /></div>
+        <div id="conversation-list" class="conversation-list"></div>
+      </section>
+      <div class="connection-state"><i id="state-dot"></i><span id="state-text">尚未连接</span></div>
+      <button id="show-settings" class="plain-button">连接设置</button>
+      <p id="security-note" class="security-note">密码仅保存在这台 Windows 电脑的系统加密存储中。</p>
+    </aside>
+
+    <main class="main">
+      <header>
+        <div class="chat-heading">
+          <h1>和 Agent 对话</h1>
+          <p id="connection-subtitle">通过 SSH 使用 NAS 上的 Agent CLI</p>
+        </div>
+        <button id="header-settings" class="icon-button" title="连接设置">⚙</button>
+      </header>
+
+      <section id="empty-state" class="empty-state">
+        <div class="logo-circle">✦</div>
+        <h2>开始一个新对话</h2>
+        <p id="empty-description">输入消息后，客户端会连接 NAS 并保留本次聊天的上下文。</p>
+      </section>
+      <section id="messages" class="messages" aria-live="polite"></section>
+
+      <form id="composer" class="composer">
+        <input id="file-picker" type="file" multiple hidden />
+        <div id="attachment-list" class="attachment-list" hidden></div>
+        <textarea id="prompt" rows="1" placeholder="给 Agent 发消息…（Enter 发送，Shift + Enter 换行）"></textarea>
+        <button id="attach" type="button" class="attach-button" title="添加图片或文件">＋</button>
+        <button id="tool-mode" type="button" class="tool-mode safe" title="工具权限：安全模式">🛡</button>
+        <button id="send" type="submit" class="send-button" title="发送" aria-label="发送消息">
+          <svg class="send-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5M6 11l6-6 6 6" /></svg>
+          <svg class="stop-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="7" width="10" height="10" rx="1.5" /></svg>
+        </button>
+      </form>
+    </main>
+      </div>
+
+    <dialog id="settings-dialog">
+      <form id="settings-form" autocomplete="off">
+        <div class="dialog-heading">
+          <div><h2>连接设置</h2><p id="settings-description">选择在本机运行，或通过 SSH 使用 NAS。</p></div>
+          <button type="button" class="close-button" id="close-settings">×</button>
+        </div>
+        <label>Agent 运行位置
+          <input type="hidden" name="connectionMode" id="connection-mode" value="ssh" />
+          <div class="mode-switch" role="group" aria-label="Agent 运行位置">
+            <button type="button" id="mode-ssh" data-connection-mode="ssh">SSH 远程</button>
+            <button type="button" id="mode-local" data-connection-mode="local">本机 Windows</button>
+          </div>
+          <span class="field-hint">本机模式不需要地址、账号和密码，但这台电脑必须已经安装并登录 Claude Code。</span>
+        </label>
+        <div id="ssh-fields" class="settings-group">
+          <label>NAS 地址<input name="host" required placeholder="例如：10.66.1.111" /></label>
+          <div class="two-columns">
+            <label>SSH 账号<input name="username" required placeholder="例如：admin" /></label>
+            <label>SSH 端口<input name="port" type="number" min="1" max="65535" value="22" /></label>
+          </div>
+          <label>SSH 密码
+            <div class="password-row">
+              <input name="password" type="password" placeholder="留空则保留已保存的密码" autocomplete="new-password" autocapitalize="none" autocorrect="off" spellcheck="false" inputmode="text" lang="en" />
+              <button type="button" id="toggle-password" class="password-toggle">显示</button>
+            </div>
+            <span id="password-hint" class="field-hint">已保存密码时可留空</span>
+          </label>
+        </div>
+        <label>Agent 唤醒命令<input name="wakeName" required placeholder="当前例如：claude 或完整路径" /></label>
+        <label>本机标识
+          <input name="clientLabel" required maxlength="32" placeholder="例如：JIANG-PC" />
+          <span class="field-hint">每次消息会在后台附加“来源电脑”，便于 Agent 判断“我的桌面”是哪台电脑；聊天气泡不会重复显示。</span>
+        </label>
+        <label>聊天记录保存位置
+          <div class="directory-row">
+            <input name="dataDirectory" readonly />
+            <button type="button" id="choose-directory" class="password-toggle">选择</button>
+            <button type="button" id="open-directory" class="password-toggle">打开</button>
+            <button type="button" id="open-archive" class="password-toggle">存档</button>
+          </div>
+          <span class="field-hint">会话自动另存到此目录下的“会话存档”；可选择 D 盘，切换时会复制现有历史和存档</span>
+        </label>
+        <details>
+          <summary>可选设置</summary>
+          <label>工作目录<input id="working-directory" name="workingDirectory" placeholder="留空则使用 SSH 账号的主目录" /></label>
+          <label class="checkbox"><input name="skipPermissions" type="checkbox" /><span id="permission-label">允许 Agent 在 NAS 上自动执行工具操作</span></label>
+          <p id="permission-hint" class="hint">开启后会传入 Claude Code 的 bypass permissions 参数。仅在你信任该 NAS 与当前工作目录时使用。</p>
+        </details>
+        <details id="bridge-settings">
+          <summary>增强 Bridge（可选）</summary>
+          <div class="device-control-card">
+            <div class="device-control-heading">
+              <div><strong id="bridge-title">正在检查…</strong><small id="bridge-detail">基础聊天不依赖此组件</small></div>
+              <span id="bridge-badge" class="control-badge">未检查</span>
+            </div>
+            <p id="bridge-info" class="hint">安装后可获得精确停止与工具确认；未安装时仍会自动使用直接聊天。</p>
+            <div class="device-control-actions">
+              <button type="button" id="refresh-bridge" class="secondary">刷新状态</button>
+              <button type="button" id="uninstall-bridge" class="secondary danger-button" hidden>移除 Bridge</button>
+              <button type="button" id="install-bridge" class="primary">安装增强 Bridge</button>
+            </div>
+          </div>
+        </details>
+        <details id="device-control-settings">
+          <summary>Agent 联动控制（可选安装）</summary>
+          <div class="device-control-card">
+            <div class="device-control-heading">
+              <div><strong id="device-control-title">正在检查…</strong><small id="device-control-detail">不会要求员工设置 Windows 密码</small></div>
+              <span id="device-control-badge" class="control-badge">未安装</span>
+            </div>
+            <label>允许连接的管理端地址
+              <input id="device-control-source" placeholder="NAS IP，例如：10.66.1.111" />
+              <span class="field-hint">默认仅允许当前 NAS；也可填写 CIDR 网段。不要填写 0.0.0.0/0。</span>
+            </label>
+            <label>这台电脑的局域网地址
+              <input id="device-control-target" placeholder="例如：10.66.1.120" />
+              <span class="field-hint">安装后 NAS 会用此地址实际回连测试；多台电脑依靠独立设备编号和密钥区分。</span>
+            </label>
+            <label>SSH 端口
+              <input id="device-control-port" type="number" min="1" max="65535" value="22" />
+              <span class="field-hint">普通 Windows 电脑保持 22；只有端口转发或特殊虚拟机才需要修改。</span>
+            </label>
+            <label>Agent 权限
+              <select id="device-control-permission">
+                <option value="administrator">完整管理（管理员）</option>
+                <option value="standard">标准管理（非管理员）</option>
+              </select>
+              <span class="field-hint">完整管理适合公司维护，但管理密钥一旦泄露风险更高。</span>
+            </label>
+            <p id="device-control-info" class="hint">点击安装后，NAS 为本机生成独立密钥，Windows 弹出一次 UAC 授权；以后 Agent 使用公钥连接，不使用员工密码。</p>
+            <div class="device-control-actions">
+              <button type="button" id="refresh-device-control" class="secondary">刷新状态</button>
+              <button type="button" id="uninstall-device-control" class="secondary danger-button" hidden>卸载联动控件</button>
+              <button type="button" id="install-device-control" class="primary">安装联动控件</button>
+            </div>
+          </div>
+        </details>
+        <p id="settings-status" class="status"></p>
+        <div class="dialog-actions">
+          <button type="button" id="open-diagnostics" class="secondary">打开诊断日志</button>
+          <button type="button" id="test-connection" class="secondary">测试连接</button>
+          <button type="submit" id="save-settings" class="primary">保存并开始使用</button>
+        </div>
+      </form>
+    </dialog>
+    </div>
+  </body>
+</html>
