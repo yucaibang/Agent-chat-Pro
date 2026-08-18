@@ -24,9 +24,14 @@ const {
 const { logPath, writeLog } = require("./logger.cjs");
 const { renderMarkdown } = require("./markdown.cjs");
 const { samePath } = require("./storage.cjs");
+const { listModes, getMode, createMode, updateMode, deleteMode, exportModes, importModes } = require("./modes/mode-manager.cjs");
+const { NetworkManager, STATES } = require("./network/network-manager.cjs");
+const { LatencyMonitor } = require("./network/latency-monitor.cjs");
 
 let window;
 const activeRequests = new Map();
+const networkManager = new NetworkManager();
+let latencyMonitor = null;
 
 function bundledBridgeFiles() {
   const fs = require("fs");
@@ -276,6 +281,39 @@ app.whenReady().then(() => {
     return uninstallAgentSdkBridge(config, (fingerprint) => trustHost(config, fingerprint), writeLog);
   });
   ipcMain.handle("markdown:render", (_event, source) => renderMarkdown(source));
+  // ── 模式管理 IPC ──
+  ipcMain.handle("modes:list", () => listModes());
+  ipcMain.handle("modes:get", (_event, id) => getMode(id));
+  ipcMain.handle("modes:create", (_event, input) => createMode(input));
+  ipcMain.handle("modes:update", (_event, id, input) => updateMode(id, input));
+  ipcMain.handle("modes:delete", (_event, id) => deleteMode(id));
+  ipcMain.handle("modes:export", () => exportModes());
+  ipcMain.handle("modes:import", (_event, json) => importModes(json));
+  // ── 网络状态 IPC ──
+  ipcMain.handle("network:status", () => networkManager.getStatus());
+  ipcMain.handle("network:connect", async (_event, config) => {
+    try {
+      const settings = getSshConnection();
+      const mergedConfig = { ...settings, ...config };
+      const transport = await networkManager.connect(mergedConfig, (fingerprint) => trustHostFingerprint(fingerprint), writeLog);
+      if (!latencyMonitor) {
+        latencyMonitor = new LatencyMonitor({ onUpdate: (summary) => { if (window && !window.isDestroyed()) window.webContents.send("network:latency", summary); } });
+      }
+      latencyMonitor.start(transport);
+      return networkManager.getStatus();
+    } catch (error) {
+      writeLog("network_connect_failed", { error: error.message });
+      throw error;
+    }
+  });
+  ipcMain.handle("network:disconnect", async () => {
+    if (latencyMonitor) latencyMonitor.stop();
+    await networkManager.disconnect();
+    return networkManager.getStatus();
+  });
+  networkManager.onStatusChange((event) => {
+    if (window && !window.isDestroyed()) window.webContents.send("network:status-change", event);
+  });
   ipcMain.handle("link:open", async (_event, value) => {
     let target;
     try { target = new URL(String(value)); } catch { throw new Error("链接地址无效。"); }

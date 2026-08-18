@@ -85,6 +85,21 @@
         <span class="spark">✦</span>
         <span>Agent Chat Pro</span>
       </div>
+      <div class="mode-selector" id="mode-selector">
+        <button type="button" class="mode-trigger" id="mode-trigger" title="工作模式">
+          <span id="mode-icon">🛡</span>
+          <span id="mode-name">常规模式</span>
+          <span class="mode-arrow">▾</span>
+        </button>
+        <div class="mode-dropdown" id="mode-dropdown" hidden>
+          <div class="mode-list" id="mode-list"></div>
+          <div class="mode-actions">
+            <button type="button" id="mode-edit" class="mode-action">编辑模式…</button>
+            <button type="button" id="mode-import" class="mode-action">导入…</button>
+            <button type="button" id="mode-export" class="mode-action">导出…</button>
+          </div>
+        </div>
+      </div>
       <button id="new-chat" class="new-chat">＋ 新对话</button>
       <section class="history">
         <div class="history-heading"><p>历史对话</p><span id="history-count"></span></div>
@@ -92,6 +107,10 @@
         <div id="conversation-list" class="conversation-list"></div>
       </section>
       <div class="connection-state"><i id="state-dot"></i><span id="state-text">尚未连接</span></div>
+      <div class="network-info" id="network-info" hidden>
+        <span id="network-mode-label">内网直连</span>
+        <span id="network-latency-label"></span>
+      </div>
       <button id="show-settings" class="plain-button">连接设置</button>
       <p id="security-note" class="security-note">密码仅保存在这台 Windows 电脑的系统加密存储中。</p>
     </aside>
@@ -173,6 +192,59 @@
           <label>工作目录<input id="working-directory" name="workingDirectory" placeholder="留空则使用 SSH 账号的主目录" /></label>
           <label class="checkbox"><input name="skipPermissions" type="checkbox" /><span id="permission-label">允许 Agent 在 NAS 上自动执行工具操作</span></label>
           <p id="permission-hint" class="hint">开启后会传入 Claude Code 的 bypass permissions 参数。仅在你信任该 NAS 与当前工作目录时使用。</p>
+        </details>
+        <details id="network-settings">
+          <summary>网络配置（外网穿透）</summary>
+          <label>网络类型
+            <input type="hidden" name="networkType" id="network-type" value="internal" />
+            <div class="mode-switch" role="group" aria-label="网络类型">
+              <button type="button" id="mode-internal" data-network-mode="internal">内网直连</button>
+              <button type="button" id="mode-external" data-network-mode="external">外网穿透</button>
+            </div>
+            <span class="field-hint">内网模式通过局域网 SSH 直连；外网模式支持 DERP 中继、FRP 穿透、P2P 打洞等。</span>
+          </label>
+          <div id="external-fields" class="settings-group" hidden>
+            <label>外网方案
+              <select id="external-method" name="externalMethod">
+                <option value="auto">自动（优先 P2P → DERP → FRP）</option>
+                <option value="derp">DERP 中继</option>
+                <option value="frp">FRP 内网穿透</option>
+                <option value="p2p">P2P 点对点打洞</option>
+                <option value="n2n">N2N 虚拟局域网</option>
+              </select>
+            </label>
+            <label>访问密码
+              <div class="password-row">
+                <input type="password" id="access-password" name="accessPassword" placeholder="外网模式必须设置访问密码" autocomplete="new-password" />
+                <button type="button" id="toggle-access-password" class="password-toggle">显示</button>
+              </div>
+              <span class="field-hint">外网模式必须设置访问密码，防止未授权访问。</span>
+            </label>
+            <details id="frp-config" hidden>
+              <summary>FRP 参数</summary>
+              <label>FRP 服务器地址<input id="frp-server-addr" placeholder="例如：frp.example.com" /></label>
+              <div class="two-columns"><label>FRP 服务器端口<input id="frp-server-port" type="number" value="7000" min="1" max="65535" /></label><label>FRP 端口<input id="frp-local-port" type="number" value="22" min="1" max="65535" /></label></div>
+              <label>FRP Token<input id="frp-token" type="password" placeholder="可选" /></label>
+            </details>
+            <details id="derp-config" hidden>
+              <summary>DERP 参数</summary>
+              <label>中继服务器地址<input id="derp-relay-addr" placeholder="例如：derp.example.com" /></label>
+              <label>中继端口<input id="derp-relay-port" type="number" value="3478" min="1" max="65535" /></label>
+              <label>认证密钥<input id="derp-auth-key" type="password" placeholder="可选" /></label>
+            </details>
+            <details id="p2p-config" hidden>
+              <summary>P2P 参数</summary>
+              <label>STUN 服务器<input id="p2p-stun-addr" placeholder="stun.l.google.com" /></label>
+              <label>STUN 端口<input id="p2p-stun-port" type="number" value="19302" min="1" max="65535" /></label>
+            </details>
+            <details id="n2n-config" hidden>
+              <summary>N2N 参数</summary>
+              <label>超级节点地址<input id="n2n-supernode-addr" placeholder="例如：n2n.example.com" /></label>
+              <label>超级节点端口<input id="n2n-supernode-port" type="number" value="7777" min="1" max="65535" /></label>
+              <label>社区名<input id="n2n-community" placeholder="社区标识" /></label>
+              <label>加密密钥<input id="n2n-key" type="password" placeholder="可选" /></label>
+            </details>
+          </div>
         </details>
         <details id="bridge-settings">
           <summary>增强 Bridge（可选）</summary>

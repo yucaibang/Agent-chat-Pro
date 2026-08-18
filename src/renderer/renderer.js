@@ -30,6 +30,7 @@ const messages = new Map();
 
 function settingsFromForm() {
   const data = new FormData(elements.form);
+  const network = networkSettingsFromForm();
   return {
     connectionMode: data.get("connectionMode"),
     host: data.get("host"),
@@ -40,7 +41,11 @@ function settingsFromForm() {
     clientLabel: data.get("clientLabel"),
     workingDirectory: data.get("workingDirectory"),
     dataDirectory: data.get("dataDirectory"),
-    skipPermissions: data.get("skipPermissions") === "on"
+    skipPermissions: data.get("skipPermissions") === "on",
+    workModeId: currentModeId,
+    networkType: document.querySelector("#network-type").value,
+    externalMethod: document.querySelector("#external-method").value,
+    ...network
   };
 }
 
@@ -937,10 +942,234 @@ function setMaximized(maximized) {
 window.claudeNas.onMenuAction(runAppAction);
 window.claudeNas.onWindowMaximized(setMaximized);
 
+// ── 模式选择器 ──────────────────────────────────
+
+let currentModeId = "regular";
+let modeDropdownOpen = false;
+
+function closeModeDropdown() {
+  modeDropdownOpen = false;
+  document.querySelector("#mode-dropdown").hidden = true;
+}
+
+async function refreshModeSelector() {
+  try {
+    const modes = await window.claudeNas.listModes();
+    const list = document.querySelector("#mode-list");
+    list.replaceChildren();
+    for (const mode of modes) {
+      const item = document.createElement("div");
+      item.className = `mode-item${mode.id === currentModeId ? " active" : ""}`;
+      item.innerHTML = `<span class="mode-item-icon">${mode.icon}</span><div class="mode-item-info"><span class="mode-item-name">${mode.name}</span><span class="mode-item-desc">${mode.description}</span></div>`;
+      item.addEventListener("click", async () => {
+        currentModeId = mode.id;
+        updateModeDisplay(mode);
+        // 保存到设置
+        try {
+          const settings = await window.claudeNas.saveSettings({ ...(await window.claudeNas.loadSettings()), workModeId: mode.id });
+          populateSettings(settings);
+        } catch (error) { setConnection("模式切换失败：" + error.message, "error"); }
+        closeModeDropdown();
+      });
+      list.append(item);
+    }
+  } catch (error) { console.error("Failed to load modes:", error); }
+}
+
+function updateModeDisplay(mode) {
+  document.querySelector("#mode-icon").textContent = mode.icon;
+  document.querySelector("#mode-name").textContent = mode.name;
+  document.querySelector("#mode-trigger").title = `${mode.name}：${mode.description}`;
+  setToolModeAppearance(mode.skipPermissions);
+}
+
+document.querySelector("#mode-trigger").addEventListener("click", (event) => {
+  event.stopPropagation();
+  modeDropdownOpen = !modeDropdownOpen;
+  document.querySelector("#mode-dropdown").hidden = !modeDropdownOpen;
+});
+
+document.addEventListener("click", (event) => {
+  if (!event.target.closest(".mode-selector")) closeModeDropdown();
+});
+
+document.querySelector("#mode-edit").addEventListener("click", async () => {
+  closeModeDropdown();
+  // TODO: 模式编辑弹窗（P6 后续完善）
+  alert("自定义模式编辑功能开发中…");
+});
+
+document.querySelector("#mode-import").addEventListener("click", async () => {
+  closeModeDropdown();
+  try {
+    const json = prompt("粘贴导出的模式 JSON：");
+    if (!json) return;
+    const result = await window.claudeNas.importModes(json);
+    await refreshModeSelector();
+    setConnection(`导入成功：新增 ${result.added} 个模式`, "connected");
+  } catch (error) { alert("导入失败：" + error.message); }
+});
+
+document.querySelector("#mode-export").addEventListener("click", async () => {
+  closeModeDropdown();
+  try {
+    const json = await window.claudeNas.exportModes();
+    await navigator.clipboard.writeText(json);
+    alert("自定义模式已复制到剪贴板。");
+  } catch (error) { alert("导出失败：" + error.message); }
+});
+
+// ── 网络配置 UI ─────────────────────────────────
+
+function updateNetworkModeUI() {
+  const mode = document.querySelector("#network-type").value;
+  const isExternal = mode === "external";
+  document.querySelector("#mode-internal").classList.toggle("active", !isExternal);
+  document.querySelector("#mode-external").classList.toggle("active", isExternal);
+  document.querySelector("#external-fields").hidden = !isExternal;
+  updateExternalMethodUI();
+}
+
+function updateExternalMethodUI() {
+  const method = document.querySelector("#external-method").value;
+  document.querySelector("#frp-config").hidden = method !== "frp";
+  document.querySelector("#derp-config").hidden = method !== "derp";
+  document.querySelector("#p2p-config").hidden = method !== "p2p";
+  document.querySelector("#n2n-config").hidden = method !== "n2n";
+  // FRP 参数在 auto 或 frp 时显示
+  if (method === "auto") {
+    document.querySelector("#frp-config").hidden = false;
+    document.querySelector("#derp-config").hidden = false;
+  }
+}
+
+function populateNetworkSettings(settings) {
+  document.querySelector("#network-type").value = settings.networkType || "internal";
+  document.querySelector("#external-method").value = settings.externalMethod || "auto";
+  if (settings.frp) {
+    document.querySelector("#frp-server-addr").value = settings.frp.serverAddr || "";
+    document.querySelector("#frp-server-port").value = settings.frp.serverPort || 7000;
+    document.querySelector("#frp-local-port").value = settings.frp.localPort || 22;
+    document.querySelector("#frp-token").value = settings.frp.token || "";
+  }
+  if (settings.derp) {
+    document.querySelector("#derp-relay-addr").value = settings.derp.relayAddr || "";
+    document.querySelector("#derp-relay-port").value = settings.derp.relayPort || 3478;
+    document.querySelector("#derp-auth-key").value = settings.derp.authKey || "";
+  }
+  if (settings.p2p) {
+    document.querySelector("#p2p-stun-addr").value = settings.p2p.stunAddr || "stun.l.google.com";
+    document.querySelector("#p2p-stun-port").value = settings.p2p.stunPort || 19302;
+  }
+  if (settings.n2n) {
+    document.querySelector("#n2n-supernode-addr").value = settings.n2n.supernodeAddr || "";
+    document.querySelector("#n2n-supernode-port").value = settings.n2n.supernodePort || 7777;
+    document.querySelector("#n2n-community").value = settings.n2n.community || "";
+    document.querySelector("#n2n-key").value = settings.n2n.key || "";
+  }
+  if (settings.accessPassword) {
+    document.querySelector("#access-password").placeholder = "已设置访问密码；留空不修改";
+  }
+  updateNetworkModeUI();
+}
+
+function networkSettingsFromForm() {
+  return {
+    frp: {
+      serverAddr: document.querySelector("#frp-server-addr").value,
+      serverPort: Number(document.querySelector("#frp-server-port").value) || 7000,
+      localPort: Number(document.querySelector("#frp-local-port").value) || 22,
+      token: document.querySelector("#frp-token").value
+    },
+    derp: {
+      relayAddr: document.querySelector("#derp-relay-addr").value,
+      relayPort: Number(document.querySelector("#derp-relay-port").value) || 3478,
+      authKey: document.querySelector("#derp-auth-key").value
+    },
+    p2p: {
+      stunAddr: document.querySelector("#p2p-stun-addr").value,
+      stunPort: Number(document.querySelector("#p2p-stun-port").value) || 19302
+    },
+    n2n: {
+      supernodeAddr: document.querySelector("#n2n-supernode-addr").value,
+      supernodePort: Number(document.querySelector("#n2n-supernode-port").value) || 7777,
+      community: document.querySelector("#n2n-community").value,
+      key: document.querySelector("#n2n-key").value
+    },
+    accessPassword: document.querySelector("#access-password").value
+  };
+}
+
+document.querySelectorAll("[data-network-mode]").forEach((button) => {
+  button.addEventListener("click", () => {
+    document.querySelector("#network-type").value = button.dataset.networkMode;
+    updateNetworkModeUI();
+  });
+});
+
+document.querySelector("#external-method").addEventListener("change", updateExternalMethodUI);
+
+document.querySelector("#toggle-access-password").addEventListener("click", () => {
+  const input = document.querySelector("#access-password");
+  const visible = input.type === "text";
+  input.type = visible ? "password" : "text";
+  document.querySelector("#toggle-access-password").textContent = visible ? "显示" : "隐藏";
+  input.focus();
+});
+
+// ── 网络状态更新 ──────────────────────────────────
+
+function updateNetworkStatus(status) {
+  const modeLabel = document.querySelector("#network-mode-label");
+  const latencyLabel = document.querySelector("#network-latency-label");
+  const networkInfo = document.querySelector("#network-info");
+
+  const modeLabels = {
+    "ssh-direct": "内网直连",
+    "p2p-nat": "P2P 打洞",
+    "derp-relay": "DERP 中继",
+    "frp-tunnel": "FRP 穿透",
+    "n2n-mesh": "N2N 虚拟局域网"
+  };
+
+  if (status.state === "connected" || status.state === "degraded") {
+    networkInfo.hidden = false;
+    modeLabel.textContent = modeLabels[status.type] || status.mode || "已连接";
+    if (status.latencyMs !== null) {
+      latencyLabel.textContent = `${status.latencyMs}ms`;
+      latencyLabel.className = status.latencyMs < 50 ? "quality-excellent" : status.latencyMs < 150 ? "quality-good" : status.latencyMs < 300 ? "quality-fair" : "quality-poor";
+    } else {
+      latencyLabel.textContent = "";
+      latencyLabel.className = "";
+    }
+  } else {
+    networkInfo.hidden = true;
+  }
+}
+
+window.claudeNas.onNetworkStatusChange((event) => {
+  updateNetworkStatus(networkManager.getStatus());
+});
+
+window.claudeNas.onNetworkLatency((summary) => {
+  const latencyLabel = document.querySelector("#network-latency-label");
+  if (latencyLabel) {
+    latencyLabel.textContent = `${summary.avgLatency}ms · ${summary.label}`;
+    latencyLabel.className = `quality-${Object.entries({ excellent: 90, good: 70, fair: 50 }).find(([, v]) => summary.quality >= v)?.[0] || "poor"}`;
+  }
+});
+
 (async () => {
   setMaximized(await window.claudeNas.isWindowMaximized());
   const settings = await window.claudeNas.loadSettings();
   populateSettings(settings);
+  // 初始化模式选择器
+  currentModeId = settings.workModeId || "regular";
+  await refreshModeSelector();
+  const currentMode = await window.claudeNas.getMode(currentModeId);
+  if (currentMode) updateModeDisplay(currentMode);
+  // 初始化网络配置
+  populateNetworkSettings(settings);
   const conversations = await window.claudeNas.listConversations();
   if (conversations.length) await loadConversation(conversations[0].id);
   else await createNewConversation();

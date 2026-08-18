@@ -32,8 +32,23 @@ contextBridge.exposeInMainWorld("claudeNas", {
   cancelMessage: (id) => ipcRenderer.invoke("chat:cancel", id),
   windowAction: (action) => ipcRenderer.invoke("window:action", action),
   isWindowMaximized: () => ipcRenderer.invoke("window:is-maximized"),
+  // ── 模式管理 IPC ──
+  listModes: () => ipcRenderer.invoke("modes:list"),
+  getMode: (id) => ipcRenderer.invoke("modes:get", id),
+  createMode: (input) => ipcRenderer.invoke("modes:create", input),
+  updateMode: (id, input) => ipcRenderer.invoke("modes:update", id, input),
+  deleteMode: (id) => ipcRenderer.invoke("modes:delete", id),
+  exportModes: () => ipcRenderer.invoke("modes:export"),
+  importModes: (json) => ipcRenderer.invoke("modes:import", json),
+  // ── 网络状态 IPC ──
+  getNetworkStatus: () => ipcRenderer.invoke("network:status"),
+  networkConnect: (config) => ipcRenderer.invoke("network:connect", config),
+  networkDisconnect: () => ipcRenderer.invoke("network:disconnect"),
+  // ── 事件监听 ──
   onDelta: (handler) => ipcRenderer.on("chat:delta", (_event, payload) => handler(payload)),
   onChatEvent: (handler) => ipcRenderer.on("chat:event", (_event, payload) => handler(payload)),
   onMenuAction: (handler) => ipcRenderer.on("app:menu", (_event, action) => handler(action)),
-  onWindowMaximized: (handler) => ipcRenderer.on("window:maximized", (_event, value) => handler(value))
+  onWindowMaximized: (handler) => ipcRenderer.on("window:maximized", (_event, value) => handler(value)),
+  onNetworkStatusChange: (handler) => ipcRenderer.on("network:status-change", (_event, event) => handler(event)),
+  onNetworkLatency: (handler) => ipcRenderer.on("network:latency", (_event, summary) => handler(summary))
 });
