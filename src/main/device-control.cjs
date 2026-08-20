@@ -133,10 +133,12 @@ function runElevated(config) {
     const scriptPath = installerScriptPath();
     fs.writeFileSync(configPath, JSON.stringify(config), { mode: 0o600 });
     const quote = (value) => `'${String(value).replace(/'/g, "''")}'`;
+    // Minimized instead of Hidden: Hidden conflicts with -Verb RunAs on some Windows versions,
+    // causing $process.ExitCode to return anomalous values like 0xFFFD0000.
     const command = [
       `$process = Start-Process -FilePath 'powershell.exe'`,
       `-ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-File',${quote(scriptPath)},'-ConfigPath',${quote(configPath)},'-ResultPath',${quote(resultPath)})`,
-      "-Verb RunAs -WindowStyle Hidden -Wait -PassThru; exit $process.ExitCode"
+      "-Verb RunAs -WindowStyle Minimized -Wait -PassThru; exit $process.ExitCode"
     ].join(" ");
     const child = spawn("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", command], {
       windowsHide: true,
@@ -151,7 +153,12 @@ function runElevated(config) {
       cleanup();
       if (code === 0) resolve(true);
       else if (code === 1223 || /canceled by the user/i.test(stderr)) reject(new Error("已取消 Windows 管理员授权，未安装联动控件。"));
-      else reject(new Error(`联动控件操作失败（代码 ${formatExitCode(code)}）。${localizedInstallerError(elevatedError || stderr.trim())}`));
+      else if (isUacFailureCode(code)) {
+        const detail = elevatedError || stderr.trim();
+        const uacHint = "可能是 Windows 管理员授权弹窗被关闭或跳过，请重新点击安装并在 UAC 弹窗中选择允许。如果反复出现此问题，请尝试右键应用图标选择以管理员身份运行后重试。";
+        reject(new Error("联动控件提权失败（退出码 " + formatExitCode(code) + "）。" + (detail ? localizedInstallerError(detail) : uacHint)));
+      }
+      else reject(new Error("联动控件操作失败（代码 " + formatExitCode(code) + "）。" + localizedInstallerError(elevatedError || stderr.trim())));
     });
     function finishError(error) { cleanup(); reject(new Error("无法启动 Windows 安装程序：" + error.message)); }
     function cleanup() { try { fs.rmSync(temporary, { recursive: true, force: true }); } catch {} }
@@ -174,6 +181,21 @@ function formatExitCode(code) {
   return `${code} / 0x${unsigned.toString(16).toUpperCase().padStart(8, "0")}`;
 }
 
+/**
+ * Detect exit codes that indicate UAC/elevation failure rather than a script error.
+ * 0xFFFD0000: classic WindowStyle Hidden + RunAs conflict on some Windows versions;
+ * 0x800xxxxx: HRESULT facility (system-level, not script exit 1);
+ * 0xFFF00000+: process terminated abnormally (killed, crashed, etc.).
+ */
+function isUacFailureCode(code) {
+  if (!Number.isInteger(code)) return false;
+  const unsigned = code >>> 0;
+  if (unsigned === 0xFFFD0000) return true;
+  if (unsigned >= 0x80000000 && unsigned <= 0x800FFFFF) return true;
+  if (unsigned >= 0xFFF00000) return true;
+  return false;
+}
+
 function localizedInstallerError(message) {
   const detail = String(message || "").trim();
   const stageCode = detail.match(/^\[([^\]]+)\]/)?.[1] || "";
@@ -193,6 +215,9 @@ function localizedInstallerError(message) {
     "save-install-state": "保存联动安装状态"
   };
   const stage = stages[stageCode] ? `失败阶段：${stages[stageCode]}。` : "";
+  if (/0xFFFD0000/i.test(detail)) {
+    return "Windows 提权进程异常退出（0xFFFD0000）。这通常是 UAC 管理员授权弹窗被关闭或跳过导致的。请重新点击安装，在弹出的 UAC 对话框中选择允许。如果反复出现此问题，请尝试右键应用图标选择以管理员身份运行后重试。";
+  }
   if (/0xC0000139|versions do not match/i.test(detail)) {
     return "Windows 自带的 OpenSSH 客户端、服务端与加密库版本不一致。请先在“设置 → 更新和安全 → Windows 更新”中安装最新累计更新并重启，再重新安装；这与 Windows 是否激活无关，现有 SSH 配置未被修改。";
   }
@@ -211,6 +236,7 @@ module.exports = {
   formatExitCode,
   getDeviceControlStatus,
   installDeviceControl,
+  isUacFailureCode,
   localizedInstallerError,
   localAddresses,
   preferredAddress,
