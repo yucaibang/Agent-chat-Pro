@@ -10,6 +10,7 @@ const {
   sessionFromEvent,
   textFromEvent
 } = require("./protocol.cjs");
+const { buildCommandWithMode, buildBridgeStartWithMode } = require("./modes/mode-params.cjs");
 
 const MAX_SILENT_TOOL_CALLS = 8;
 const MAX_TOOL_CALLS = 24;
@@ -322,7 +323,7 @@ function runClaude(config, message, sessionId, attachments = [], callbacks = {})
     }
     const command = bridgeMode
       ? `node ${shellQuote(bridgePath)}`
-      : buildClaudeCommand(config, message + attachmentNote, sessionId);
+      : buildCommandWithMode(config.workModeId || "regular", message + attachmentNote, sessionId, config);
     if (!bridgeMode) {
       callbacks.onLog?.("bridge_unavailable_direct_fallback", { bridgePath, wakeName });
     }
@@ -447,14 +448,8 @@ function runClaude(config, message, sessionId, attachments = [], callbacks = {})
         client.exec(command, { pty: false }, (error, stream) => {
           if (error) return reject(asConnectionFailure(error));
           channel = stream;
-          stream.write(JSON.stringify({
-            type: "start",
-            prompt: message + attachmentNote,
-            automatic: Boolean(config.skipPermissions),
-            workingDirectory: config.workingDirectory || home,
-            claudePath: resolvedClaude,
-            sessionId: sessionId || ""
-          }) + "\n");
+          const bridgeStart = buildBridgeStartWithMode(config.workModeId || "regular", message + attachmentNote, sessionId, { ...config, workingDirectory: config.workingDirectory || home, claudePath: resolvedClaude });
+          stream.write(JSON.stringify(bridgeStart) + "\n");
           if (cancelled) stream.write(JSON.stringify({ type: "interrupt" }) + "\n");
           stream.on("data", (data) => handleEvents(parser.push(data)));
           stream.stderr.on("data", (data) => { stderr += data.toString("utf8"); });

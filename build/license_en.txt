@@ -1,0 +1,53 @@
+Agent Chat Pro Disclaimer and Terms of Use
+
+
+Version Date: 2026-08-19
+
+
+1. Software Nature and Warranty Disclaimer
+
+1.1. This software is provided "as is", without warranty of any kind, express or implied, including but not limited to the warranties of merchantability, fitness for a particular purpose, and non-infringement.
+1.2. The developer makes no representations about the stability, reliability, or security of the software, nor does it guarantee that the software will meet your specific requirements.
+1.3. To the maximum extent permitted by applicable law, the developer shall not be liable for any direct, indirect, incidental, special, or consequential damages arising from the use or inability to use this software.
+
+
+2. User Responsibilities
+
+2.1. This software connects to remote servers via SSH or network tunnels. You must ensure that you have legitimate access rights to any server you connect to.
+2.2. You assume full responsibility for all operations performed through this software, including but not limited to the results of remote command execution.
+2.3. Do not use this software for any purpose that violates applicable local laws and regulations.
+
+
+3. Network Security Notice
+
+3.1. This software supports both internal (direct SSH) and external (FRP/DERP/P2P/N2N tunnel) connection modes. In external mode, data is transmitted through third-party relays; the developer is not responsible for the security of relay services.
+3.2. Please safeguard your SSH credentials, access passwords, and network configurations. Do not store passwords in untrusted environments.
+3.3. For best security, use direct SSH connection mode when on the internal network.
+
+
+4. AI Service Disclaimer
+
+4.1. This software does not include a built-in AI model; it serves as a remote front-end for AI CLI tools (e.g., Claude Code).
+4.2. AI-generated content may contain errors or biases. Do not treat AI responses as professional advice; verify important decisions independently.
+4.3. The availability, response speed, and accuracy of AI services depend on the remote AI service provider. The developer is not responsible for third-party AI services.
+
+
+5. Privacy Notice
+
+5.1. This software does not collect, upload, or share any user data.
+5.2. Connection configurations and chat records are stored only on your local device.
+5.3. SSH connections are established directly between your device and the target server; the developer's servers are not involved in data transit.
+
+
+6. Open Source and Third-Party
+
+This software may include third-party open-source components, each governed by its original license.
+
+
+7. Changes
+
+The developer reserves the right to modify this disclaimer at any time. Major changes will be notified through software updates.
+
+---
+
+If you do not agree with the above terms, do not install or use this software.

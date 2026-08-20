@@ -25,6 +25,7 @@ const { logPath, writeLog } = require("./logger.cjs");
 const { renderMarkdown } = require("./markdown.cjs");
 const { samePath } = require("./storage.cjs");
 const { listModes, getMode, createMode, updateMode, deleteMode, exportModes, importModes } = require("./modes/mode-manager.cjs");
+const { buildCommandWithMode, buildBridgeStartWithMode, buildLocalArgsWithMode } = require("./modes/mode-params.cjs");
 const { NetworkManager, STATES } = require("./network/network-manager.cjs");
 const { LatencyMonitor } = require("./network/latency-monitor.cjs");
 
@@ -436,6 +437,7 @@ app.whenReady().then(() => {
       onLog: writeLog
     };
     config.localUploadDirectory = path.join(app.getPath("userData"), "local-uploads");
+    config.workModeId = input.workModeId || config.workModeId || "regular";
     const operation = config.connectionMode === "local"
       ? runLocalClaude(config, agentMessage, activeSessionId, attachments, callbacks)
       : runClaude(config, agentMessage, activeSessionId, attachments, callbacks);

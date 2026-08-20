@@ -4,6 +4,7 @@ const fs = require("fs");
 const path = require("path");
 const { spawn, execFile } = require("child_process");
 const { JsonLineParser, buildClaudeArgs, sessionFromEvent, textFromEvent } = require("./protocol.cjs");
+const { buildLocalArgsWithMode } = require("./modes/mode-params.cjs");
 const { handleToolPayload, mimeFromPath } = require("./ssh.cjs");
 
 async function verifyLocalConnection(config, onLog) {
@@ -22,7 +23,7 @@ function runLocalClaude(config, message, sessionId, attachments = [], callbacks 
     const command = await resolveLocalCommand(config.wakeName);
     const uploaded = await writeLocalAttachments(config.localUploadDirectory, attachments, callbacks.conversationId, callbacks.onUploadProgress);
     const prompt = message + buildLocalAttachmentNote(uploaded);
-    const args = buildClaudeArgs(config, prompt, safeSessionId(sessionId), false);
+    const args = buildLocalArgsWithMode(config.workModeId || "regular", safeSessionId(sessionId), config);
     const launch = launchSpec(command, args);
     callbacks.onLog?.("local_claude_command_start", {
       hasSession: Boolean(sessionId),

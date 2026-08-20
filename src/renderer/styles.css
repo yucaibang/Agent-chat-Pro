@@ -234,6 +234,22 @@ summary { cursor: pointer; font-size: 13px; margin-bottom: 12px; }
 .mode-action { flex: 1; border: 1px solid #3a454c; border-radius: 6px; background: transparent; color: #9da8a5; padding: 5px 6px; font-size: 11px; cursor: pointer; }
 .mode-action:hover { background: #2d363c; color: #e7e8e4; }
 
+.mode-edit-list { display: flex; flex-direction: column; gap: 6px; max-height: 180px; overflow-y: auto; margin-bottom: 4px; }
+.mode-edit-item { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border: 1px solid #3a454c; border-radius: 8px; background: #151c20; cursor: pointer; transition: background .12s; }
+.mode-edit-item:hover { background: #1d282e; }
+.mode-edit-item.active { border-color: #d99d5c; background: #2a2218; }
+.mode-edit-item .mode-edit-item-icon { font-size: 18px; }
+.mode-edit-item .mode-edit-item-info { flex: 1; min-width: 0; }
+.mode-edit-item .mode-edit-item-name { font-weight: 600; font-size: 13px; color: #e7e8e4; }
+.mode-edit-item .mode-edit-item-desc { font-size: 11px; color: #7f8b88; }
+.mode-edit-item .mode-edit-item-badge { font-size: 10px; color: #7f8b88; background: #263036; padding: 2px 6px; border-radius: 4px; }
+.mode-edit-item .mode-edit-item-actions { display: flex; gap: 4px; }
+.mode-edit-item .mode-edit-item-actions button { border: 0; background: transparent; color: #9da8a5; font-size: 12px; cursor: pointer; padding: 2px 4px; border-radius: 4px; }
+.mode-edit-item .mode-edit-item-actions button:hover { background: #2d363c; color: #e7e8e4; }
+.mode-edit-item .mode-edit-item-actions button.danger { color: #ef9f95; }
+.mode-edit-item .mode-edit-item-actions button.danger:hover { background: #3a2220; }
+textarea { resize: vertical; min-height: 60px; }
+
 .network-info { display: flex; align-items: center; gap: 8px; padding: 2px 8px; color: #7f8b88; font-size: 11px; }
 .network-info .quality-excellent { color: #6eba84; }
 .network-info .quality-good { color: #a8d86e; }

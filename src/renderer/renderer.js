@@ -646,7 +646,8 @@ async function sendMessage() {
       message,
       sessionId,
       conversationId,
-      attachments: preparedAttachments
+      attachments: preparedAttachments,
+      workModeId: currentModeId
     });
     if (result.cancelled) {
       answer.classList.remove("generating", "error");
@@ -697,7 +698,8 @@ elements.form.addEventListener("submit", async (event) => {
   saveButton.disabled = true;
   saveButton.textContent = "正在保存和迁移…";
   try {
-    const settings = await window.claudeNas.saveSettings(settingsFromForm());
+    const formData = settingsFromForm();
+    const settings = await window.claudeNas.saveSettings(formData);
     populateSettings(settings);
     await refreshConversationList();
     if (conversationId && conversationCache.some((item) => item.id === conversationId)) await loadConversation(conversationId);
@@ -705,6 +707,15 @@ elements.form.addEventListener("submit", async (event) => {
     else await createNewConversation();
     elements.dialog.close();
     setConnection("设置已保存", "connected");
+    // 外网模式下保存设置后触发网络连接
+    if (formData.networkType === "external") {
+      try {
+        await window.claudeNas.networkConnect(formData);
+        setConnection("外网连接已建立", "connected");
+      } catch (error) {
+        setConnection("外网连接失败：" + error.message, "error");
+      }
+    }
   } catch (error) {
     setStatus(error.message, true);
   } finally {
@@ -955,6 +966,7 @@ function closeModeDropdown() {
 async function refreshModeSelector() {
   try {
     const modes = await window.claudeNas.listModes();
+    window._cachedModes = modes;
     const list = document.querySelector("#mode-list");
     list.replaceChildren();
     for (const mode of modes) {
@@ -970,6 +982,12 @@ async function refreshModeSelector() {
           populateSettings(settings);
         } catch (error) { setConnection("模式切换失败：" + error.message, "error"); }
         closeModeDropdown();
+      });
+      // 双击编辑模式
+      item.addEventListener("dblclick", (e) => {
+        e.stopPropagation();
+        closeModeDropdown();
+        openModeEditDialog(mode.id);
       });
       list.append(item);
     }
@@ -995,8 +1013,149 @@ document.addEventListener("click", (event) => {
 
 document.querySelector("#mode-edit").addEventListener("click", async () => {
   closeModeDropdown();
-  // TODO: 模式编辑弹窗（P6 后续完善）
-  alert("自定义模式编辑功能开发中…");
+  openModeEditDialog();
+});
+
+// ── 模式编辑弹窗 ──────────────────────────────────
+
+const modeEditDialog = document.querySelector("#mode-edit-dialog");
+const modeEditForm = document.querySelector("#mode-edit-form");
+const modeEditId = document.querySelector("#mode-edit-id");
+const modeEditIcon = document.querySelector("#mode-edit-icon");
+const modeEditName = document.querySelector("#mode-edit-name");
+const modeEditDesc = document.querySelector("#mode-edit-desc");
+const modeEditSystemPrompt = document.querySelector("#mode-edit-system-prompt");
+const modeEditMaxTokens = document.querySelector("#mode-edit-max-tokens");
+const modeEditThinking = document.querySelector("#mode-edit-thinking");
+const modeEditHallucination = document.querySelector("#mode-edit-hallucination");
+const modeEditEnergy = document.querySelector("#mode-edit-energy");
+const modeEditSkipPermissions = document.querySelector("#mode-edit-skip-permissions");
+const modeEditPermissionLabel = document.querySelector("#mode-edit-permission-label");
+const modeEditPermissionHint = document.querySelector("#mode-edit-permission-hint");
+const modeEditStatus = document.querySelector("#mode-edit-status");
+const modeEditTitle = document.querySelector("#mode-edit-title");
+const modeEditSubtitle = document.querySelector("#mode-edit-subtitle");
+const deleteModeBtn = document.querySelector("#delete-mode");
+const saveModeBtn = document.querySelector("#save-mode");
+
+function openModeEditDialog(modeId) {
+  modeEditStatus.textContent = "";
+  modeEditStatus.classList.remove("error");
+  if (modeId) {
+    // 编辑现有模式
+    const existing = window._cachedModes?.find((m) => m.id === modeId);
+    if (!existing) return;
+    modeEditId.value = existing.id;
+    modeEditIcon.value = existing.icon || "🔧";
+    modeEditName.value = existing.name || "";
+    modeEditDesc.value = existing.description || "";
+    modeEditSystemPrompt.value = existing.systemPrompt || "";
+    modeEditMaxTokens.value = String(existing.maxTokens || 8192);
+    modeEditThinking.value = existing.thinkingLevel || "none";
+    modeEditHallucination.value = existing.hallucinationControl || "standard";
+    modeEditEnergy.value = existing.energyPriority || "balanced";
+    modeEditSkipPermissions.checked = Boolean(existing.skipPermissions);
+    modeEditTitle.textContent = "编辑模式";
+    modeEditSubtitle.textContent = existing.isBuiltIn ? "内置模式参数不可修改" : "修改自定义模式参数";
+    deleteModeBtn.hidden = existing.isBuiltIn;
+    saveModeBtn.disabled = existing.isBuiltIn;
+    // 内置模式：只读
+    modeEditName.readOnly = existing.isBuiltIn;
+    modeEditIcon.readOnly = existing.isBuiltIn;
+    modeEditDesc.readOnly = existing.isBuiltIn;
+    updatePermissionLabels(existing.skipPermissions);
+  } else {
+    // 新建模式
+    modeEditId.value = "";
+    modeEditIcon.value = "🔧";
+    modeEditName.value = "";
+    modeEditDesc.value = "";
+    modeEditSystemPrompt.value = "";
+    modeEditMaxTokens.value = "8192";
+    modeEditThinking.value = "none";
+    modeEditHallucination.value = "standard";
+    modeEditEnergy.value = "balanced";
+    modeEditSkipPermissions.checked = false;
+    modeEditTitle.textContent = "新建模式";
+    modeEditSubtitle.textContent = "创建自定义工作模式";
+    deleteModeBtn.hidden = true;
+    saveModeBtn.disabled = false;
+    modeEditName.readOnly = false;
+    modeEditIcon.readOnly = false;
+    updatePermissionLabels(false);
+  }
+  modeEditDialog.showModal();
+}
+
+function updatePermissionLabels(skipPermissions) {
+  modeEditPermissionLabel.textContent = skipPermissions ? "自动执行工具操作（跳过权限确认）— 已开启" : "自动执行工具操作（跳过权限确认）";
+  modeEditPermissionHint.textContent = skipPermissions ? "⚠️ 开启后 Agent 将自动执行所有工具操作，无需逐一确认。请仅在信任环境中使用。" : "开启后 Agent 将自动执行所有工具操作，无需逐一确认。";
+}
+
+modeEditSkipPermissions.addEventListener("change", () => {
+  updatePermissionLabels(modeEditSkipPermissions.checked);
+});
+
+document.querySelector("#close-mode-edit").addEventListener("click", () => modeEditDialog.close());
+document.querySelector("#cancel-mode-edit").addEventListener("click", () => modeEditDialog.close());
+
+deleteModeBtn.addEventListener("click", async () => {
+  const id = modeEditId.value;
+  if (!id) return;
+  const mode = window._cachedModes?.find((m) => m.id === id);
+  if (!mode || mode.isBuiltIn) return;
+  if (!confirm(`确定删除模式"${mode.name}"吗？此操作不可撤销。`)) return;
+  try {
+    await window.claudeNas.deleteMode(id);
+    if (currentModeId === id) {
+      currentModeId = "regular";
+      const regular = await window.claudeNas.getMode("regular");
+      if (regular) updateModeDisplay(regular);
+      const settings = await window.claudeNas.loadSettings();
+      await window.claudeNas.saveSettings({ ...settings, workModeId: "regular" });
+    }
+    await refreshModeSelector();
+    modeEditDialog.close();
+    setConnection("模式已删除", "connected");
+  } catch (error) { modeEditStatus.textContent = error.message; modeEditStatus.classList.add("error"); }
+});
+
+modeEditForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const id = modeEditId.value;
+  const input = {
+    icon: modeEditIcon.value.trim() || "🔧",
+    name: modeEditName.value.trim(),
+    description: modeEditDesc.value.trim(),
+    systemPrompt: modeEditSystemPrompt.value.trim(),
+    maxTokens: Number(modeEditMaxTokens.value) || 8192,
+    thinkingLevel: modeEditThinking.value,
+    hallucinationControl: modeEditHallucination.value,
+    energyPriority: modeEditEnergy.value,
+    skipPermissions: modeEditSkipPermissions.checked
+  };
+  if (!input.name) { modeEditStatus.textContent = "模式名称不能为空。"; modeEditStatus.classList.add("error"); return; }
+  try {
+    let result;
+    if (id) {
+      result = await window.claudeNas.updateMode(id, input);
+    } else {
+      result = await window.claudeNas.createMode(input);
+    }
+    // 如果编辑的是当前模式，刷新显示
+    if (result.id === currentModeId) {
+      updateModeDisplay(result);
+      setToolModeAppearance(result.skipPermissions);
+    }
+    await refreshModeSelector();
+    modeEditDialog.close();
+    setConnection(id ? "模式已更新" : "模式已创建", "connected");
+  } catch (error) { modeEditStatus.textContent = error.message; modeEditStatus.classList.add("error"); }
+});
+
+modeEditDialog.addEventListener("close", () => {
+  modeEditStatus.textContent = "";
+  modeEditStatus.classList.remove("error");
 });
 
 document.querySelector("#mode-import").addEventListener("click", async () => {
@@ -1050,6 +1209,7 @@ function populateNetworkSettings(settings) {
     document.querySelector("#frp-server-addr").value = settings.frp.serverAddr || "";
     document.querySelector("#frp-server-port").value = settings.frp.serverPort || 7000;
     document.querySelector("#frp-local-port").value = settings.frp.localPort || 22;
+    document.querySelector("#frp-remote-port").value = settings.frp.remotePort || 6000;
     document.querySelector("#frp-token").value = settings.frp.token || "";
   }
   if (settings.derp) {
@@ -1079,6 +1239,7 @@ function networkSettingsFromForm() {
       serverAddr: document.querySelector("#frp-server-addr").value,
       serverPort: Number(document.querySelector("#frp-server-port").value) || 7000,
       localPort: Number(document.querySelector("#frp-local-port").value) || 22,
+      remotePort: Number(document.querySelector("#frp-remote-port").value) || 6000,
       token: document.querySelector("#frp-token").value
     },
     derp: {

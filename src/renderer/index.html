@@ -223,8 +223,8 @@
             <details id="frp-config" hidden>
               <summary>FRP 参数</summary>
               <label>FRP 服务器地址<input id="frp-server-addr" placeholder="例如：frp.example.com" /></label>
-              <div class="two-columns"><label>FRP 服务器端口<input id="frp-server-port" type="number" value="7000" min="1" max="65535" /></label><label>FRP 端口<input id="frp-local-port" type="number" value="22" min="1" max="65535" /></label></div>
-              <label>FRP Token<input id="frp-token" type="password" placeholder="可选" /></label>
+              <div class="two-columns"><label>FRP 服务器端口<input id="frp-server-port" type="number" value="7000" min="1" max="65535" /></label><label>本地 SSH 端口<input id="frp-local-port" type="number" value="22" min="1" max="65535" /></label></div>
+              <div class="two-columns"><label>FRP 远程端口<input id="frp-remote-port" type="number" value="6000" min="1" max="65535" /></label><label>FRP Token<input id="frp-token" type="password" placeholder="可选" /></label></div>
             </details>
             <details id="derp-config" hidden>
               <summary>DERP 参数</summary>
@@ -300,6 +300,64 @@
           <button type="button" id="open-diagnostics" class="secondary">打开诊断日志</button>
           <button type="button" id="test-connection" class="secondary">测试连接</button>
           <button type="submit" id="save-settings" class="primary">保存并开始使用</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="mode-edit-dialog">
+      <form id="mode-edit-form" autocomplete="off">
+        <div class="dialog-heading">
+          <div><h2 id="mode-edit-title">编辑模式</h2><p id="mode-edit-subtitle">自定义工作模式参数</p></div>
+          <button type="button" class="close-button" id="close-mode-edit">×</button>
+        </div>
+        <input type="hidden" id="mode-edit-id" />
+        <div class="two-columns">
+          <label>模式图标 <input id="mode-edit-icon" maxlength="4" value="🔧" placeholder="Emoji" /></label>
+          <label>模式名称 <input id="mode-edit-name" required maxlength="40" placeholder="例如：写作助手" /></label>
+        </div>
+        <label>模式描述 <input id="mode-edit-desc" placeholder="简短描述此模式的用途" /></label>
+        <label>系统提示词 <textarea id="mode-edit-system-prompt" rows="3" placeholder="自定义系统提示词（可选）"></textarea></label>
+        <div class="two-columns">
+          <label>最大 Token 数
+            <select id="mode-edit-max-tokens">
+              <option value="4096">4,096</option>
+              <option value="8192">8,192</option>
+              <option value="16384">16,384</option>
+              <option value="32768">32,768</option>
+            </select>
+          </label>
+          <label>思考等级
+            <select id="mode-edit-thinking">
+              <option value="none">关闭</option>
+              <option value="low">低</option>
+              <option value="medium">中</option>
+              <option value="high">高</option>
+            </select>
+          </label>
+        </div>
+        <div class="two-columns">
+          <label>幻觉抑制
+            <select id="mode-edit-hallucination">
+              <option value="strict">严格（温度 0.3）</option>
+              <option value="standard">标准（温度 0.7）</option>
+              <option value="creative">创造（温度 0.9）</option>
+            </select>
+          </label>
+          <label>能耗优先
+            <select id="mode-edit-energy">
+              <option value="quality">质量优先</option>
+              <option value="balanced">均衡</option>
+              <option value="economy">节能</option>
+            </select>
+          </label>
+        </div>
+        <label class="checkbox"><input id="mode-edit-skip-permissions" type="checkbox" /><span id="mode-edit-permission-label">自动执行工具操作（跳过权限确认）</span></label>
+        <p id="mode-edit-permission-hint" class="hint">开启后 Agent 将自动执行所有工具操作，无需逐一确认。</p>
+        <p id="mode-edit-status" class="status"></p>
+        <div class="dialog-actions">
+          <button type="button" id="delete-mode" class="secondary danger-button" hidden>删除此模式</button>
+          <button type="button" id="cancel-mode-edit" class="secondary">取消</button>
+          <button type="submit" id="save-mode" class="primary">保存</button>
         </div>
       </form>
     </dialog>

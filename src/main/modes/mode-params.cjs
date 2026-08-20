@@ -112,4 +112,36 @@ function getEnergyParams(priority) {
   return ENERGY_MAP[priority] || ENERGY_MAP.balanced;
 }
 
-module.exports = { buildCommandWithMode, buildBridgeStartWithMode, resolveMode, getHallucinationParams, getEnergyParams };
+/**
+ * 构建本地模式 CLI 参数数组（用于 spawn 调用）。
+ * 注意：-p 标志不带参数值，prompt 通过 stdin 传入。
+ * @param {string} modeId - 模式 ID
+ * @param {string|null} sessionId - 会话 ID
+ * @param {object} config - 连接配置
+ * @returns {string[]} CLI 参数数组（不含命令名）
+ */
+function buildLocalArgsWithMode(modeId, sessionId, config) {
+  const mode = resolveMode(modeId, config);
+  const args = ["-p", "--output-format", "stream-json", "--include-partial-messages", "--verbose"];
+
+  // maxTokens
+  if (mode.maxTokens) args.push("--max-tokens", String(mode.maxTokens));
+
+  // thinkingLevel
+  const thinkingFlag = THINKING_MAP[mode.thinkingLevel];
+  if (thinkingFlag) args.push(thinkingFlag);
+
+  // 权限模式
+  if (mode.skipPermissions) {
+    args.push("--allow-dangerously-skip-permissions", "--permission-mode", "bypassPermissions");
+  } else {
+    args.push("--permission-mode", mode.permissionMode || "dontAsk");
+  }
+
+  // 会话续接
+  if (sessionId) args.push("--resume", sessionId);
+
+  return args;
+}
+
+module.exports = { buildCommandWithMode, buildBridgeStartWithMode, buildLocalArgsWithMode, resolveMode, getHallucinationParams, getEnergyParams };

@@ -1,6 +1,10 @@
 "use strict";
 
 const { SshDirectTransport } = require("./ssh-direct.cjs");
+const { FrpTunnelTransport } = require("./frp-tunnel.cjs");
+const { DerpRelayTransport } = require("./derp-relay.cjs");
+const { P2pNatTransport } = require("./p2p-nat.cjs");
+const { N2nMeshTransport } = require("./n2n-mesh.cjs");
 const { writeLog } = require("../logger.cjs");
 
 /**
@@ -195,12 +199,10 @@ class NetworkManager {
   _createTransport(type) {
     switch (type) {
       case "ssh-direct": return new SshDirectTransport();
-      // P2-P/DERP/FRP/N2N 将在后续任务中实现，目前 fallback 到 SSH 直连
-      case "p2p-nat":
-      case "derp-relay":
-      case "frp-tunnel":
-      case "n2n-mesh":
-        throw new Error(`${this._methodLabel(type)} 尚未实现，请暂时使用 SSH 直连。`);
+      case "frp-tunnel": return new FrpTunnelTransport();
+      case "derp-relay": return new DerpRelayTransport();
+      case "p2p-nat": return new P2pNatTransport();
+      case "n2n-mesh": return new N2nMeshTransport();
       default: throw new Error(`未知的传输类型：${type}`);
     }
   }
