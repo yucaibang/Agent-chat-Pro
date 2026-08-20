@@ -1,6 +1,6 @@
 {
   "name": "agent-chat-pro",
-  "version": "0.2.0-alpha",
+  "version": "0.7.5",
   "description": "Agent Chat Pro — 内网/外网双模式 SSH 远程 AI 聊天客户端",
   "author": "Jiang",
   "main": "src/main/main.cjs",
@@ -34,9 +34,13 @@
     ],
     "extraResources": [
       {
-        "from": "src/bridge/{agent-sdk-bridge.mjs,package.json,package-lock.json}",
+        "from": "src/bridge",
         "to": "bridge",
-        "filter": ["**/*"]
+        "filter": ["agent-sdk-bridge.mjs", "package.json", "package-lock.json"]
+      },
+      {
+        "from": "src/device-control",
+        "to": "device-control"
       }
     ],
     "win": {
@@ -53,7 +57,8 @@
       "shortcutName": "Agent Chat Pro",
       "installerLanguages": ["zh_CN", "en_US"],
       "language": 2052,
-      "unicode": true
+      "unicode": true,
+      "license": "build/license_zh.txt"
     },
     "mac": {
       "icon": "build/icon.icns",
