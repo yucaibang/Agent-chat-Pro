@@ -90,7 +90,9 @@ function getSettings() {
       ...(raw.reconnect || {})
     },
     // 外网访问密码
-    accessPassword: raw.accessPassword || ""
+    accessPassword: raw.accessPassword || "",
+    // 网络连接状态持久化
+    networkLastState: raw.networkLastState || "offline"
   };
 }
 
@@ -150,7 +152,9 @@ function saveSettings(input) {
     keepalive: { ...previous.keepalive, ...(input.keepalive || {}) },
     reconnect: { ...previous.reconnect, ...(input.reconnect || {}) },
     // 外网访问密码
-    accessPassword: String(input.accessPassword || "")
+    accessPassword: String(input.accessPassword || ""),
+    // 网络连接状态持久化
+    networkLastState: String(input.networkLastState || "offline")
   };
 
   if (input.clearPassword) next.password = "";

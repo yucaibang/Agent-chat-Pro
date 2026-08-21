@@ -140,6 +140,35 @@ async function main() {
     maxTurns: 20,
     settingSources: ["user", "project", "local"]
   };
+
+  // ── Pro 扩展参数映射 ──
+  // maxTokens → maxTokens
+  if (start.maxTokens && Number.isFinite(Number(start.maxTokens))) {
+    options.maxTokens = Number(start.maxTokens);
+  }
+  // thinkingLevel → thinkingLevel (none/low/medium/high)
+  if (start.thinkingLevel && ["none", "low", "medium", "high"].includes(start.thinkingLevel)) {
+    options.thinkingLevel = start.thinkingLevel;
+  }
+  // hallucinationControl → temperature + topP
+  const hallucinationMap = { strict: { temperature: 0.3, topP: 0.85 }, standard: { temperature: 0.7, topP: 0.95 }, creative: { temperature: 0.9, topP: 0.98 } };
+  const hallucination = hallucinationMap[start.hallucinationControl] || hallucinationMap.standard;
+  options.temperature = hallucination.temperature;
+  options.topP = hallucination.topP;
+  // energyPriority → maxTurns
+  const energyMap = { quality: 200, balanced: 20, economy: 8 };
+  if (start.energyPriority && energyMap[start.energyPriority]) {
+    options.maxTurns = energyMap[start.energyPriority];
+  }
+  // systemPrompt → systemPrompt
+  if (start.systemPrompt && String(start.systemPrompt).trim()) {
+    options.systemPrompt = String(start.systemPrompt).trim();
+  }
+  // modelConfig → spread into options
+  if (start.modelConfig && typeof start.modelConfig === "object") {
+    Object.assign(options, start.modelConfig);
+  }
+
   if (!automatic) options.canUseTool = requestPermission;
 
   emit({ type: "bridge_ready", protocolVersion: PROTOCOL_VERSION });

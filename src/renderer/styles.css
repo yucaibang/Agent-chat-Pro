@@ -256,4 +256,16 @@ textarea { resize: vertical; min-height: 60px; }
 .network-info .quality-fair { color: #e4ad6b; }
 .network-info .quality-poor { color: #e17d72; }
 
+.chat-mode-badge { display: inline-flex; align-items: center; gap: 4px; padding: 3px 10px; border: 1px solid #3a454c; border-radius: 12px; background: #1a2025; color: #9da8a5; font-size: 11px; line-height: 1.4; white-space: nowrap; cursor: default; transition: background .15s, border-color .15s; }
+.chat-mode-badge:hover { background: #222a30; border-color: #4a565c; }
+.chat-mode-badge .badge-icon { font-size: 13px; }
+
+.system-prompt-preview { max-height: 160px; overflow-y: auto; padding: 10px 12px; border: 1px solid #303a40; border-radius: 8px; background: #11171b; color: #c8d0ce; font-size: 12px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; }
+.system-prompt-preview:empty::before { content: "（无系统提示词）"; color: #5a6562; font-style: italic; }
+.system-prompt-preview.rendered { white-space: normal; }
+.system-prompt-preview.rendered > * { margin-block: 0; }
+.system-prompt-preview.rendered > * + * { margin-top: .35em; }
+.system-prompt-preview.rendered p { margin: 0; }
+.system-prompt-preview.rendered code { font-family: "Cascadia Code", Consolas, monospace; font-size: .9em; padding: 2px 5px; border-radius: 5px; background: #12191d; color: #ecc18b; }
+
 @media (max-width: 760px) { .titlebar-identity { flex-basis: 150px; } .menu-trigger { padding: 0 6px; } .sidebar { display: none; } .main { width: 100%; padding: 18px 18px 8px; } }

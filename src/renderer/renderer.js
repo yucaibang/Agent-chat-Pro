@@ -999,6 +999,12 @@ function updateModeDisplay(mode) {
   document.querySelector("#mode-name").textContent = mode.name;
   document.querySelector("#mode-trigger").title = `${mode.name}：${mode.description}`;
   setToolModeAppearance(mode.skipPermissions);
+  // 同步更新聊天区模式 badge
+  const badge = document.querySelector("#chat-mode-badge");
+  if (badge) {
+    badge.textContent = `${mode.icon} ${mode.name}`;
+    badge.title = `${mode.name}：${mode.description}`;
+  }
 }
 
 document.querySelector("#mode-trigger").addEventListener("click", (event) => {
@@ -1085,6 +1091,7 @@ function openModeEditDialog(modeId) {
     updatePermissionLabels(false);
   }
   modeEditDialog.showModal();
+  updateSystemPromptPreview();
 }
 
 function updatePermissionLabels(skipPermissions) {
@@ -1095,6 +1102,43 @@ function updatePermissionLabels(skipPermissions) {
 modeEditSkipPermissions.addEventListener("change", () => {
   updatePermissionLabels(modeEditSkipPermissions.checked);
 });
+
+// ── 系统提示词实时预览 ──────────────────────────────
+
+let promptPreviewTimer = null;
+
+function updateSystemPromptPreview() {
+  const text = modeEditSystemPrompt.value.trim();
+  const section = document.querySelector("#system-prompt-preview-section");
+  const preview = document.querySelector("#system-prompt-preview");
+  section.hidden = !text;
+  if (!text) {
+    preview.textContent = "";
+    preview.classList.remove("rendered");
+    return;
+  }
+  // 防抖：300ms 后渲染 Markdown
+  clearTimeout(promptPreviewTimer);
+  promptPreviewTimer = setTimeout(async () => {
+    try {
+      const html = await window.claudeNas.renderMarkdown(text);
+      preview.innerHTML = html;
+      preview.classList.add("rendered");
+      // 链接拦截
+      preview.querySelectorAll("a[href]").forEach((link) => {
+        link.addEventListener("click", (event) => {
+          event.preventDefault();
+          window.claudeNas.openLink(link.getAttribute("href")).catch(() => {});
+        });
+      });
+    } catch {
+      preview.textContent = text;
+      preview.classList.remove("rendered");
+    }
+  }, 300);
+}
+
+modeEditSystemPrompt.addEventListener("input", updateSystemPromptPreview);
 
 document.querySelector("#close-mode-edit").addEventListener("click", () => modeEditDialog.close());
 document.querySelector("#cancel-mode-edit").addEventListener("click", () => modeEditDialog.close());
@@ -1303,6 +1347,18 @@ function updateNetworkStatus(status) {
       latencyLabel.textContent = "";
       latencyLabel.className = "";
     }
+    // 连接成功时更新连接状态指示器
+    setConnection(`${modeLabels[status.type] || "外网"}已连接`, "connected");
+  } else if (status.state === "reconnecting" || status.state === "probing") {
+    networkInfo.hidden = false;
+    modeLabel.textContent = status.state === "reconnecting" ? "重连中…" : "连接中…";
+    latencyLabel.textContent = "";
+    setConnection(status.detail || "正在建立外网连接…", "");
+  } else if (status.state === "failed") {
+    networkInfo.hidden = false;
+    modeLabel.textContent = "连接失败";
+    latencyLabel.textContent = "";
+    setConnection(status.detail || "外网连接失败", "error");
   } else {
     networkInfo.hidden = true;
   }

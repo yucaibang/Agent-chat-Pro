@@ -44,6 +44,7 @@ contextBridge.exposeInMainWorld("claudeNas", {
   getNetworkStatus: () => ipcRenderer.invoke("network:status"),
   networkConnect: (config) => ipcRenderer.invoke("network:connect", config),
   networkDisconnect: () => ipcRenderer.invoke("network:disconnect"),
+  persistNetworkState: () => ipcRenderer.invoke("network:persist-state"),
   // ── 事件监听 ──
   onDelta: (handler) => ipcRenderer.on("chat:delta", (_event, payload) => handler(payload)),
   onChatEvent: (handler) => ipcRenderer.on("chat:event", (_event, payload) => handler(payload)),

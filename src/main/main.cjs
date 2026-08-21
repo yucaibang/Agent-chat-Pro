@@ -34,6 +34,21 @@ const activeRequests = new Map();
 const networkManager = new NetworkManager();
 let latencyMonitor = null;
 
+/** 保存网络连接状态到 settings */
+function persistNetworkState() {
+  try {
+    const current = getSettings();
+    const status = networkManager.getStatus();
+    const state = (status.state === STATES.CONNECTED || status.state === STATES.DEGRADED) ? "connected" : "offline";
+    if (current.networkLastState !== state) {
+      saveSettings({ ...current, networkLastState: state });
+      writeLog("network_state_persisted", { state });
+    }
+  } catch (error) {
+    writeLog("network_state_persist_failed", { error: error.message });
+  }
+}
+
 function bundledBridgeFiles() {
   const fs = require("fs");
   const directory = path.join(__dirname, "../bridge");
@@ -310,10 +325,13 @@ app.whenReady().then(() => {
   ipcMain.handle("network:disconnect", async () => {
     if (latencyMonitor) latencyMonitor.stop();
     await networkManager.disconnect();
+    persistNetworkState();
     return networkManager.getStatus();
   });
+  ipcMain.handle("network:persist-state", () => { persistNetworkState(); return networkManager.getStatus(); });
   networkManager.onStatusChange((event) => {
     if (window && !window.isDestroyed()) window.webContents.send("network:status-change", event);
+    persistNetworkState();
   });
   ipcMain.handle("link:open", async (_event, value) => {
     let target;
@@ -467,6 +485,30 @@ app.whenReady().then(() => {
   ipcMain.handle("window:action", (_event, action) => handleWindowAction(action));
   createWindow();
   app.on("activate", () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
+
+  // ── 网络状态持久化与自动重连 ──
+  // 启动时：如果上次外网连接成功过，自动重连
+  try {
+    const startupSettings = getSettings();
+    if (startupSettings.networkType === "external" && startupSettings.networkLastState === "connected") {
+      writeLog("network_auto_reconnect_start", { externalMethod: startupSettings.externalMethod });
+      networkManager.connect(getSshConnection(), (fingerprint) => trustHostFingerprint(fingerprint), writeLog).then((transport) => {
+        if (!latencyMonitor) {
+          latencyMonitor = new LatencyMonitor({ onUpdate: (summary) => { if (window && !window.isDestroyed()) window.webContents.send("network:latency", summary); } });
+        }
+        latencyMonitor.start(transport);
+        persistNetworkState();
+        writeLog("network_auto_reconnect_success", { externalMethod: startupSettings.externalMethod });
+      }).catch((error) => {
+        writeLog("network_auto_reconnect_failed", { error: error.message });
+      });
+    }
+  } catch (error) {
+    writeLog("network_auto_reconnect_error", { error: error.message });
+  }
+
+  // 关闭时保存网络状态
+  app.on("before-quit", () => { persistNetworkState(); });
 });
 
 function handleWindowAction(action) {

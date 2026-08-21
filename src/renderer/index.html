@@ -120,6 +120,7 @@
         <div class="chat-heading">
           <h1>和 Agent 对话</h1>
           <p id="connection-subtitle">通过 SSH 使用 NAS 上的 Agent CLI</p>
+          <span id="chat-mode-badge" class="chat-mode-badge" title="当前模式">🛡 常规模式</span>
         </div>
         <button id="header-settings" class="icon-button" title="连接设置">⚙</button>
       </header>
@@ -317,6 +318,10 @@
         </div>
         <label>模式描述 <input id="mode-edit-desc" placeholder="简短描述此模式的用途" /></label>
         <label>系统提示词 <textarea id="mode-edit-system-prompt" rows="3" placeholder="自定义系统提示词（可选）"></textarea></label>
+        <details id="system-prompt-preview-section" hidden>
+          <summary>预览系统提示词</summary>
+          <div id="system-prompt-preview" class="system-prompt-preview"></div>
+        </details>
         <div class="two-columns">
           <label>最大 Token 数
             <select id="mode-edit-max-tokens">
