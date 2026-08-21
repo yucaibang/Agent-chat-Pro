@@ -94,7 +94,15 @@ function getSettings() {
     // 网络连接状态持久化
     networkLastState: raw.networkLastState || "offline",
     // 主题偏好
-    theme: raw.theme === "light" ? "light" : "dark"
+    theme: raw.theme === "light" ? "light" : "dark",
+    // 云端 AI 配置
+    cloudAi: {
+      baseURL: String(raw.cloudAi?.baseURL || "https://open.bigmodel.cn/api/paas/v4/").trim(),
+      model: String(raw.cloudAi?.model || "glm-4-flash").trim(),
+      maxTokens: Number(raw.cloudAi?.maxTokens) || 4096,
+      hasApiKey: false,
+      ...(raw.cloudAi ? { baseURL: String(raw.cloudAi.baseURL || "").trim() || "https://open.bigmodel.cn/api/paas/v4/", model: String(raw.cloudAi.model || "glm-4-flash").trim(), maxTokens: Number(raw.cloudAi.maxTokens) || 4096 } : {})
+    }
   };
 }
 
@@ -158,7 +166,24 @@ function saveSettings(input) {
     // 网络连接状态持久化
     networkLastState: String(input.networkLastState || "offline"),
     // 主题偏好
-    theme: input.theme === "light" ? "light" : "dark"
+    theme: input.theme === "light" ? "light" : "dark",
+    // 云端 AI 配置
+    cloudAi: { ...previous.cloudAi, ...(input.cloudAi || {}) }
+  };
+
+  // 云端 AI 密钥加密保存
+  if (input.cloudAi && typeof input.cloudAi.apiKey === "string" && input.cloudAi.apiKey.length > 0) {
+    if (!safeStorage.isEncryptionAvailable()) throw new Error("Windows 系统加密不可用，无法安全保存云端 AI 密钥。");
+    next.cloudAi._encryptedApiKey = safeStorage.encryptString(input.cloudAi.apiKey).toString("base64");
+    next.cloudAi.hasApiKey = true;
+    delete next.cloudAi.apiKey;
+  } else if (input.cloudAi && input.cloudAi.clearApiKey) {
+    next.cloudAi._encryptedApiKey = "";
+    next.cloudAi.hasApiKey = false;
+  } else {
+    next.cloudAi._encryptedApiKey = previous.cloudAi?._encryptedApiKey || "";
+    next.cloudAi.hasApiKey = previous.cloudAi?.hasApiKey || false;
+  }
   };
 
   if (input.clearPassword) next.password = "";
@@ -171,6 +196,12 @@ function saveSettings(input) {
     throw new Error("本机标识需为 1–32 个字符，只能使用文字、数字、点、短横线或下划线。");
   }
   if (connectionMode === "ssh" && (!next.host || !next.username)) throw new Error("NAS 地址和 SSH 账号不能为空。");
+
+  // 云端 AI 模式校验
+  if (connectionMode === "cloud") {
+    if (!next.cloudAi.apiKey) throw new Error("云端 AI 模式必须填写 API 密钥。");
+    if (!next.cloudAi.baseURL) throw new Error("云端 AI 模式必须填写 API 地址。");
+  }
 
   // 外网模式校验
   if (next.networkType === "external") {
@@ -195,4 +226,13 @@ function trustHostFingerprint(fingerprint) {
   fs.writeFileSync(settingsPath(), JSON.stringify(raw, null, 2), { mode: 0o600 });
 }
 
-module.exports = { getConnection, getSettings, getSshConnection, saveSettings, trustHostFingerprint, EXTERNAL_METHODS };
+function getCloudAiConfig() {
+  const settings = getSettings();
+  const config = { ...settings.cloudAi };
+  if (config._encryptedApiKey) {
+    try { config.apiKey = safeStorage.decryptString(Buffer.from(config._encryptedApiKey, "base64")); } catch { config.apiKey = ""; }
+  }
+  return config;
+}
+
+module.exports = { getConnection, getSettings, getSshConnection, getCloudAiConfig, saveSettings, trustHostFingerprint, EXTERNAL_METHODS };

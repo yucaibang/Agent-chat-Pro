@@ -366,6 +366,7 @@ input, select { color: var(--text-primary); background: var(--bg-input); border:
 .two-columns { display: grid; grid-template-columns: 1fr 130px; gap: 12px; }
 .settings-group { display: flex; flex-direction: column; gap: 15px; }
 .mode-switch { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; padding: 4px; border: 1px solid var(--border-mode); border-radius: 10px; background: var(--bg-mode-switch); }
+.mode-switch.mode-switch-three { grid-template-columns: 1fr 1fr 1fr; }
 .mode-switch button { border: 0; border-radius: 7px; background: transparent; color: var(--text-tertiary); padding: 9px 12px; }
 .mode-switch button.active { background: var(--bg-mode-active); color: var(--text-primary); box-shadow: 0 1px 5px #0005; }
 details { border-top: 1px solid var(--border-divider); padding-top: 12px; color: var(--text-tertiary); }
@@ -439,5 +440,8 @@ textarea { resize: vertical; min-height: 60px; }
 
 .theme-toggle { position: absolute; right: 44px; top: 50%; transform: translateY(-50%); border: 0; background: transparent; color: var(--text-muted); font-size: 16px; padding: 4px 6px; border-radius: 6px; cursor: pointer; transition: background .15s, color .15s; }
 .theme-toggle:hover { background: var(--bg-hover); color: var(--text-primary); }
+
+.cloud-field-hint { color: var(--accent); }
+.cloud-field-hint a { color: var(--text-link); }
 
 @media (max-width: 760px) { .titlebar-identity { flex-basis: 150px; } .menu-trigger { padding: 0 6px; } .sidebar { display: none; } .main { width: 100%; padding: 18px 18px 8px; } }

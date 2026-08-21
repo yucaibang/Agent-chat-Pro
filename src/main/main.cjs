@@ -3,7 +3,7 @@
 const { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, shell } = require("electron");
 const path = require("path");
 const { randomUUID } = require("crypto");
-const { getConnection, getSettings, getSshConnection, saveSettings, trustHostFingerprint } = require("./settings.cjs");
+const { getConnection, getSettings, getSshConnection, getCloudAiConfig, saveSettings, trustHostFingerprint } = require("./settings.cjs");
 const { downloadRemoteFile, ensureDeviceControlKey, finalizeDeviceControl, getAgentSdkBridgeStatus, installAgentSdkBridge, markDeviceControlDisabled, readRemoteFile, runClaude, uninstallAgentSdkBridge, verifyConnection } = require("./ssh.cjs");
 const { copyLocalFile, readLocalFile, runLocalClaude, verifyLocalConnection } = require("./local.cjs");
 const { getDeviceControlStatus, installDeviceControl, preferredAddress, uninstallDeviceControl } = require("./device-control.cjs");
@@ -29,6 +29,7 @@ const { listModes, getMode, createMode, updateMode, deleteMode, exportModes, imp
 const { buildCommandWithMode, buildBridgeStartWithMode, buildLocalArgsWithMode } = require("./modes/mode-params.cjs");
 const { NetworkManager, STATES } = require("./network/network-manager.cjs");
 const { LatencyMonitor } = require("./network/latency-monitor.cjs");
+const { sendCloudChat, buildMessages, verifyCloudConnection } = require("./cloud-chat.cjs");
 
 let window;
 const activeRequests = new Map();
@@ -390,14 +391,28 @@ app.whenReady().then(() => {
     return localPath;
   });
   ipcMain.handle("connection:test", async (_event, input) => {
-    const mode = input?.connectionMode === "local" ? "local" : "ssh";
+    const mode = input?.connectionMode === "local" ? "local" : input?.connectionMode === "cloud" ? "cloud" : "ssh";
+    if (mode === "cloud") {
+      const savedConfig = getCloudAiConfig();
+      const config = { ...savedConfig, ...(input?.cloudAi || {}) };
+      if (!config.apiKey) throw new Error("请输入云端 AI 密钥。");
+      writeLog("connection_test_start", { connectionMode: "cloud", baseURL: config.baseURL, model: config.model });
+      try {
+        await verifyCloudConnection(config, writeLog);
+        writeLog("connection_test_success", { connectionMode: "cloud" });
+        return `云端 AI 连接成功 (${config.model || "glm-4-flash"})`;
+      } catch (error) {
+        writeLog("connection_test_failed", { error: error.message });
+        throw error;
+      }
+    }
     let saved;
     try { saved = mode === "local" ? getSettings() : getConnection(); }
     catch (error) {
       if (mode !== "ssh" || !input?.password) throw error;
       saved = getSettings();
     }
-    const config = { ...saved, ...input, connectionMode: mode, password: input.password || saved.password };
+    const config = { ...saved, ...input, connectionMode: mode === "local" ? "local" : "ssh", password: input.password || saved.password };
     writeLog("connection_test_start", { connectionMode: mode, host: config.host, port: config.port, username: config.username, wakeName: config.wakeName });
     try {
       const result = mode === "local"
@@ -424,6 +439,67 @@ app.whenReady().then(() => {
       textLength: message.length,
       attachments: attachments.map((file) => ({ name: file.name, size: file.data?.byteLength || 0, mimeType: file.mimeType }))
     });
+
+    const settings = getSettings();
+    const connectionMode = settings.connectionMode;
+
+    // ── 云端 AI 模式 ──
+    if (connectionMode === "cloud") {
+      const cloudConfig = getCloudAiConfig();
+      if (!cloudConfig.apiKey) throw new Error("请先在连接设置中填写云端 AI 密钥。");
+      const conversation = getConversation(input.conversationId);
+      const modeConfig = input.workModeId ? await (async () => { try { return await getMode(input.workModeId); } catch { return null; } })() : null;
+      const systemPrompt = modeConfig?.systemPrompt || "";
+      const cloudMessages = buildMessages(conversation, systemPrompt);
+      cloudMessages.push({ role: "user", content: message });
+      let streamedText = "";
+      let draftTimer;
+      const persistDraft = () => {
+        draftTimer = undefined;
+        if (!streamedText) return;
+        try { saveAssistantDraft(input.conversationId, id, streamedText); }
+        catch (error) { writeLog("conversation_draft_save_failed", { requestId: id, conversationId: input.conversationId, error }); }
+      };
+      const cloudCallbacks = {
+        onDelta: (text) => {
+          streamedText += text;
+          event.sender.send("chat:delta", { id, text });
+          if (!draftTimer) draftTimer = setTimeout(persistDraft, 1000);
+        },
+        onStatus: (status) => event.sender.send("chat:event", { id, type: "connection", status }),
+        onLog: writeLog
+      };
+      event.sender.send("chat:event", { id, type: "connection", status: "connecting" });
+      const cloudPromise = sendCloudChat({
+        apiKey: cloudConfig.apiKey,
+        baseURL: cloudConfig.baseURL,
+        model: cloudConfig.model || "glm-4-flash",
+        maxTokens: modeConfig?.maxTokens || cloudConfig.maxTokens || 4096,
+        temperature: modeConfig?.hallucinationControl === "strict" ? 0.3 : modeConfig?.hallucinationControl === "creative" ? 0.9 : undefined,
+      }, cloudMessages, cloudCallbacks);
+      activeRequests.set(id, { promise: cloudPromise, cancel: () => { cloudPromise.cancel?.(); } });
+      try {
+        const result = await cloudPromise;
+        if (draftTimer) clearTimeout(draftTimer);
+        if (result.cancelled) {
+          addAssistantMessage(input.conversationId, streamedText || "已停止。", "", [], [], id, "cloud");
+          return { id, cancelled: true, text: streamedText, sessionId: "", tools: [], files: [] };
+        }
+        addAssistantMessage(input.conversationId, result.text, "", [], [], id, "cloud");
+        writeLog("chat_send_success", { requestId: id, conversationId: input.conversationId, textLength: result.text.length, connectionMode: "cloud" });
+        return { id, ...result, sessionId: "", tools: [], files: [] };
+      } catch (error) {
+        if (draftTimer) clearTimeout(draftTimer);
+        persistDraft();
+        writeLog("chat_send_failed", { requestId: id, conversationId: input.conversationId, error: error.message });
+        throw error;
+      } finally {
+        if (draftTimer) clearTimeout(draftTimer);
+        activeRequests.delete(id);
+      }
+    }
+
+    // ── SSH / 本机模式 ──
     const config = getConnection();
     const agentMessage = `${message}${message ? "\n\n" : ""}[来源电脑：${config.clientLabel}]`;
     const conversation = getConversation(input.conversationId);

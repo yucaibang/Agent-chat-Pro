@@ -155,12 +155,42 @@
         </div>
         <label>Agent 运行位置
           <input type="hidden" name="connectionMode" id="connection-mode" value="ssh" />
-          <div class="mode-switch" role="group" aria-label="Agent 运行位置">
+          <div class="mode-switch mode-switch-three" role="group" aria-label="Agent 运行位置">
             <button type="button" id="mode-ssh" data-connection-mode="ssh">SSH 远程</button>
-            <button type="button" id="mode-local" data-connection-mode="local">本机 Windows</button>
+            <button type="button" id="mode-cloud" data-connection-mode="cloud">云端 AI</button>
+            <button type="button" id="mode-local" data-connection-mode="local">本机</button>
           </div>
-          <span class="field-hint">本机模式不需要地址、账号和密码，但这台电脑必须已经安装并登录 Claude Code。</span>
+          <span class="field-hint">SSH 远程：连接 NAS 上的 Claude Code；云端 AI：无需本地 CLI，直接用免费 API 聊天；本机：使用本机 Claude Code。</span>
         </label>
+        <div id="cloud-fields" class="settings-group" hidden>
+          <label>API 服务商
+            <select id="cloud-provider">
+              <option value="zhipu">智谱 AI（GLM-4-Flash 永久免费）</option>
+              <option value="siliconflow">硅基流动</option>
+              <option value="custom">自定义 OpenAI 兼容 API</option>
+            </select>
+            <span class="field-hint">智谱 AI 的 GLM-4-Flash 模型永久免费，适合日常对话。注册即送 2000 万 Token。</span>
+          </label>
+          <label>API 密钥
+            <div class="password-row">
+              <input id="cloud-api-key" type="password" placeholder="在此粘贴你的 API 密钥" autocomplete="new-password" />
+              <button type="button" id="toggle-cloud-key" class="password-toggle">显示</button>
+            </div>
+            <span class="field-hint" id="cloud-key-hint">还没有密钥？<a href="#" id="cloud-register-link">点击免费注册智谱 AI</a>，注册后在 API Keys 页面创建密钥。</span>
+          </label>
+          <label>AI 模型
+            <select id="cloud-model">
+              <option value="glm-4-flash">GLM-4-Flash（永久免费）</option>
+              <option value="glm-4.7-flash">GLM-4.7-Flash（免费）</option>
+              <option value="glm-4-plus">GLM-4-Plus（付费，更强）</option>
+              <option value="glm-4-long">GLM-4-Long（付费，超长文本）</option>
+            </select>
+          </label>
+          <div id="cloud-custom-fields" hidden>
+            <label>API 地址<input id="cloud-base-url" placeholder="https://open.bigmodel.cn/api/paas/v4/" /></label>
+            <span class="field-hint">OpenAI 兼容的 chat/completions 端点地址。</span>
+          </div>
+        </div>
         <div id="ssh-fields" class="settings-group">
           <label>NAS 地址<input name="host" required placeholder="例如：10.66.1.111" /></label>
           <div class="two-columns">

@@ -26,6 +26,7 @@ let attachments = [];
 let conversationCache = [];
 let automaticTools = false;
 let currentConnectionMode = "ssh";
+let hasCloudApiKey = false;
 const messages = new Map();
 
 function settingsFromForm() {
@@ -45,6 +46,13 @@ function settingsFromForm() {
     workModeId: currentModeId,
     networkType: document.querySelector("#network-type").value,
     externalMethod: document.querySelector("#external-method").value,
+    cloudAi: {
+      apiKey: document.querySelector("#cloud-api-key")?.value || "",
+      clearApiKey: !document.querySelector("#cloud-api-key")?.value && hasCloudApiKey,
+      baseURL: document.querySelector("#cloud-base-url")?.value || "https://open.bigmodel.cn/api/paas/v4/",
+      model: document.querySelector("#cloud-model")?.value || "glm-4-flash",
+      maxTokens: 4096
+    },
     ...network
   };
 }
@@ -56,7 +64,7 @@ function populateSettings(settings) {
   }
   elements.form.elements.namedItem("skipPermissions").checked = Boolean(settings.skipPermissions);
   elements.form.elements.namedItem("connectionMode").value = settings.connectionMode || "ssh";
-  currentConnectionMode = settings.connectionMode === "local" ? "local" : "ssh";
+  currentConnectionMode = settings.connectionMode === "local" ? "local" : settings.connectionMode === "cloud" ? "cloud" : "ssh";
   updateConnectionModeUI();
   setToolModeAppearance(Boolean(settings.skipPermissions));
   const password = elements.form.elements.namedItem("password");
@@ -71,32 +79,66 @@ function populateSettings(settings) {
     : "请输入 SSH 密码";
   const controlSource = document.querySelector("#device-control-source");
   if (!controlSource.value) controlSource.value = settings.host || "";
+  // 云端 AI 设置填充
+  const cloudApiKey = document.querySelector("#cloud-api-key");
+  const cloudBaseURL = document.querySelector("#cloud-base-url");
+  const cloudModel = document.querySelector("#cloud-model");
+  const cloudProvider = document.querySelector("#cloud-provider");
+  if (settings.cloudAi) {
+    hasCloudApiKey = Boolean(settings.cloudAi.hasApiKey);
+    if (cloudApiKey) {
+      cloudApiKey.value = "";
+      cloudApiKey.type = "password";
+      cloudApiKey.placeholder = hasCloudApiKey ? "已安全保存密钥；留空不会修改" : "在此粘贴你的 API 密钥";
+      document.querySelector("#toggle-cloud-key").textContent = "显示";
+    }
+    if (cloudBaseURL) cloudBaseURL.value = settings.cloudAi.baseURL || "https://open.bigmodel.cn/api/paas/v4/";
+    if (cloudModel) cloudModel.value = settings.cloudAi.model || "glm-4-flash";
+    if (cloudProvider) {
+      const baseURL = settings.cloudAi.baseURL || "";
+      if (baseURL.includes("siliconflow")) cloudProvider.value = "siliconflow";
+      else if (baseURL.includes("bigmodel") || baseURL.includes("zhipu")) cloudProvider.value = "zhipu";
+      else cloudProvider.value = "custom";
+      cloudProvider.dispatchEvent(new Event("change"));
+    }
+  }
 }
 
 function updateConnectionModeUI() {
-  const mode = elements.form.elements.namedItem("connectionMode").value === "local" ? "local" : "ssh";
-  currentConnectionMode = mode;
-  const local = mode === "local";
-  document.querySelector("#mode-ssh").classList.toggle("active", !local);
-  document.querySelector("#mode-local").classList.toggle("active", local);
-  document.querySelector("#ssh-fields").hidden = local;
-  elements.form.elements.namedItem("host").required = !local;
-  elements.form.elements.namedItem("username").required = !local;
-  document.querySelector("#device-control-settings").hidden = local;
-  document.querySelector("#bridge-settings").hidden = local;
-  document.querySelector("#working-directory").placeholder = local ? "留空则使用本机默认目录" : "留空则使用 SSH 账号的主目录";
-  document.querySelector("#permission-label").textContent = `允许 Agent 在${local ? "本机" : " NAS"}自动执行工具操作`;
-  document.querySelector("#permission-hint").textContent = `开启后会传入 Claude Code 的 bypass permissions 参数。仅在你信任${local ? "这台电脑" : "该 NAS"}与当前工作目录时使用。`;
-  document.querySelector("#settings-description").textContent = local
+  const modeValue = elements.form.elements.namedItem("connectionMode").value;
+  currentConnectionMode = modeValue === "local" ? "local" : modeValue === "cloud" ? "cloud" : "ssh";
+  const isLocal = currentConnectionMode === "local";
+  const isCloud = currentConnectionMode === "cloud";
+  document.querySelector("#mode-ssh").classList.toggle("active", currentConnectionMode === "ssh");
+  document.querySelector("#mode-cloud").classList.toggle("active", isCloud);
+  document.querySelector("#mode-local").classList.toggle("active", isLocal);
+  document.querySelector("#ssh-fields").hidden = isLocal || isCloud;
+  document.querySelector("#cloud-fields").hidden = !isCloud;
+  document.querySelector("#device-control-settings").hidden = isLocal || isCloud;
+  document.querySelector("#bridge-settings").hidden = isLocal || isCloud;
+  elements.form.elements.namedItem("host").required = currentConnectionMode === "ssh";
+  elements.form.elements.namedItem("username").required = currentConnectionMode === "ssh";
+  document.querySelector("#working-directory").placeholder = isLocal ? "留空则使用本机默认目录" : "留空则使用 SSH 账号的主目录";
+  document.querySelector("#permission-label").textContent = `允许 Agent 在${isLocal ? "本机" : isCloud ? "云端" : " NAS"}自动执行工具操作`;
+  document.querySelector("#permission-hint").textContent = `开启后会传入 Claude Code 的 bypass permissions 参数。仅在你信任${isLocal ? "这台电脑" : isCloud ? "云端服务" : "该 NAS"}与当前工作目录时使用。`;
+  document.querySelector("#settings-description").textContent = isCloud
+    ? "直接使用云端 AI API 聊天，无需安装任何 CLI。"
+    : isLocal
     ? "直接使用这台 Windows 电脑上的 Agent CLI（当前适配 Claude Code）。"
     : "通过 SSH 使用 NAS 或服务器上的 Agent CLI（当前适配 Claude Code）。";
-  document.querySelector("#connection-subtitle").textContent = local
+  document.querySelector("#connection-subtitle").textContent = isCloud
+    ? "使用云端 AI API 聊天（无需本地 CLI）"
+    : isLocal
     ? "使用本机 Windows 上的 Agent CLI"
     : "通过 SSH 使用 NAS 上的 Agent CLI";
-  document.querySelector("#empty-description").textContent = local
+  document.querySelector("#empty-description").textContent = isCloud
+    ? "选择云端 AI 模式，输入消息即可开始聊天，无需任何本地安装。"
+    : isLocal
     ? "输入消息后，客户端会调用本机 Agent 并保留聊天上下文。"
     : "输入消息后，客户端会连接 NAS 并保留本次聊天的上下文。";
-  document.querySelector("#security-note").textContent = local
+  document.querySelector("#security-note").textContent = isCloud
+    ? "云端模式仅传输文本消息，不执行任何本地或远程命令。API 密钥仅保存在本地。"
+    : isLocal
     ? "本机模式不保存 SSH 密码；Agent 登录信息由对应 CLI 自己管理。"
     : "密码仅保存在这台 Windows 电脑的系统加密存储中。";
 }
@@ -606,7 +648,7 @@ async function loadConversation(id) {
     }
   });
   elements.empty.hidden = conversation.messages.length > 0;
-  setConnection(sessionId ? `已恢复${currentConnectionMode === "local" ? "本机" : " SSH"} Claude 会话` : "新对话，等待发送", "connected");
+  setConnection(sessionId ? `已恢复${currentConnectionMode === "cloud" ? "云端 AI" : currentConnectionMode === "local" ? "本机" : " SSH"} 会话` : "新对话，等待发送", "connected");
   refreshConversationList();
 }
 
@@ -719,7 +761,7 @@ async function sendMessage() {
   elements.prompt.value = "";
   adjustTextarea();
   setBusy(true);
-  setConnection(currentConnectionMode === "local" ? "正在启动本机 Claude…" : "正在连接 NAS…", "");
+  setConnection(currentConnectionMode === "cloud" ? "正在连接云端 AI…" : currentConnectionMode === "local" ? "正在启动本机 Claude…" : "正在连接 NAS…", "");
 
   try {
     const preparedAttachments = await Promise.all(attachments.map(async (file) => ({
@@ -744,7 +786,7 @@ async function sendMessage() {
       answer.querySelector(".message-content").textContent = partial
         ? `${partial}\n\n（已停止）`
         : "已停止。";
-      setConnection(`${currentConnectionMode === "local" ? "本机 Agent" : "NAS"}已停止当前任务 · 连接正常`, "connected");
+      setConnection(`${currentConnectionMode === "cloud" ? "云端 AI" : currentConnectionMode === "local" ? "本机 Agent" : "NAS"}已停止当前任务 · 连接正常`, "connected");
       return;
     }
     sessionId = result.sessionId || sessionId;
@@ -755,7 +797,7 @@ async function sendMessage() {
     finalizeToolList(answer, result.tools || []);
     renderReturnedFiles(answer, result.files || []);
     answer.classList.remove("generating");
-    setConnection(`${currentConnectionMode === "local" ? "本机 Claude" : "NAS"}已连接 · 会话已保存`, "connected");
+    setConnection(`${currentConnectionMode === "cloud" ? "云端 AI" : currentConnectionMode === "local" ? "本机 Claude" : "NAS"}已连接 · 会话已保存`, "connected");
     refreshConversationList();
   } catch (error) {
     answer.classList.remove("generating");
@@ -812,10 +854,12 @@ elements.form.addEventListener("submit", async (event) => {
   }
 });
 document.querySelector("#test-connection").addEventListener("click", async () => {
-  setStatus(currentConnectionMode === "local" ? "正在检查本机 Claude 命令…" : "正在连接并检查 Claude 命令…");
+  const mode = elements.form.elements.namedItem("connectionMode").value;
+  const modeLabel = mode === "cloud" ? "云端 AI" : mode === "local" ? "本机" : "SSH";
+  setStatus(mode === "cloud" ? "正在测试云端 AI 连接…" : mode === "local" ? "正在检查本机 Claude 命令…" : "正在连接并检查 Claude 命令…");
   try {
     const version = await window.claudeNas.testConnection(settingsFromForm());
-    setStatus(`${currentConnectionMode === "local" ? "本机" : "SSH"}连接成功：Claude Code ${version}`);
+    setStatus(`${modeLabel}连接成功${mode === "cloud" ? "" : "：Claude Code " + version}`);
   } catch (error) {
     setStatus(error.message, true);
   }
@@ -896,6 +940,40 @@ document.querySelectorAll("[data-connection-mode]").forEach((button) => {
     updateConnectionModeUI();
   });
 });
+
+// ── 云端 AI 设置事件 ──
+document.querySelector("#cloud-provider")?.addEventListener("change", () => {
+  const provider = document.querySelector("#cloud-provider").value;
+  const modelSelect = document.querySelector("#cloud-model");
+  const customFields = document.querySelector("#cloud-custom-fields");
+  const keyHint = document.querySelector("#cloud-key-hint");
+  const registerLink = document.querySelector("#cloud-register-link");
+  if (provider === "zhipu") {
+    modelSelect.innerHTML = '<option value="glm-4-flash">GLM-4-Flash（永久免费）</option><option value="glm-4.7-flash">GLM-4.7-Flash（免费）</option><option value="glm-4-plus">GLM-4-Plus（付费，更强）</option><option value="glm-4-long">GLM-4-Long（付费，超长文本）</option>';
+    customFields.hidden = true;
+    document.querySelector("#cloud-base-url").value = "https://open.bigmodel.cn/api/paas/v4/";
+    if (registerLink) registerLink.href = "https://open.bigmodel.cn/user/apikey";
+    if (keyHint) keyHint.innerHTML = '还没有密钥？<a href="https://open.bigmodel.cn/user/apikey" id="cloud-register-link">点击免费注册智谱 AI</a>，注册后在 API Keys 页面创建密钥。';
+  } else if (provider === "siliconflow") {
+    modelSelect.innerHTML = '<option value="deepseek-ai/DeepSeek-V3">DeepSeek V3</option><option value="Qwen/Qwen3-8B">Qwen3 8B（免费）</option><option value="Qwen/Qwen2.5-72B-Instruct">Qwen2.5 72B</option><option value="meta-llama/Meta-Llama-3.1-8B-Instruct">Llama 3.1 8B</option>';
+    customFields.hidden = true;
+    document.querySelector("#cloud-base-url").value = "https://api.siliconflow.cn/v1/";
+    if (keyHint) keyHint.innerHTML = '还没有密钥？<a href="https://cloud.siliconflow.cn/" id="cloud-register-link">点击免费注册硅基流动</a>。';
+  } else {
+    modelSelect.innerHTML = '<option value="custom">自定义模型（请在下方填写）</option>';
+    customFields.hidden = false;
+    document.querySelector("#cloud-base-url").value = "";
+    if (keyHint) keyHint.innerHTML = '填写任意 OpenAI 兼容的 API 地址和密钥。';
+  }
+});
+
+document.querySelector("#toggle-cloud-key")?.addEventListener("click", () => {
+  const input = document.querySelector("#cloud-api-key");
+  const visible = input.type === "text";
+  input.type = visible ? "password" : "text";
+  document.querySelector("#toggle-cloud-key").textContent = visible ? "显示" : "隐藏";
+  input.focus();
+});
 passwordInput.addEventListener("input", () => {
   document.querySelector("#password-hint").textContent = passwordInput.value
     ? `本次输入 ${[...passwordInput.value].length} 个字符，请确认没有重复`
@@ -966,6 +1044,8 @@ window.claudeNas.onChatEvent((event) => {
   } else if (event.type === "connection") {
     const labels = currentConnectionMode === "local"
       ? { "local-starting": "正在启动本机 Claude…", connected: "本机 Claude 正在处理…" }
+      : currentConnectionMode === "cloud"
+      ? { connecting: "正在连接云端 AI…", connected: "云端 AI 正在处理…", stopping: "正在停止…" }
       : { connecting: "正在连接 NAS…", reconnecting: "连接中断，正在自动重连…", connected: "已连接，Claude 正在处理…", stopping: "Claude 已收到停止请求，正在结束当前操作…" };
     setConnection(labels[event.status] || "正在处理…", event.status === "connected" ? "connected" : "");
   } else if (event.type === "tool" && answer) {
