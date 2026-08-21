@@ -176,9 +176,11 @@ function restoreFromGit() {
 
   for (const file of allFiles) {
     const fullPath = path.join(SRC_DIR, file);
+    // git checkout 需要相对于仓库根目录的路径
+    const gitPath = path.join("src", file);
     try {
       // 从 git HEAD 还原（始终有 git 历史）
-      execSync(`git checkout HEAD -- "${file}"`, {
+      execSync(`git checkout HEAD -- "${gitPath}"`, {
         cwd: PROJECT_ROOT,
         stdio: "pipe",
       });
@@ -186,7 +188,7 @@ function restoreFromGit() {
     } catch (error) {
       // 如果 HEAD 中也是混淆态，尝试从 P12 还原
       try {
-        execSync(`git checkout 2b19fc9 -- "${file}"`, {
+        execSync(`git checkout 2b19fc9 -- "${gitPath}"`, {
           cwd: PROJECT_ROOT,
           stdio: "pipe",
         });
