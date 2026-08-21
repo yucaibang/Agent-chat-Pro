@@ -11,6 +11,7 @@ contextBridge.exposeInMainWorld("claudeNas", {
   getConversation: (id) => ipcRenderer.invoke("conversations:get", id),
   renameConversation: (id, title) => ipcRenderer.invoke("conversations:rename", id, title),
   deleteConversation: (id) => ipcRenderer.invoke("conversations:delete", id),
+  searchConversations: (query, limit) => ipcRenderer.invoke("conversations:search", query, limit),
   openDiagnostics: () => ipcRenderer.invoke("diagnostics:open"),
   getDeviceControlStatus: () => ipcRenderer.invoke("device-control:status"),
   installDeviceControl: (options) => ipcRenderer.invoke("device-control:install", options),
@@ -40,6 +41,8 @@ contextBridge.exposeInMainWorld("claudeNas", {
   deleteMode: (id) => ipcRenderer.invoke("modes:delete", id),
   exportModes: () => ipcRenderer.invoke("modes:export"),
   importModes: (json) => ipcRenderer.invoke("modes:import", json),
+  // ── 主题偏好 ──
+  getTheme: () => ipcRenderer.invoke("settings:load").then((s) => s.theme || "dark"),
   // ── 网络状态 IPC ──
   getNetworkStatus: () => ipcRenderer.invoke("network:status"),
   networkConnect: (config) => ipcRenderer.invoke("network:connect", config),
@@ -51,5 +54,6 @@ contextBridge.exposeInMainWorld("claudeNas", {
   onMenuAction: (handler) => ipcRenderer.on("app:menu", (_event, action) => handler(action)),
   onWindowMaximized: (handler) => ipcRenderer.on("window:maximized", (_event, value) => handler(value)),
   onNetworkStatusChange: (handler) => ipcRenderer.on("network:status-change", (_event, event) => handler(event)),
-  onNetworkLatency: (handler) => ipcRenderer.on("network:latency", (_event, summary) => handler(summary))
+  onNetworkLatency: (handler) => ipcRenderer.on("network:latency", (_event, summary) => handler(summary)),
+  onThemeInit: (handler) => ipcRenderer.once("theme:init", (_event, theme) => handler(theme))
 });

@@ -92,7 +92,9 @@ function getSettings() {
     // 外网访问密码
     accessPassword: raw.accessPassword || "",
     // 网络连接状态持久化
-    networkLastState: raw.networkLastState || "offline"
+    networkLastState: raw.networkLastState || "offline",
+    // 主题偏好
+    theme: raw.theme === "light" ? "light" : "dark"
   };
 }
 
@@ -154,7 +156,9 @@ function saveSettings(input) {
     // 外网访问密码
     accessPassword: String(input.accessPassword || ""),
     // 网络连接状态持久化
-    networkLastState: String(input.networkLastState || "offline")
+    networkLastState: String(input.networkLastState || "offline"),
+    // 主题偏好
+    theme: input.theme === "light" ? "light" : "dark"
   };
 
   if (input.clearPassword) next.password = "";

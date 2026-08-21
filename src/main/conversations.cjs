@@ -163,6 +163,40 @@ function writeArchive(conversation, previousArchiveFile = "") {
   }
 }
 
+function searchConversations(query, limit = 30) {
+  if (!query || !query.trim()) return [];
+  const all = read();
+  const lowerQuery = query.trim().toLocaleLowerCase();
+  const results = [];
+  for (const conversation of all) {
+    const titleMatch = conversation.title.toLocaleLowerCase().includes(lowerQuery);
+    let snippet = "";
+    for (const message of conversation.messages) {
+      const text = message.text || "";
+      const lowerText = text.toLocaleLowerCase();
+      const idx = lowerText.indexOf(lowerQuery);
+      if (idx >= 0) {
+        const start = Math.max(0, idx - 40);
+        const end = Math.min(text.length, idx + query.length + 40);
+        snippet = (start > 0 ? "…" : "") + text.slice(start, end) + (end < text.length ? "…" : "");
+        break;
+      }
+    }
+    if (titleMatch || snippet) {
+      results.push({
+        id: conversation.id,
+        title: conversation.title,
+        updatedAt: conversation.updatedAt,
+        sessionId: conversation.sessionId || "",
+        archiveFile: conversation.archiveFile || "",
+        snippet
+      });
+      if (results.length >= limit) break;
+    }
+  }
+  return results.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+}
+
 function makeTitle(text) {
   const compact = String(text).replace(/\s+/g, " ").trim();
   return compact.length > 26 ? compact.slice(0, 26) + "…" : compact || "新对话";
@@ -186,5 +220,6 @@ module.exports = {
   prepareConversationDirectory,
   renameConversation,
   saveAssistantDraft,
+  searchConversations,
   sessionForMode
 };

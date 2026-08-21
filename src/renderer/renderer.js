@@ -214,6 +214,43 @@ function addMessage(kind, text = "") {
   content.className = "message-content";
   content.textContent = text;
   item.append(content);
+  // 消息操作按钮
+  const actions = document.createElement("div");
+  actions.className = "message-actions";
+  if (kind === "user") {
+    const editBtn = document.createElement("button");
+    editBtn.type = "button";
+    editBtn.className = "message-action";
+    editBtn.title = "编辑消息";
+    editBtn.textContent = "✎";
+    editBtn.addEventListener("click", () => {
+      elements.prompt.value = content.textContent;
+      adjustTextarea();
+      elements.prompt.focus();
+    });
+    actions.append(editBtn);
+  } else if (kind === "assistant") {
+    const retryBtn = document.createElement("button");
+    retryBtn.type = "button";
+    retryBtn.className = "message-action";
+    retryBtn.title = "重新生成";
+    retryBtn.textContent = "↻";
+    retryBtn.addEventListener("click", () => retryFromMessage(item));
+    actions.append(retryBtn);
+    const copyBtn = document.createElement("button");
+    copyBtn.type = "button";
+    copyBtn.className = "message-action";
+    copyBtn.title = "复制回复";
+    copyBtn.textContent = "📋";
+    copyBtn.addEventListener("click", () => {
+      navigator.clipboard.writeText(content.textContent).then(() => {
+        copyBtn.textContent = "✓";
+        setTimeout(() => { copyBtn.textContent = "📋"; }, 1200);
+      });
+    });
+    actions.append(copyBtn);
+  }
+  item.append(actions);
   elements.messages.append(item);
   elements.messages.scrollTop = elements.messages.scrollHeight;
   return item;
@@ -435,35 +472,68 @@ function formatBytes(size) {
 }
 
 async function refreshConversationList() {
-  conversationCache = await window.claudeNas.listConversations();
-  const query = elements.conversationSearch.value.trim().toLocaleLowerCase();
-  const conversations = query
-    ? conversationCache.filter((conversation) => conversation.title.toLocaleLowerCase().includes(query))
-    : conversationCache;
-  elements.historyCount.textContent = query ? `${conversations.length}/${conversationCache.length}` : String(conversationCache.length);
-  elements.conversationList.replaceChildren();
-  conversations.forEach((conversation) => {
-    const row = document.createElement("div");
-    row.className = "conversation-row" + (conversation.id === conversationId ? " active" : "");
-    const button = document.createElement("button");
-    button.className = "conversation-item";
-    button.textContent = conversation.title;
-    button.title = conversation.title;
-    button.addEventListener("click", () => loadConversation(conversation.id));
-    const menu = document.createElement("button");
-    menu.className = "conversation-menu";
-    menu.type = "button";
-    menu.title = "对话操作";
-    menu.textContent = "⋯";
-    menu.addEventListener("click", (event) => showConversationMenu(event, conversation));
-    row.append(button, menu);
-    elements.conversationList.append(row);
-  });
-  if (!conversations.length) {
-    const empty = document.createElement("p");
-    empty.className = "history-empty";
-    empty.textContent = query ? "没有匹配的对话" : "还没有历史对话";
-    elements.conversationList.append(empty);
+  const query = elements.conversationSearch.value.trim();
+  if (query) {
+    // 全文搜索：搜索标题和消息内容
+    const results = await window.claudeNas.searchConversations(query);
+    elements.historyCount.textContent = `${results.length} 条结果`;
+    elements.conversationList.replaceChildren();
+    results.forEach((conv) => {
+      const row = document.createElement("div");
+      row.className = "conversation-row" + (conv.id === conversationId ? " active" : "");
+      const button = document.createElement("button");
+      button.className = "conversation-item";
+      button.textContent = conv.title;
+      button.title = conv.title;
+      button.addEventListener("click", () => loadConversation(conv.id));
+      const menu = document.createElement("button");
+      menu.className = "conversation-menu";
+      menu.type = "button";
+      menu.title = "对话操作";
+      menu.textContent = "⋯";
+      menu.addEventListener("click", (event) => showConversationMenu(event, conv));
+      row.append(button, menu);
+      if (conv.snippet) {
+        const snippetEl = document.createElement("p");
+        snippetEl.className = "conversation-snippet";
+        snippetEl.textContent = conv.snippet;
+        row.append(snippetEl);
+      }
+      elements.conversationList.append(row);
+    });
+    if (!results.length) {
+      const empty = document.createElement("p");
+      empty.className = "history-empty";
+      empty.textContent = "没有匹配的对话";
+      elements.conversationList.append(empty);
+    }
+  } else {
+    conversationCache = await window.claudeNas.listConversations();
+    elements.historyCount.textContent = String(conversationCache.length);
+    elements.conversationList.replaceChildren();
+    conversationCache.forEach((conversation) => {
+      const row = document.createElement("div");
+      row.className = "conversation-row" + (conversation.id === conversationId ? " active" : "");
+      const button = document.createElement("button");
+      button.className = "conversation-item";
+      button.textContent = conversation.title;
+      button.title = conversation.title;
+      button.addEventListener("click", () => loadConversation(conversation.id));
+      const menu = document.createElement("button");
+      menu.className = "conversation-menu";
+      menu.type = "button";
+      menu.title = "对话操作";
+      menu.textContent = "⋯";
+      menu.addEventListener("click", (event) => showConversationMenu(event, conversation));
+      row.append(button, menu);
+      elements.conversationList.append(row);
+    });
+    if (!conversationCache.length) {
+      const empty = document.createElement("p");
+      empty.className = "history-empty";
+      empty.textContent = "还没有历史对话";
+      elements.conversationList.append(empty);
+    }
   }
 }
 
@@ -550,6 +620,24 @@ async function createNewConversation() {
 function setConnection(text, state) {
   elements.stateText.textContent = text;
   elements.stateDot.className = state || "";
+}
+
+async function retryFromMessage(assistantItem) {
+  if (activeId) return;
+  // 从该助手消息往前找最近的用户消息
+  const allMessages = Array.from(elements.messages.querySelectorAll(".message"));
+  const idx = allMessages.indexOf(assistantItem);
+  let userText = "";
+  for (let i = idx - 1; i >= 0; i--) {
+    if (allMessages[i].classList.contains("user")) {
+      userText = allMessages[i].querySelector(".message-content").textContent;
+      break;
+    }
+  }
+  if (!userText) return;
+  elements.prompt.value = userText;
+  adjustTextarea();
+  sendMessage();
 }
 
 function focusPrompt(force = false) {
@@ -1367,6 +1455,35 @@ function updateNetworkStatus(status) {
 window.claudeNas.onNetworkStatusChange((event) => {
   updateNetworkStatus(networkManager.getStatus());
 });
+
+// ── 主题切换 ──────────────────────────────────
+
+function applyTheme(theme) {
+  document.documentElement.setAttribute("data-theme", theme);
+  const toggle = document.querySelector("#theme-toggle");
+  if (toggle) toggle.textContent = theme === "dark" ? "🌙" : "☀️";
+  try { localStorage.setItem("theme", theme); } catch {}
+}
+
+document.querySelector("#theme-toggle").addEventListener("click", async () => {
+  const current = document.documentElement.getAttribute("data-theme") || "dark";
+  const next = current === "dark" ? "light" : "dark";
+  applyTheme(next);
+  try { await window.claudeNas.saveSettings({ ...(await window.claudeNas.loadSettings()), theme: next }); } catch {}
+});
+
+// 初始化主题（优先使用主进程推送，回退到设置和 localStorage）
+let themeInitialized = false;
+function initTheme(theme) {
+  if (themeInitialized) return;
+  themeInitialized = true;
+  applyTheme(theme || "dark");
+}
+window.claudeNas.onThemeInit((theme) => initTheme(theme));
+// 回退：如果主进程推送未到达，1秒后用 localStorage 或默认值
+setTimeout(() => {
+  if (!themeInitialized) initTheme(localStorage.getItem("theme") || "dark");
+}, 1000);
 
 window.claudeNas.onNetworkLatency((summary) => {
   const latencyLabel = document.querySelector("#network-latency-label");

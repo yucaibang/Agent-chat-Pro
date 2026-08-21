@@ -19,6 +19,7 @@ const {
   prepareConversationDirectory,
   renameConversation,
   saveAssistantDraft,
+  searchConversations,
   sessionForMode
 } = require("./conversations.cjs");
 const { logPath, writeLog } = require("./logger.cjs");
@@ -83,6 +84,13 @@ function createWindow() {
   });
   Menu.setApplicationMenu(null);
   window.loadFile(path.join(__dirname, "../renderer/index.html"));
+  // 发送初始主题给渲染进程
+  try {
+    const theme = getSettings().theme || "dark";
+    window.webContents.on("did-finish-load", () => {
+      window.webContents.send("theme:init", theme);
+    });
+  } catch {}
   const publishState = () => window?.webContents.send("window:maximized", window.isMaximized());
   window.on("maximize", publishState);
   window.on("unmaximize", publishState);
@@ -348,6 +356,7 @@ app.whenReady().then(() => {
   });
   ipcMain.handle("conversations:rename", (_event, id, title) => renameConversation(id, title));
   ipcMain.handle("conversations:delete", (_event, id) => deleteConversation(id));
+  ipcMain.handle("conversations:search", (_event, query, limit) => searchConversations(query, limit));
   ipcMain.handle("file:preview", async (_event, file) => {
     const mimeType = previewMime(file?.name);
     if (!mimeType) throw new Error("此文件类型不支持图片预览。");
