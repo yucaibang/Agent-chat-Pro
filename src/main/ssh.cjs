@@ -332,7 +332,9 @@ function runClaude(config, message, sessionId, attachments = [], callbacks = {})
       attachmentCount: uploaded.length,
       wakeName: config.wakeName,
       workingDirectory: config.workingDirectory || "",
-      transport: bridgeMode ? "agent-sdk-bridge" : "direct-cli"
+      transport: bridgeMode ? "agent-sdk-bridge" : "direct-cli",
+      command: command,
+      bridgeMode
     });
     let stderr = "";
     let responseText = "";
@@ -361,6 +363,16 @@ function runClaude(config, message, sessionId, attachments = [], callbacks = {})
     function handleEvents(events) {
       for (const item of events) {
         if (!item.value) continue;
+        // 诊断日志：记录所有事件类型（帮助排查流解析问题）
+        callbacks.onLog?.("stream_event_debug", {
+          type: item.value.type,
+          hasEvent: Boolean(item.value.event),
+          eventType: item.value.event?.type,
+          deltaType: item.value.event?.delta?.type,
+          hasResult: "result" in item.value,
+          textLen: textFromEvent(item.value).length,
+          rawStart: item.raw ? item.raw.slice(0, 120) : undefined
+        });
         if (item.value.type === "bridge_ready") continue;
         if (item.value.type === "bridge_interrupt_received") {
           if (interruptTimer) clearTimeout(interruptTimer);
@@ -402,9 +414,20 @@ function runClaude(config, message, sessionId, attachments = [], callbacks = {})
             );
           }
         }
-        if (item.value.type === "result" && !responseText && item.value.result) {
-          responseText = item.value.result;
-          callbacks.onDelta?.(responseText);
+        if (item.value.type === "result") {
+          // result 事件可能包含完整文本（兜底）或权限拒绝信息
+          if (item.value.result && !responseText) {
+            responseText = item.value.result;
+            callbacks.onDelta?.(responseText);
+          }
+          // 记录 result 事件到日志（帮助排查短回复问题）
+          callbacks.onLog?.("stream_result", {
+            hasResult: Boolean(item.value.result),
+            resultLength: item.value.result?.length,
+            responseTextLength: responseText.length,
+            permissionDenials: (item.value.permission_denials || []).length,
+            sessionId: item.value.session_id
+          });
         }
       }
     }

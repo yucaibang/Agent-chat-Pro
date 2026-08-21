@@ -67,10 +67,33 @@ function parseLine(line) {
 }
 
 function textFromEvent(payload) {
-  const delta = payload?.event?.delta;
-  if (payload?.type === "stream_event" && delta?.type === "text_delta") {
+  if (!payload) return "";
+
+  // 格式1: stream_json 标准格式（Claude CLI 输出）
+  // { type: "stream_event", event: { type: "content_block_delta", delta: { type: "text_delta", text: "..." } } }
+  const delta = payload.event?.delta;
+  if (payload.type === "stream_event" && delta?.type === "text_delta") {
     return delta.text || "";
   }
+
+  // 格式2: content_block_delta 直出格式（部分 CLI 版本）
+  // { type: "content_block_delta", delta: { type: "text_delta", text: "..." } }
+  if (payload.type === "content_block_delta" && payload.delta?.type === "text_delta") {
+    return payload.delta.text || "";
+  }
+
+  // 格式3: assistant 完整消息中的文本内容
+  // { type: "assistant", message: { content: [{ type: "text", text: "..." }] } }
+  // 注意：仅提取增量，完整消息由 result 事件兜底
+  if (payload.type === "assistant" && Array.isArray(payload.message?.content)) {
+    // assistant 事件包含完整消息，只在尚未有文本时使用（避免重复）
+    // 实际文本增量由上面的 delta 格式处理，这里仅作兜底
+  }
+
+  // 格式4: result 事件中的文本
+  // { type: "result", result: "..." }
+  // 由 handleEvents 中的 result 分支单独处理
+
   return "";
 }
 
