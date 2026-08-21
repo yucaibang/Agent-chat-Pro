@@ -8,6 +8,7 @@
     "start": "electron .",
     "obfuscate": "node scripts/obfuscate.cjs obfuscate",
     "obfuscate:restore": "node scripts/obfuscate.cjs restore",
+    "obfuscate:check": "node scripts/obfuscate.cjs check",
     "build:win:nsis": "node scripts/obfuscate.cjs obfuscate && electron-builder --win nsis -c.npmRebuild=false && node scripts/obfuscate.cjs restore",
     "build:win:portable": "node scripts/obfuscate.cjs obfuscate && electron-builder --win portable -c.npmRebuild=false && node scripts/obfuscate.cjs restore",
     "build:mac": "electron-builder --mac",
