@@ -184,7 +184,6 @@ function saveSettings(input) {
     next.cloudAi._encryptedApiKey = previous.cloudAi?._encryptedApiKey || "";
     next.cloudAi.hasApiKey = previous.cloudAi?.hasApiKey || false;
   }
-  };
 
   if (input.clearPassword) next.password = "";
   if (typeof input.password === "string" && input.password.length > 0) {
