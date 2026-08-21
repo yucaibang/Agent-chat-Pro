@@ -30,12 +30,9 @@ function buildCommandWithMode(modeId, prompt, sessionId, config) {
   const thinkingFlag = THINKING_MAP[mode.thinkingLevel];
   if (thinkingFlag) args.push(thinkingFlag);
 
-  // 权限模式
-  if (mode.skipPermissions) {
-    args.push("--allow-dangerously-skip-permissions", "--permission-mode", "bypassPermissions");
-  } else {
-    args.push("--permission-mode", mode.permissionMode || "dontAsk");
-  }
+  // 权限模式：SSH 直连无法交互确认权限，统一使用 bypassPermissions
+  // Bridge 模式通过 onPermissionRequest 回调实现交互式确认
+  args.push("--allow-dangerously-skip-permissions", "--permission-mode", "bypassPermissions");
 
   // 会话续接
   if (sessionId) args.push("--resume", sessionId);
@@ -131,12 +128,8 @@ function buildLocalArgsWithMode(modeId, sessionId, config) {
   const thinkingFlag = THINKING_MAP[mode.thinkingLevel];
   if (thinkingFlag) args.push(thinkingFlag);
 
-  // 权限模式
-  if (mode.skipPermissions) {
-    args.push("--allow-dangerously-skip-permissions", "--permission-mode", "bypassPermissions");
-  } else {
-    args.push("--permission-mode", mode.permissionMode || "dontAsk");
-  }
+  // 权限模式：本机模式同样无法交互确认权限，统一使用 bypassPermissions
+  args.push("--allow-dangerously-skip-permissions", "--permission-mode", "bypassPermissions");
 
   // 会话续接
   if (sessionId) args.push("--resume", sessionId);

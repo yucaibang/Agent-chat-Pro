@@ -4,9 +4,12 @@
  * 内置工作模式定义。
  *
  * 三种模式覆盖常见使用场景：
- * - 自动化：跳过所有权限确认，适合完全信任的自动化任务
- * - 常规：需要确认敏感操作，平衡质量与速度
+ * - 自动化：跳过所有权限确认，Agent 全自动执行
+ * - 常规：Agent 自动执行（Bridge 模式下弹窗确认敏感操作）
  * - ECO：最小能耗，适合简单问答
+ *
+ * 重要：SSH 直连模式下无法交互式确认权限，所有模式均使用 bypassPermissions。
+ * Bridge 模式下通过 onPermissionRequest 回调实现交互式权限确认。
  *
  * 自定义模式可覆盖所有参数 + systemPrompt + modelConfig。
  */
@@ -33,10 +36,12 @@ const BUILTIN_MODES = {
     id: "regular",
     name: "常规模式",
     icon: "🛡",
-    description: "需要确认敏感操作，平衡质量与速度",
+    description: "Agent 自动执行工具（Bridge 模式下弹窗确认敏感操作）",
     isBuiltIn: true,
-    skipPermissions: false,
-    permissionMode: "dontAsk",
+    // SSH 直连模式无法交互确认权限，必须 bypassPermissions 才能正常使用工具
+    // Bridge 模式下由 onPermissionRequest 回调处理交互式确认
+    skipPermissions: true,
+    permissionMode: "bypassPermissions",
     maxTokens: 16384,
     thinkingLevel: "medium",
     hallucinationControl: "standard",
@@ -50,8 +55,8 @@ const BUILTIN_MODES = {
     icon: "🌿",
     description: "最小能耗，适合简单问答",
     isBuiltIn: true,
-    skipPermissions: false,
-    permissionMode: "dontAsk",
+    skipPermissions: true,
+    permissionMode: "bypassPermissions",
     maxTokens: 4096,
     thinkingLevel: "none",
     hallucinationControl: "strict",

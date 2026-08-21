@@ -15,15 +15,8 @@ function buildClaudeArgs(config, prompt, sessionId, includePrompt = true) {
   );
 
   if (sessionId) args.push("--resume", sessionId);
-  if (config.skipPermissions) {
-    args.push(
-      "--allow-dangerously-skip-permissions",
-      "--permission-mode",
-      "bypassPermissions"
-    );
-  } else {
-    args.push("--permission-mode", "dontAsk");
-  }
+  // SSH 直连无法交互确认权限，统一使用 bypassPermissions
+  args.push("--allow-dangerously-skip-permissions", "--permission-mode", "bypassPermissions");
   return args;
 }
 
