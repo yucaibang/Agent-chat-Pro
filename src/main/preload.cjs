@@ -48,6 +48,10 @@ contextBridge.exposeInMainWorld("claudeNas", {
   networkConnect: (config) => ipcRenderer.invoke("network:connect", config),
   networkDisconnect: () => ipcRenderer.invoke("network:disconnect"),
   persistNetworkState: () => ipcRenderer.invoke("network:persist-state"),
+  // ── 授权管理 IPC ──
+  getAuthStatus: () => ipcRenderer.invoke("auth:status"),
+  verifyAuthCode: (code) => ipcRenderer.invoke("auth:verify", code),
+  checkAuthFromServer: () => ipcRenderer.invoke("auth:check"),
   // ── 事件监听 ──
   onDelta: (handler) => ipcRenderer.on("chat:delta", (_event, payload) => handler(payload)),
   onChatEvent: (handler) => ipcRenderer.on("chat:event", (_event, payload) => handler(payload)),
@@ -55,5 +59,8 @@ contextBridge.exposeInMainWorld("claudeNas", {
   onWindowMaximized: (handler) => ipcRenderer.on("window:maximized", (_event, value) => handler(value)),
   onNetworkStatusChange: (handler) => ipcRenderer.on("network:status-change", (_event, event) => handler(event)),
   onNetworkLatency: (handler) => ipcRenderer.on("network:latency", (_event, summary) => handler(summary)),
-  onThemeInit: (handler) => ipcRenderer.once("theme:init", (_event, theme) => handler(theme))
+  onThemeInit: (handler) => ipcRenderer.once("theme:init", (_event, theme) => handler(theme)),
+  // ── 授权事件监听 ──
+  onAuthShowLockScreen: (handler) => ipcRenderer.on("auth:show-lock-screen", (_event) => handler()),
+  onAuthUnlockSuccess: (handler) => ipcRenderer.on("auth:unlock-success", (_event) => handler())
 });

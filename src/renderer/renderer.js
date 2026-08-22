@@ -27,6 +27,7 @@ let conversationCache = [];
 let automaticTools = false;
 let currentConnectionMode = "ssh";
 let hasCloudApiKey = false;
+let authStatus = { authorized: false, locked: false, violations: 0, canUseSSH: false, canUseExternalNetwork: false, canUseCloudAI: true };
 const messages = new Map();
 
 function settingsFromForm() {
@@ -1589,3 +1590,172 @@ window.claudeNas.onNetworkLatency((summary) => {
   else await createNewConversation();
   if (!settings.wakeName || (settings.connectionMode !== "local" && (!settings.host || !settings.username || !settings.hasPassword))) openSettings();
 })();
+
+// ── 授权管理 ──────────────────────────────────────────
+
+/** 刷新授权状态并更新 UI */
+async function refreshAuthStatus() {
+  try {
+    authStatus = await window.claudeNas.getAuthStatus();
+    updateAuthUI();
+  } catch (error) {
+    console.error("获取授权状态失败:", error);
+  }
+}
+
+/** 根据授权状态更新 UI */
+function updateAuthUI() {
+  // 更新连接模式按钮的锁定状态
+  const sshBtn = document.querySelector("#mode-ssh");
+  const localBtn = document.querySelector("#mode-local");
+  const cloudBtn = document.querySelector("#mode-cloud");
+  const authBadge = document.querySelector("#auth-badge");
+
+  if (!authStatus.canUseSSH) {
+    // SSH 和本机模式锁定
+    if (sshBtn) {
+      sshBtn.classList.add("mode-locked");
+      sshBtn.title = "SSH 模式需要授权码解锁";
+    }
+    if (localBtn) {
+      localBtn.classList.add("mode-locked");
+      localBtn.title = "本机模式需要授权码解锁";
+    }
+  } else {
+    if (sshBtn) {
+      sshBtn.classList.remove("mode-locked");
+      sshBtn.title = "";
+    }
+    if (localBtn) {
+      localBtn.classList.remove("mode-locked");
+      localBtn.title = "";
+    }
+  }
+
+  // 更新授权徽章
+  if (authBadge) {
+    if (authStatus.authorized) {
+      authBadge.textContent = "✓ 已授权";
+      authBadge.className = "auth-badge auth-authorized";
+    } else if (authStatus.locked) {
+      authBadge.textContent = "🔒 已锁定";
+      authBadge.className = "auth-badge auth-locked";
+    } else {
+      authBadge.textContent = "🔒 未授权";
+      authBadge.className = "auth-badge auth-unauthorized";
+    }
+  }
+
+  // 网络类型切换锁定
+  const networkType = document.querySelector("#network-type");
+  if (networkType && !authStatus.canUseExternalNetwork) {
+    // 如果当前是外网模式，强制切回内网
+    if (networkType.value === "external") {
+      networkType.value = "internal";
+      updateNetworkModeUI();
+    }
+  }
+  const networkTypeSelect = document.querySelector("#network-type");
+  if (networkTypeSelect) {
+    if (authStatus.canUseExternalNetwork) {
+      networkTypeSelect.removeAttribute("data-auth-locked");
+    } else {
+      networkTypeSelect.setAttribute("data-auth-locked", "true");
+    }
+  }
+}
+
+/** 显示授权码输入弹窗 */
+function showAuthDialog(reason) {
+  const overlay = document.querySelector("#auth-overlay");
+  const reasonEl = document.querySelector("#auth-reason");
+  const codeInput = document.querySelector("#auth-code-input");
+  const errorEl = document.querySelector("#auth-error");
+  const submitBtn = document.querySelector("#auth-submit-btn");
+
+  if (!overlay) return;
+
+  if (reasonEl) reasonEl.textContent = reason || "请输入授权码以解锁全部功能";
+  if (codeInput) codeInput.value = "";
+  if (errorEl) errorEl.textContent = "";
+  if (submitBtn) submitBtn.disabled = false;
+
+  overlay.classList.add("active");
+  if (codeInput) setTimeout(() => codeInput.focus(), 100);
+}
+
+/** 隐藏授权弹窗 */
+function hideAuthDialog() {
+  const overlay = document.querySelector("#auth-overlay");
+  if (overlay) overlay.classList.remove("active");
+}
+
+/** 提交授权码 */
+async function submitAuthCode() {
+  const codeInput = document.querySelector("#auth-code-input");
+  const errorEl = document.querySelector("#auth-error");
+  const submitBtn = document.querySelector("#auth-submit-btn");
+
+  if (!codeInput) return;
+  const code = codeInput.value.trim();
+  if (!code) {
+    if (errorEl) errorEl.textContent = "请输入授权码";
+    return;
+  }
+
+  if (submitBtn) submitBtn.disabled = true;
+  if (errorEl) errorEl.textContent = "验证中…";
+
+  try {
+    const result = await window.claudeNas.verifyAuthCode(code);
+    if (result.valid) {
+      hideAuthDialog();
+      await refreshAuthStatus();
+      // 如果之前被锁定，需要重新初始化界面
+      if (authStatus.authorized) {
+        const settings = await window.claudeNas.loadSettings();
+        populateSettings(settings);
+      }
+    } else {
+      if (errorEl) errorEl.textContent = result.message || "授权码无效";
+    }
+  } catch (error) {
+    if (errorEl) errorEl.textContent = `验证失败: ${error.message}`;
+  } finally {
+    if (submitBtn) submitBtn.disabled = false;
+  }
+}
+
+// ── 授权事件监听 ──
+
+// 主进程推送：显示锁屏
+window.claudeNas.onAuthShowLockScreen && window.claudeNas.onAuthShowLockScreen(() => {
+  showAuthDialog("设备已被锁定，请输入授权码以继续使用");
+});
+
+// 主进程推送：授权解锁成功
+window.claudeNas.onAuthUnlockSuccess && window.claudeNas.onAuthUnlockSuccess(() => {
+  hideAuthDialog();
+  refreshAuthStatus().then(() => {
+    const settings = window.claudeNas.loadSettings();
+    settings.then((s) => populateSettings(s));
+  });
+});
+
+// 启动时检查授权状态
+refreshAuthStatus();
+
+// 授权徽章点击 → 弹出授权弹窗
+document.addEventListener("click", (e) => {
+  if (e.target.closest("#auth-badge")) {
+    showAuthDialog();
+  }
+});
+
+// 授权码输入框回车提交
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && document.querySelector("#auth-overlay.active #auth-code-input")) {
+    e.preventDefault();
+    submitAuthCode();
+  }
+});
