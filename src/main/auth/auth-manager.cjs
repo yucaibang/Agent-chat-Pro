@@ -170,11 +170,18 @@ class AuthManager {
         this._state.lastCheck = Date.now();
         writeLocalState(this._state);
         writeLog("auth_verify_success", { expiresAt: result.expiresAt });
-        // 验证成功后清除违规锁定（但不清除违规次数，由后端管理）
-        if (this.isLocked) {
-          // 3次违规后重新授权，重置违规计数
+        // 验证成功后清除违规锁定
+        if (this.isLocked || this._state.violations > 0) {
           this._state.violations = 0;
           writeLocalState(this._state);
+          writeLog("auth_lock_cleared_after_verify", { admin: Boolean(result.admin) });
+        }
+        // 通知后端解锁设备
+        try {
+          await request("POST", "/api/auth/unlock", { deviceId: this.deviceId });
+          writeLog("auth_device_unlocked_on_server");
+        } catch (unlockError) {
+          writeLog("auth_device_unlock_failed", { error: unlockError.message });
         }
       } else {
         writeLog("auth_verify_failed", { message: result.message });

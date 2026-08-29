@@ -1817,6 +1817,9 @@ document.addEventListener("click", (e) => {
   }
 });
 
+// 授权码验证按钮
+document.querySelector("#auth-submit-btn")?.addEventListener("click", () => submitAuthCode());
+
 // 授权码输入框回车提交
 document.addEventListener("keydown", (e) => {
   if (e.key === "Enter" && document.querySelector("#auth-overlay.active #auth-code-input")) {

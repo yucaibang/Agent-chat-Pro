@@ -265,9 +265,14 @@ app.whenReady().then(async () => {
     ipcMain.handle("auth:verify", async (_event, code) => {
       const result = await authManager.verifyCode(code);
       if (result.valid) {
-        // 授权成功，关闭锁屏，加载主界面
+        // 授权成功，重新加载页面以初始化所有功能
         authManager.startPeriodicCheck();
+        // 先通知前端关闭弹窗，再重新加载
         window.webContents.send("auth:unlock-success");
+        // 延迟重新加载，让前端有时间处理事件
+        setTimeout(() => {
+          window.reload();
+        }, 500);
       }
       return result;
     });
