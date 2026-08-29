@@ -3,23 +3,80 @@
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
+const crypto = require("crypto");
 const { app, safeStorage } = require("electron");
 
 const SETTINGS_FILE = "connection.json";
+const USER_AVATARS = new Set(["user-male-1", "user-female-1", "user-male-2", "user-female-2"]);
+let recoveryNotice = "";
 
-/** @type {string[]} 允许的 externalMethod 枚举值 */
-const EXTERNAL_METHODS = ["auto", "derp", "frp", "p2p", "n2n"];
+function normalizeUserAvatar(value) {
+  const avatar = String(value || "");
+  return USER_AVATARS.has(avatar) ? avatar : "user-male-1";
+}
 
 function settingsPath() {
   return path.join(app.getPath("userData"), SETTINGS_FILE);
 }
 
+function legacySettingsPath() {
+  return path.join(path.dirname(app.getPath("userData")), "claude-nas-chat", SETTINGS_FILE);
+}
+
 function readRaw() {
   try {
-    return JSON.parse(fs.readFileSync(settingsPath(), "utf8"));
+    const current = JSON.parse(fs.readFileSync(settingsPath(), "utf8"));
+    // 品牌更名迁移：从旧配置文件继承模型密码
+    if (!current.modelAdminPassword) {
+      try {
+        const legacy = JSON.parse(fs.readFileSync(legacySettingsPath(), "utf8"));
+        if (legacy.modelAdminPassword) current.modelAdminPassword = legacy.modelAdminPassword;
+      } catch { /* 旧配置文件损坏不影响当前配置 */ }
+    }
+    return current;
   } catch (error) {
-    if (error.code === "ENOENT") return {};
-    throw new Error("无法读取本地连接设置：" + error.message);
+    if (error.code === "ENOENT") {
+      try { return JSON.parse(fs.readFileSync(legacySettingsPath(), "utf8")); }
+      catch { return {}; }
+    }
+    const source = settingsPath();
+    const backup = `${source}.corrupt-${new Date().toISOString().replace(/[:.]/g, "-")}.bak`;
+    try {
+      fs.renameSync(source, backup);
+      recoveryNotice = `检测到损坏的连接设置，已备份为 ${path.basename(backup)}，请重新检查并保存设置。`;
+      return {};
+    } catch (backupError) {
+      throw new Error("无法读取本地连接设置，且无法创建恢复备份：" + backupError.message);
+    }
+  }
+}
+
+function writeRaw(raw) {
+  fs.mkdirSync(path.dirname(settingsPath()), { recursive: true });
+  const temporary = `${settingsPath()}.tmp-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  try {
+    fs.writeFileSync(temporary, JSON.stringify(raw, null, 2), { mode: 0o600, flag: "wx" });
+    fs.renameSync(temporary, settingsPath());
+  } catch (error) {
+    try { fs.unlinkSync(temporary); } catch {}
+    throw error;
+  }
+}
+
+function sameSshTarget(left, right) {
+  return String(left?.host || "").trim().toLocaleLowerCase() === String(right?.host || "").trim().toLocaleLowerCase()
+    && (Number(left?.port) || 22) === (Number(right?.port) || 22)
+    && String(left?.username || "").trim() === String(right?.username || "").trim();
+}
+
+function modelAdminPasswordState(raw = readRaw()) {
+  if (!safeStorage.isEncryptionAvailable()) return "unavailable";
+  if (!raw.modelAdminPassword) return "missing";
+  try {
+    safeStorage.decryptString(Buffer.from(raw.modelAdminPassword, "base64"));
+    return "ready";
+  } catch {
+    return "invalid";
   }
 }
 
@@ -27,7 +84,7 @@ function getSettings() {
   const raw = readRaw();
   const defaultDataDirectory = app.getPath("userData");
   return {
-    connectionMode: raw.connectionMode === "local" ? "local" : "ssh",
+    connectionMode: raw.connectionMode === "local" ? "local" : raw.connectionMode === "cloud" ? "cloud" : "ssh",
     host: raw.host || "",
     port: raw.port || 22,
     username: raw.username || "",
@@ -35,74 +92,43 @@ function getSettings() {
     wakeName: raw.wakeName || "claude",
     workingDirectory: raw.workingDirectory || "",
     skipPermissions: Boolean(raw.skipPermissions),
+    statusSignalCapture: raw.statusSignalCapture === undefined ? !app.isPackaged : Boolean(raw.statusSignalCapture),
+    userAvatar: normalizeUserAvatar(raw.userAvatar),
     hostFingerprint: raw.hostFingerprint || "",
     dataDirectory: raw.dataDirectory || defaultDataDirectory,
     defaultDataDirectory,
     hasPassword: Boolean(raw.password),
-    // 工作模式
-    workModeId: raw.workModeId || "regular",
-    // 网络配置
-    networkType: raw.networkType === "external" ? "external" : "internal",
-    externalMethod: EXTERNAL_METHODS.includes(raw.externalMethod) ? raw.externalMethod : "auto",
-    // FRP 配置
-    frp: {
-      serverAddr: String(raw.frp?.serverAddr || "").trim(),
-      serverPort: Number(raw.frp?.serverPort) || 7000,
-      token: String(raw.frp?.token || "").trim(),
-      localPort: Number(raw.frp?.localPort) || 22,
-      remotePort: Number(raw.frp?.remotePort) || 6000,
-      ...(raw.frp || {})
-    },
-    // DERP 配置
-    derp: {
-      relayAddr: String(raw.derp?.relayAddr || "").trim(),
-      relayPort: Number(raw.derp?.relayPort) || 3478,
-      authKey: String(raw.derp?.authKey || "").trim(),
-      ...(raw.derp || {})
-    },
-    // P2P 配置
-    p2p: {
-      stunAddr: String(raw.p2p?.stunAddr || "stun.l.google.com").trim(),
-      stunPort: Number(raw.p2p?.stunPort) || 19302,
-      localPort: Number(raw.p2p?.localPort) || 0,
-      remotePort: Number(raw.p2p?.remotePort) || 0,
-      ...(raw.p2p || {})
-    },
-    // N2N 配置
-    n2n: {
-      supernodeAddr: String(raw.n2n?.supernodeAddr || "").trim(),
-      supernodePort: Number(raw.n2n?.supernodePort) || 7777,
-      community: String(raw.n2n?.community || "").trim(),
-      key: String(raw.n2n?.key || "").trim(),
-      ...(raw.n2n || {})
-    },
-    // 心跳保活
-    keepalive: {
-      interval: Number(raw.keepalive?.interval) || 30,
-      count: Number(raw.keepalive?.count) || 3,
-      ...(raw.keepalive || {})
-    },
-    // 重连策略
-    reconnect: {
-      maxRetries: Number(raw.reconnect?.maxRetries) || 3,
-      baseDelay: Number(raw.reconnect?.baseDelay) || 1000,
-      maxDelay: Number(raw.reconnect?.maxDelay) || 30000,
-      ...(raw.reconnect || {})
-    },
-    // 外网访问密码
+    hasModelAdminPassword: modelAdminPasswordState(raw) === "ready",
+    modelAdminPasswordState: modelAdminPasswordState(raw),
+    // 网络设置
+    networkType: raw.networkType || "internal",
+    externalMethod: raw.externalMethod || "auto",
+    frp: raw.frp || {},
+    derp: raw.derp || {},
+    p2p: raw.p2p || {},
+    n2n: raw.n2n || {},
+    keepalive: raw.keepalive || {},
+    reconnect: raw.reconnect || {},
     accessPassword: raw.accessPassword || "",
-    // 网络连接状态持久化
-    networkLastState: raw.networkLastState || "offline",
-    // 主题偏好
-    theme: raw.theme === "light" ? "light" : "dark",
-    // 云端 AI 配置
-    cloudAi: {
-      baseURL: String(raw.cloudAi?.baseURL || "https://open.bigmodel.cn/api/paas/v4/").trim(),
-      model: String(raw.cloudAi?.model || "glm-4-flash").trim(),
-      maxTokens: Number(raw.cloudAi?.maxTokens) || 4096,
-      hasApiKey: false,
-      ...(raw.cloudAi ? { baseURL: String(raw.cloudAi.baseURL || "").trim() || "https://open.bigmodel.cn/api/paas/v4/", model: String(raw.cloudAi.model || "glm-4-flash").trim(), maxTokens: Number(raw.cloudAi.maxTokens) || 4096 } : {})
-    }
+    networkLastState: raw.networkLastState || "",
+    // 云端 AI 设置
+    cloudAiProvider: raw.cloudAiProvider || "zhipu",
+    cloudAiApiKey: "",
+    cloudAiModel: raw.cloudAiModel || "glm-4-flash",
+    cloudAiBaseUrl: raw.cloudAiBaseUrl || "",
+    // 主题
+    theme: raw.theme || "dark",
+    // 背景设置
+    backgroundImage: raw.backgroundImage || "",
+    backgroundBlur: raw.backgroundBlur || 0,
+    backgroundOpacity: raw.backgroundOpacity || 0.15,
+    frostedGlass: raw.frostedGlass || false,
+    // 模式
+    workModeId: raw.workModeId || "regular",
+    // 恢复通知
+    recoveryNotice,
+    // 授权
+    hasCloudAiConfig: Boolean(raw.cloudAiApiKeyEncrypted || raw.cloudAiApiKey)
   };
 }
 
@@ -110,6 +136,14 @@ function getConnection() {
   const settings = getSettings();
   if (settings.connectionMode === "local") return settings;
   return getSshConnection();
+}
+
+function decryptStoredString(encoded, label) {
+  try {
+    return safeStorage.decryptString(Buffer.from(encoded, "base64"));
+  } catch (error) {
+    throw new Error(`本机保存的${label}已失效，请在"连接设置"中重新输入并保存后重试。`);
+  }
 }
 
 function getSshConnection() {
@@ -122,13 +156,37 @@ function getSshConnection() {
 
   return {
     ...settings,
-    password: safeStorage.decryptString(Buffer.from(raw.password, "base64"))
+    password: decryptStoredString(raw.password, "SSH 密码")
+  };
+}
+
+function getCloudAiConfig() {
+  const raw = readRaw();
+  const providerConfigs = {
+    zhipu: { baseURL: "https://open.bigmodel.cn/api/paas/v4", defaultModel: "glm-4-flash" },
+    deepseek: { baseURL: "https://api.deepseek.com/v1", defaultModel: "deepseek-chat" },
+    kimi: { baseURL: "https://api.moonshot.cn/v1", defaultModel: "moonshot-v1-8k" },
+    openai: { baseURL: "https://api.openai.com/v1", defaultModel: "gpt-4o-mini" },
+    gemini: { baseURL: "https://generativelanguage.googleapis.com/v1beta/openai", defaultModel: "gemini-2.0-flash" },
+    custom: { baseURL: "", defaultModel: "" }
+  };
+  const provider = raw.cloudAiProvider || "zhipu";
+  const config = providerConfigs[provider] || providerConfigs.custom;
+  const apiKey = raw.cloudAiApiKeyEncrypted
+    ? decryptStoredString(raw.cloudAiApiKeyEncrypted, "云端 AI 密钥")
+    : (raw.cloudAiApiKey || "");
+  return {
+    provider,
+    apiKey,
+    baseURL: raw.cloudAiBaseUrl || config.baseURL,
+    model: raw.cloudAiModel || config.defaultModel,
+    maxTokens: raw.cloudAiMaxTokens || 4096
   };
 }
 
 function saveSettings(input) {
   const previous = readRaw();
-  const connectionMode = input.connectionMode === "local" ? "local" : "ssh";
+  const connectionMode = input.connectionMode === "local" ? "local" : input.connectionMode === "cloud" ? "cloud" : "ssh";
   if (connectionMode === "ssh" && !safeStorage.isEncryptionAvailable()) {
     throw new Error("Windows 系统加密不可用，无法安全保存 SSH 密码。");
   }
@@ -142,96 +200,97 @@ function saveSettings(input) {
     wakeName: String(input.wakeName || "claude").trim(),
     workingDirectory: String(input.workingDirectory || "").trim(),
     skipPermissions: Boolean(input.skipPermissions),
+    statusSignalCapture: typeof input.statusSignalCapture === "boolean"
+      ? input.statusSignalCapture
+      : previous.statusSignalCapture === undefined ? !app.isPackaged : Boolean(previous.statusSignalCapture),
+    userAvatar: normalizeUserAvatar(input.userAvatar || previous.userAvatar),
     dataDirectory: String(input.dataDirectory || app.getPath("userData")).trim(),
     hostFingerprint: previous.host === String(input.host || "").trim()
       && Number(previous.port || 22) === (Number(input.port) || 22)
       ? previous.hostFingerprint || ""
       : "",
-    password: previous.password,
-    // 工作模式
-    workModeId: String(input.workModeId || "regular").trim(),
-    // 网络配置
-    networkType: input.networkType === "external" ? "external" : "internal",
-    externalMethod: EXTERNAL_METHODS.includes(input.externalMethod) ? input.externalMethod : "auto",
-    // 穿透方案配置
-    frp: { ...previous.frp, ...(input.frp || {}) },
-    derp: { ...previous.derp, ...(input.derp || {}) },
-    p2p: { ...previous.p2p, ...(input.p2p || {}) },
-    n2n: { ...previous.n2n, ...(input.n2n || {}) },
-    // 心跳与重连
-    keepalive: { ...previous.keepalive, ...(input.keepalive || {}) },
-    reconnect: { ...previous.reconnect, ...(input.reconnect || {}) },
-    // 外网访问密码
-    accessPassword: String(input.accessPassword || ""),
-    // 网络连接状态持久化
-    networkLastState: String(input.networkLastState || "offline"),
-    // 主题偏好
-    theme: input.theme === "light" ? "light" : "dark",
-    // 云端 AI 配置
-    cloudAi: { ...previous.cloudAi, ...(input.cloudAi || {}) }
+    password: sameSshTarget(previous, input) ? previous.password : "",
+    modelAdminPassword: previous.modelAdminPassword,
+    // 网络
+    networkType: input.networkType || previous.networkType || "internal",
+    externalMethod: input.externalMethod || previous.externalMethod || "auto",
+    frp: input.frp || previous.frp || {},
+    derp: input.derp || previous.derp || {},
+    p2n: input.p2p || previous.p2p || {},
+    n2n: input.n2n || previous.n2n || {},
+    keepalive: input.keepalive || previous.keepalive || {},
+    reconnect: input.reconnect || previous.reconnect || {},
+    accessPassword: input.accessPassword || previous.accessPassword || "",
+    networkLastState: input.networkLastState !== undefined ? input.networkLastState : previous.networkLastState || "",
+    // 云端 AI
+    cloudAiProvider: input.cloudAiProvider || previous.cloudAiProvider || "zhipu",
+    cloudAiModel: input.cloudAiModel || previous.cloudAiModel || "glm-4-flash",
+    cloudAiBaseUrl: input.cloudAiBaseUrl || previous.cloudAiBaseUrl || "",
+    cloudAiMaxTokens: input.cloudAiMaxTokens || previous.cloudAiMaxTokens || 4096,
+    cloudAiApiKeyEncrypted: previous.cloudAiApiKeyEncrypted || "",
+    cloudAiApiKey: "",
+    // 主题
+    theme: input.theme || previous.theme || "dark",
+    // 背景
+    backgroundImage: input.backgroundImage !== undefined ? input.backgroundImage : previous.backgroundImage || "",
+    backgroundBlur: input.backgroundBlur !== undefined ? input.backgroundBlur : previous.backgroundBlur || 0,
+    backgroundOpacity: input.backgroundOpacity !== undefined ? input.backgroundOpacity : previous.backgroundOpacity || 0.15,
+    frostedGlass: input.frostedGlass || previous.frostedGlass || false,
+    // 模式
+    workModeId: input.workModeId || previous.workModeId || "regular"
   };
-
-  // 云端 AI 密钥加密保存
-  if (input.cloudAi && typeof input.cloudAi.apiKey === "string" && input.cloudAi.apiKey.length > 0) {
-    if (!safeStorage.isEncryptionAvailable()) throw new Error("Windows 系统加密不可用，无法安全保存云端 AI 密钥。");
-    next.cloudAi._encryptedApiKey = safeStorage.encryptString(input.cloudAi.apiKey).toString("base64");
-    next.cloudAi.hasApiKey = true;
-    delete next.cloudAi.apiKey;
-  } else if (input.cloudAi && input.cloudAi.clearApiKey) {
-    next.cloudAi._encryptedApiKey = "";
-    next.cloudAi.hasApiKey = false;
-  } else {
-    next.cloudAi._encryptedApiKey = previous.cloudAi?._encryptedApiKey || "";
-    next.cloudAi.hasApiKey = previous.cloudAi?.hasApiKey || false;
-  }
 
   if (input.clearPassword) next.password = "";
   if (typeof input.password === "string" && input.password.length > 0) {
     if (!safeStorage.isEncryptionAvailable()) throw new Error("Windows 系统加密不可用，无法安全保存 SSH 密码。");
     next.password = safeStorage.encryptString(input.password).toString("base64");
   }
-  if (!next.wakeName) throw new Error("Agent 唤醒命令不能为空。");
+  // 云端 AI 密钥加密存储
+  if (typeof input.cloudAiApiKey === "string" && input.cloudAiApiKey.length > 0) {
+    if (!safeStorage.isEncryptionAvailable()) throw new Error("Windows 系统加密不可用，无法安全保存云端 AI 密钥。");
+    next.cloudAiApiKeyEncrypted = safeStorage.encryptString(input.cloudAiApiKey).toString("base64");
+    next.cloudAiApiKey = "";
+  }
+  if (!next.wakeName) throw new Error("Claude 唤醒命令不能为空。");
   if (!next.clientLabel || next.clientLabel.length > 32 || !/^[\p{L}\p{N}._-]+$/u.test(next.clientLabel)) {
     throw new Error("本机标识需为 1–32 个字符，只能使用文字、数字、点、短横线或下划线。");
   }
   if (connectionMode === "ssh" && (!next.host || !next.username)) throw new Error("NAS 地址和 SSH 账号不能为空。");
-
-  // 云端 AI 模式校验
-  if (connectionMode === "cloud") {
-    if (!next.cloudAi.apiKey) throw new Error("云端 AI 模式必须填写 API 密钥。");
-    if (!next.cloudAi.baseURL) throw new Error("云端 AI 模式必须填写 API 地址。");
+  if (connectionMode === "ssh" && !next.password) {
+    throw new Error(sameSshTarget(previous, next)
+      ? "请先输入并保存 SSH 密码。"
+      : "SSH 地址、端口或账号已改变，请输入新目标的 SSH 密码。旧密码不会自动用于新目标。");
   }
 
-  // 外网模式校验
-  if (next.networkType === "external") {
-    if (!next.accessPassword) throw new Error("外网模式必须设置访问密码。");
-    const method = next.externalMethod;
-    if (method === "frp" && !next.frp.serverAddr) throw new Error("FRP 模式必须填写 FRP 服务器地址。");
-    if (method === "derp" && !next.derp.relayAddr) throw new Error("DERP 模式必须填写中继服务器地址。");
-    if (method === "p2p" && !next.p2p.stunAddr) throw new Error("P2P 模式必须填写 STUN 服务器地址。");
-    if (method === "n2n" && !next.n2n.supernodeAddr) throw new Error("N2N 模式必须填写超级节点地址。");
-  }
-
-  fs.mkdirSync(path.dirname(settingsPath()), { recursive: true });
-  const temporary = settingsPath() + ".tmp";
-  fs.writeFileSync(temporary, JSON.stringify(next, null, 2), { mode: 0o600 });
-  fs.renameSync(temporary, settingsPath());
+  writeRaw(next);
+  recoveryNotice = "";
   return getSettings();
 }
 
 function trustHostFingerprint(fingerprint) {
   const raw = readRaw();
   raw.hostFingerprint = fingerprint;
-  fs.writeFileSync(settingsPath(), JSON.stringify(raw, null, 2), { mode: 0o600 });
+  writeRaw(raw);
 }
 
-function getCloudAiConfig() {
-  const settings = getSettings();
-  const config = { ...settings.cloudAi };
-  if (config._encryptedApiKey) {
-    try { config.apiKey = safeStorage.decryptString(Buffer.from(config._encryptedApiKey, "base64")); } catch { config.apiKey = ""; }
+function setModelAdminPassword(value) {
+  const password = String(value || "");
+  if (password.length < 6 || password.length > 200 || /[\0\r\n]/.test(password)) {
+    throw new Error("模型管理员密码需为 6–200 个字符，且不能包含换行。");
   }
-  return config;
+  if (!safeStorage.isEncryptionAvailable()) throw new Error("Windows 系统加密不可用，无法安全保存模型管理员密码。");
+  const raw = readRaw();
+  raw.modelAdminPassword = safeStorage.encryptString(password).toString("base64");
+  writeRaw(raw);
 }
 
-module.exports = { getConnection, getSettings, getSshConnection, getCloudAiConfig, saveSettings, trustHostFingerprint, EXTERNAL_METHODS };
+function verifyModelAdminPassword(value) {
+  const raw = readRaw();
+  if (!raw.modelAdminPassword) throw new Error("尚未设置模型管理员密码，请由管理员初始化后再操作。");
+  if (!safeStorage.isEncryptionAvailable()) throw new Error("Windows 系统加密不可用，无法校验模型管理员密码。");
+  const expected = Buffer.from(decryptStoredString(raw.modelAdminPassword, "模型管理员密码"), "utf8");
+  const actual = Buffer.from(String(value || ""), "utf8");
+  return expected.length === actual.length && crypto.timingSafeEqual(expected, actual);
+}
+
+module.exports = { getConnection, getSettings, getSshConnection, getCloudAiConfig, modelAdminPasswordState, sameSshTarget, saveSettings, setModelAdminPassword, trustHostFingerprint, verifyModelAdminPassword };

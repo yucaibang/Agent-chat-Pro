@@ -1,7 +1,7 @@
 {
   "name": "agent-chat-pro",
-  "version": "2.1.0",
-  "description": "Agent Chat Pro — 内网/外网双模式 SSH 远程 AI 聊天客户端",
+  "version": "3.0.0",
+  "description": "Agent Chat Pro — 三模式 AI 聊天客户端（SSH远程/云端AI/本机）",
   "author": "Jiang",
   "main": "src/main/main.cjs",
   "scripts": {

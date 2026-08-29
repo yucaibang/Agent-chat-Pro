@@ -63,29 +63,15 @@ function textFromEvent(payload) {
   if (!payload) return "";
 
   // 格式1: stream_json 标准格式（Claude CLI 输出）
-  // { type: "stream_event", event: { type: "content_block_delta", delta: { type: "text_delta", text: "..." } } }
   const delta = payload.event?.delta;
   if (payload.type === "stream_event" && delta?.type === "text_delta") {
     return delta.text || "";
   }
 
-  // 格式2: content_block_delta 直出格式（部分 CLI 版本）
-  // { type: "content_block_delta", delta: { type: "text_delta", text: "..." } }
+  // 格式2: content_block_delta 直出格式
   if (payload.type === "content_block_delta" && payload.delta?.type === "text_delta") {
     return payload.delta.text || "";
   }
-
-  // 格式3: assistant 完整消息中的文本内容
-  // { type: "assistant", message: { content: [{ type: "text", text: "..." }] } }
-  // 注意：仅提取增量，完整消息由 result 事件兜底
-  if (payload.type === "assistant" && Array.isArray(payload.message?.content)) {
-    // assistant 事件包含完整消息，只在尚未有文本时使用（避免重复）
-    // 实际文本增量由上面的 delta 格式处理，这里仅作兜底
-  }
-
-  // 格式4: result 事件中的文本
-  // { type: "result", result: "..." }
-  // 由 handleEvents 中的 result 分支单独处理
 
   return "";
 }
@@ -94,11 +80,34 @@ function sessionFromEvent(payload) {
   return payload?.session_id || payload?.event?.session_id || "";
 }
 
+function usageFromEvent(payload) {
+  if (!payload || typeof payload !== "object") return undefined;
+  if (payload.type === "usage") {
+    return {
+      inputTokens: Number(payload.inputTokens || payload.input_tokens || 0),
+      outputTokens: Number(payload.outputTokens || payload.output_tokens || 0),
+      cacheCreationInputTokens: Number(payload.cacheCreationInputTokens || payload.cache_creation_input_tokens || 0),
+      cacheReadInputTokens: Number(payload.cacheReadInputTokens || payload.cache_read_input_tokens || 0)
+    };
+  }
+  // Agent SDK bridge sends usage in result event
+  if (payload.type === "result" && payload.usage && typeof payload.usage === "object") {
+    return {
+      inputTokens: Number(payload.usage.inputTokens || payload.usage.input_tokens || 0),
+      outputTokens: Number(payload.usage.outputTokens || payload.usage.output_tokens || 0),
+      cacheCreationInputTokens: Number(payload.usage.cacheCreationInputTokens || payload.usage.cache_creation_input_tokens || 0),
+      cacheReadInputTokens: Number(payload.usage.cacheReadInputTokens || payload.usage.cache_read_input_tokens || 0)
+    };
+  }
+  return undefined;
+}
+
 module.exports = {
   JsonLineParser,
   buildClaudeArgs,
   buildClaudeCommand,
   sessionFromEvent,
   shellQuote,
-  textFromEvent
+  textFromEvent,
+  usageFromEvent
 };

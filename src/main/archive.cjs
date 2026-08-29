@@ -1,14 +1,16 @@
 "use strict";
 
-function archiveFileName(title, createdAt) {
+function archiveFileName(title, createdAt, conversationId = "") {
   const cleaned = String(title || "新对话")
     .replace(/[<>:"/\\|?*\x00-\x1F]/g, "_")
     .replace(/\s+/g, " ")
     .replace(/[. ]+$/g, "")
     .trim()
     .slice(0, 80) || "新对话";
-  const safeTitle = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i.test(cleaned) ? `_${cleaned}` : cleaned;
-  return `${safeTitle}_${localTimestamp(createdAt)}.md`;
+  const firstSegment = cleaned.split(".")[0];
+  const safeTitle = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i.test(firstSegment) ? `_${cleaned}` : cleaned;
+  const suffix = String(conversationId || "").replace(/[^a-zA-Z0-9-]/g, "").slice(0, 8);
+  return `${safeTitle}_${localTimestamp(createdAt)}${suffix ? `_${suffix}` : ""}.md`;
 }
 
 function archiveMarkdown(conversation) {

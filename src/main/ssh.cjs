@@ -2,19 +2,39 @@
 
 const fs = require("fs");
 const path = require("path");
+const { randomUUID } = require("crypto");
 const { Client } = require("ssh2");
 const {
   JsonLineParser,
   buildClaudeCommand,
   shellQuote,
   sessionFromEvent,
-  textFromEvent
+  textFromEvent,
+  usageFromEvent
 } = require("./protocol.cjs");
 const { buildCommandWithMode, buildBridgeStartWithMode } = require("./modes/mode-params.cjs");
+const { readModelSettings, replaceModelSettings } = require("./model-config.cjs");
 
-const MAX_SILENT_TOOL_CALLS = 8;
-const MAX_TOOL_CALLS = 24;
-const MAX_REQUEST_MS = 10 * 60 * 1000;
+const TOOL_PROGRESS_NOTICE_COUNTS = [8, 24];
+const MAX_REQUEST_MS = 30 * 60 * 1000;
+const SSH_READY_TIMEOUT_MS = 15_000;
+const SSH_KEEPALIVE_INTERVAL_MS = 15_000;
+const SSH_KEEPALIVE_COUNT_MAX = 3;
+const MAX_CONNECT_ATTEMPTS = 3;
+const SFTP_OPERATION_TIMEOUT_MS = 30_000;
+
+function auditTransportItem(onAudit, item, transport) {
+  const payload = item?.value;
+  const content = Array.isArray(payload?.message?.content) ? payload.message.content : [];
+  onAudit?.({
+    transport,
+    parser: payload ? "parsed" : item?.raw ? "unparsed" : "empty",
+    rawType: payload?.type,
+    rawEventType: payload?.event?.type,
+    rawContentKind: content.map((entry) => String(entry?.type || "")).filter(Boolean).slice(0, 4).join("_"),
+    rawLength: item?.raw ? String(item.raw).length : 0
+  });
+}
 
 function connect(config, onUnknownHost, onLog = () => {}) {
   return new Promise((resolve, reject) => {
@@ -24,7 +44,7 @@ function connect(config, onUnknownHost, onLog = () => {}) {
       client.end();
       onLog("ssh_connect_timeout", { host: config.host, port: config.port });
       reject(new Error("SSH 连接超时，请检查地址、端口和 NAS 是否在线。"));
-    }, 15_000);
+    }, SSH_READY_TIMEOUT_MS);
 
     client.once("ready", () => {
       clearTimeout(timeout);
@@ -44,7 +64,9 @@ function connect(config, onUnknownHost, onLog = () => {}) {
       port: config.port,
       username: config.username,
       password: config.password,
-      readyTimeout: 15_000,
+      readyTimeout: SSH_READY_TIMEOUT_MS,
+      keepaliveInterval: SSH_KEEPALIVE_INTERVAL_MS,
+      keepaliveCountMax: SSH_KEEPALIVE_COUNT_MAX,
       hostHash: "sha256",
       hostVerifier: (key) => {
         const fingerprint = `SHA256:${Buffer.from(key, "hex").toString("base64").replace(/=+$/, "")}`;
@@ -76,6 +98,58 @@ async function verifyConnection(config, onUnknownHost, onLog) {
   }
 }
 
+async function getClaudeModelStatus(config, onUnknownHost, onLog) {
+  const client = await connectWithRetry(config, onUnknownHost, onLog);
+  try {
+    const home = (await exec(client, "printf %s \"$HOME\"")).stdout.trim();
+    if (!home) throw new Error("无法确定 NAS 的 SSH 主目录。");
+    const settingsPath = `${home}/.claude/settings.json`;
+    const result = await exec(client, `cat -- ${shellQuote(settingsPath)}`);
+    if (result.code !== 0) throw new Error("无法读取目标 NAS 的 Claude 模型配置：" + cleanError(result.stderr));
+    const parsed = readModelSettings(result.stdout);
+    return { model: parsed.model, models: parsed.models, consistent: parsed.consistent, settingsPath };
+  } finally { client.end(); }
+}
+
+async function updateClaudeModel(config, modelName, onUnknownHost, onLog) {
+  const client = await connectWithRetry(config, onUnknownHost, onLog);
+  try {
+    const home = (await exec(client, "printf %s \"$HOME\"")).stdout.trim();
+    if (!home) throw new Error("无法确定 NAS 的 SSH 主目录。");
+    const settingsPath = `${home}/.claude/settings.json`;
+    const current = await exec(client, `cat -- ${shellQuote(settingsPath)}`);
+    if (current.code !== 0) throw new Error("无法读取目标 NAS 的 Claude 模型配置：" + cleanError(current.stderr));
+    const replacement = replaceModelSettings(current.stdout, modelName);
+    const temporaryPath = `${settingsPath}.claude-nas-model-${process.pid}-${Date.now()}.tmp`;
+    try {
+      const sftp = await openSftp(client);
+      try { await writeSftp(sftp, temporaryPath, Buffer.from(replacement.settings, "utf8")); }
+      finally { closeSftp(sftp); }
+      const promote = await exec(client, [
+        `chmod 600 -- ${shellQuote(temporaryPath)}`,
+        `mv -- ${shellQuote(temporaryPath)} ${shellQuote(settingsPath)}`
+      ].join(" && "));
+      if (promote.code !== 0) throw new Error("模型配置未能保存，原配置仍保留：" + cleanError(promote.stderr));
+      const verified = await getModelStatusFromClient(client, settingsPath);
+      if (!verified.consistent || verified.model !== replacement.model) {
+        throw new Error("模型配置写入后核对失败，请检查五项模型配置。");
+      }
+      onLog?.("claude_model_changed", { host: config.host, model: replacement.model, changedKeys: replacement.changedKeys });
+      return { ...verified, changedKeys: replacement.changedKeys };
+    } catch (error) {
+      await exec(client, `rm -f -- ${shellQuote(temporaryPath)}`).catch(() => {});
+      throw error;
+    }
+  } finally { client.end(); }
+}
+
+async function getModelStatusFromClient(client, settingsPath) {
+  const result = await exec(client, `cat -- ${shellQuote(settingsPath)}`);
+  if (result.code !== 0) throw new Error("模型配置写入后无法重新读取：" + cleanError(result.stderr));
+  const parsed = readModelSettings(result.stdout);
+  return { model: parsed.model, models: parsed.models, consistent: parsed.consistent, settingsPath };
+}
+
 async function ensureDeviceControlKey(config, deviceId, metadata, onUnknownHost, onLog) {
   const safeId = String(deviceId || "").replace(/[^a-zA-Z0-9-]/g, "").slice(0, 80);
   if (!safeId) throw new Error("无法创建联动设备编号。");
@@ -83,12 +157,12 @@ async function ensureDeviceControlKey(config, deviceId, metadata, onUnknownHost,
   try {
     const home = (await exec(client, "printf %s \"$HOME\"")).stdout.trim();
     if (!home) throw new Error("无法确定 NAS 的 SSH 主目录。");
-    const directory = `${home}/.claude-nas-chat/device-control/${safeId}`;
+    const directory = `${home}/.agent-orbit/device-control/${safeId}`;
     const privateKeyPath = `${directory}/id_ed25519`;
     const command = [
       "umask 077",
       `mkdir -p -- ${shellQuote(directory)}`,
-      `test -f ${shellQuote(privateKeyPath)} || ssh-keygen -q -t ed25519 -N '' -C ${shellQuote(`claude-nas-agent-${safeId}`)} -f ${shellQuote(privateKeyPath)}`,
+      `test -f ${shellQuote(privateKeyPath)} || ssh-keygen -q -t ed25519 -N '' -C ${shellQuote(`agent-orbit-${safeId}`)} -f ${shellQuote(privateKeyPath)}`,
       `cat -- ${shellQuote(privateKeyPath + ".pub")}`
     ].join(" && ");
     const result = await exec(client, command);
@@ -137,7 +211,7 @@ async function finalizeDeviceControl(config, key, metadata, onUnknownHost, onLog
     }
     const script = `#!/bin/sh\nexec ssh ${sshArguments} \"$@\"\n`;
     const sftp = await openSftp(client);
-    try { await writeSftp(sftp, connectScript, Buffer.from(script, "utf8")); } finally { sftp.end(); }
+    try { await writeSftp(sftp, connectScript, Buffer.from(script, "utf8")); } finally { closeSftp(sftp); }
     await exec(client, `chmod 700 ${shellQuote(connectScript)}`);
     await writeRemoteJson(client, `${directory}/device.json`, {
       deviceId: key.deviceId,
@@ -179,17 +253,18 @@ async function markDeviceControlDisabled(config, status, onUnknownHost, onLog) {
 async function writeRemoteJson(client, remotePath, value) {
   const sftp = await openSftp(client);
   try { await writeSftp(sftp, remotePath, Buffer.from(JSON.stringify(value, null, 2) + "\n", "utf8")); }
-  finally { sftp.end(); }
+  finally { closeSftp(sftp); }
 }
 
 async function getAgentSdkBridgeStatus(config, onUnknownHost, onLog) {
   const client = await connectWithRetry(config, onUnknownHost, onLog);
+  const runProbe = (command) => exec(client, command, { label: "增强 Bridge 状态检查", timeoutMs: 30_000 });
   try {
-    const home = (await exec(client, "printf %s \"$HOME\"")).stdout.trim();
+    const home = (await runProbe("printf %s \"$HOME\"")).stdout.trim();
     if (!home) throw new Error("无法确定 NAS 的 SSH 主目录。");
-    const bridgePath = `${home}/.claude-nas-chat/bridge`;
-    const nodePath = (await exec(client, "command -v node")).stdout.trim();
-    const probe = await exec(client, [`test -r ${shellQuote(`${bridgePath}/agent-sdk-bridge.mjs`)}`, `test -r ${shellQuote(`${bridgePath}/node_modules/@anthropic-ai/claude-agent-sdk/package.json`)}`, `node --check ${shellQuote(`${bridgePath}/agent-sdk-bridge.mjs`)}`].join(" && "));
+    const bridgePath = `${home}/.agent-orbit/bridge`;
+    const nodePath = (await runProbe("command -v node")).stdout.trim();
+    const probe = await runProbe([`test -r ${shellQuote(`${bridgePath}/agent-sdk-bridge.mjs`)}`, `test -r ${shellQuote(`${bridgePath}/node_modules/@anthropic-ai/claude-agent-sdk/package.json`)}`, `node --check ${shellQuote(`${bridgePath}/agent-sdk-bridge.mjs`)}`].join(" && "));
     const ready = Boolean(nodePath) && probe.code === 0;
     return { path: bridgePath, nodeAvailable: Boolean(nodePath), installed: probe.code === 0, ready, detail: ready ? "已安装并通过语法校验" : nodePath ? "未安装或依赖不完整" : "目标 NAS 未找到 Node.js" };
   } finally { client.end(); }
@@ -198,31 +273,36 @@ async function getAgentSdkBridgeStatus(config, onUnknownHost, onLog) {
 async function installAgentSdkBridge(config, files, onUnknownHost, onLog) {
   const safeFiles = normalizeBridgeFiles(files);
   const client = await connectWithRetry(config, onUnknownHost, onLog);
+  const runStep = async (stage, command, timeoutMs = 30_000) => {
+    onLog?.("agent_sdk_bridge_install_stage", { host: config.host, stage });
+    return exec(client, command, { label: `增强 Bridge：${stage}`, timeoutMs });
+  };
   try {
-    const home = (await exec(client, "printf %s \"$HOME\"")).stdout.trim();
+    const home = (await runStep("resolve-home", "printf %s \"$HOME\"")).stdout.trim();
     if (!home) throw new Error("无法确定 NAS 的 SSH 主目录。");
-    const nodePath = (await exec(client, "command -v node")).stdout.trim();
-    const npmPath = (await exec(client, "command -v npm")).stdout.trim();
+    const nodePath = (await runStep("check-node", "command -v node")).stdout.trim();
+    const npmPath = (await runStep("check-npm", "command -v npm")).stdout.trim();
     if (!nodePath || !npmPath) throw new Error("目标 NAS 缺少 Node.js 或 npm，无法安装增强 Bridge。");
-    const base = `${home}/.claude-nas-chat`;
+    const base = `${home}/.agent-orbit`;
     const target = `${base}/bridge`;
     const staging = `${base}/bridge.staging-${Date.now()}-${Math.random().toString(16).slice(2)}`;
     const backup = `${base}/bridge.backup-${Date.now()}`;
-    const prepared = await exec(client, `mkdir -p -- ${shellQuote(base)} && rm -rf -- ${shellQuote(staging)} && mkdir -p -- ${shellQuote(staging)}`);
+    const prepared = await runStep("prepare-staging", `mkdir -p -- ${shellQuote(base)} && rm -rf -- ${shellQuote(staging)} && mkdir -p -- ${shellQuote(staging)}`);
     if (prepared.code !== 0) throw new Error(cleanError(prepared.stderr) || "无法准备 Bridge 安装目录。");
+    onLog?.("agent_sdk_bridge_install_stage", { host: config.host, stage: "upload-files" });
     const sftp = await openSftp(client);
-    try { for (const file of safeFiles) await writeSftp(sftp, `${staging}/${file.name}`, file.data); } finally { sftp.end(); }
-    const dependencies = await exec(client, `cd -- ${shellQuote(staging)} && npm ci --omit=dev --ignore-scripts --no-audit --no-fund`);
+    try { for (const file of safeFiles) await writeSftp(sftp, `${staging}/${file.name}`, file.data); } finally { closeSftp(sftp); }
+    const dependencies = await runStep("install-dependencies", `cd -- ${shellQuote(staging)} && npm ci --omit=dev --ignore-scripts --no-audit --no-fund`, 120_000);
     if (dependencies.code !== 0) {
-      await exec(client, `rm -rf -- ${shellQuote(staging)}`);
+      await runStep("cleanup-failed-staging", `rm -rf -- ${shellQuote(staging)}`);
       throw new Error(cleanError(dependencies.stderr) || "Bridge 依赖安装失败，请检查 NAS 的 npm 网络与权限。");
     }
-    const check = await exec(client, `node --check ${shellQuote(`${staging}/agent-sdk-bridge.mjs`)} && test -r ${shellQuote(`${staging}/node_modules/@anthropic-ai/claude-agent-sdk/package.json`)}`);
+    const check = await runStep("validate-files", `node --check ${shellQuote(`${staging}/agent-sdk-bridge.mjs`)} && test -r ${shellQuote(`${staging}/node_modules/@anthropic-ai/claude-agent-sdk/package.json`)}`);
     if (check.code !== 0) {
-      await exec(client, `rm -rf -- ${shellQuote(staging)}`);
+      await runStep("cleanup-invalid-staging", `rm -rf -- ${shellQuote(staging)}`);
       throw new Error(cleanError(check.stderr) || "Bridge 文件校验失败，未替换现有版本。");
     }
-    const promote = await exec(client, [`rm -rf -- ${shellQuote(backup)}`, `if test -e ${shellQuote(target)}; then mv -- ${shellQuote(target)} ${shellQuote(backup)}; fi`, `mv -- ${shellQuote(staging)} ${shellQuote(target)}`, `rm -rf -- ${shellQuote(backup)}`].join(" && "));
+    const promote = await runStep("promote", [`rm -rf -- ${shellQuote(backup)}`, `if test -e ${shellQuote(target)}; then mv -- ${shellQuote(target)} ${shellQuote(backup)}; fi`, `mv -- ${shellQuote(staging)} ${shellQuote(target)}`, `rm -rf -- ${shellQuote(backup)}`].join(" && "));
     if (promote.code !== 0) throw new Error(cleanError(promote.stderr) || "Bridge 安装完成前无法切换到新版本。");
     onLog?.("agent_sdk_bridge_install_success", { host: config.host, path: target });
     return { ...(await getAgentSdkBridgeStatus(config, onUnknownHost, onLog)), updated: true };
@@ -237,7 +317,7 @@ async function uninstallAgentSdkBridge(config, onUnknownHost, onLog) {
   try {
     const home = (await exec(client, "printf %s \"$HOME\"")).stdout.trim();
     if (!home) throw new Error("无法确定 NAS 的 SSH 主目录。");
-    const target = `${home}/.claude-nas-chat/bridge`;
+    const target = `${home}/.agent-orbit/bridge`;
     const removed = await exec(client, `rm -rf -- ${shellQuote(target)}`);
     if (removed.code !== 0) throw new Error(cleanError(removed.stderr) || "无法移除增强 Bridge。");
     onLog?.("agent_sdk_bridge_uninstall_success", { host: config.host, path: target });
@@ -261,6 +341,27 @@ function runClaude(config, message, sessionId, attachments = [], callbacks = {})
   let interruptTimer;
   let requestTimer;
   let bridgeMode = false;
+  let bridgeCapabilityChecked = false;
+  let uploaded = [];
+  const announcedToolProgress = new Set();
+  let bridgeCloseTimer;
+  let currentTurnText = "";
+  let lastTurnText = "";
+  const bufferedStreamInputs = [];
+  const pendingFollowUps = new Map();
+
+  function settleFollowUp(id, accepted) {
+    const pending = pendingFollowUps.get(id);
+    if (!pending) return;
+    pendingFollowUps.delete(id);
+    clearTimeout(pending.timer);
+    pending.resolve(Boolean(accepted));
+  }
+
+  function rejectPendingFollowUps() {
+    for (const id of [...pendingFollowUps.keys()]) settleFollowUp(id, false);
+    while (bufferedStreamInputs.length) bufferedStreamInputs.shift().resolve(false);
+  }
 
   function cancellationError() {
     const error = new Error(cancellationMessage);
@@ -273,9 +374,7 @@ function runClaude(config, message, sessionId, attachments = [], callbacks = {})
     cancelled = true;
     cancellationMessage = message || "已停止生成。";
     callbacks.onLog?.("claude_cancel_requested", { reason, hasChannel: Boolean(channel) });
-    if (!channel) {
-      return;
-    }
+    if (!channel) return;
     if (!bridgeMode) {
       callbacks.onLog?.("claude_direct_cancel", { reason });
       try { channel.close(); } catch { /* The direct CLI stream may already be closing. */ }
@@ -294,36 +393,105 @@ function runClaude(config, message, sessionId, attachments = [], callbacks = {})
     interruptTimer.unref?.();
   }
 
+  function closeBridgeInputSoon(delayMs = 900) {
+    if (!bridgeMode || !channel || bridgeCloseTimer) return;
+    bridgeCloseTimer = setTimeout(() => {
+      bridgeCloseTimer = undefined;
+      if (!channel) return;
+      try {
+        channel.write(JSON.stringify({ type: "close_input" }) + "\n");
+        callbacks.onLog?.("claude_stream_input_closed", {});
+      } catch (error) {
+        callbacks.onLog?.("claude_stream_input_close_failed", { error });
+      }
+    }, delayMs);
+    bridgeCloseTimer.unref?.();
+  }
+
+  function writeBridgeFollowUp(text, id = randomUUID()) {
+    if (!channel || cancelled) return Promise.resolve(false);
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        pendingFollowUps.delete(id);
+        callbacks.onLog?.("claude_follow_up_ack_timeout", { id, textLength: text.length });
+        resolve(false);
+      }, 8_000);
+      timer.unref?.();
+      pendingFollowUps.set(id, { resolve, timer });
+      try {
+        channel.write(JSON.stringify({ type: "follow_up", id, message: text }) + "\n");
+        callbacks.onLog?.("claude_follow_up_sent", { id, textLength: text.length });
+      } catch (error) {
+        callbacks.onLog?.("claude_follow_up_send_failed", { id, error });
+        settleFollowUp(id, false);
+      }
+    });
+  }
+
+  function pushFollowUp(text) {
+    if (!text || cancelled) return Promise.resolve(false);
+    if (bridgeCloseTimer) {
+      clearTimeout(bridgeCloseTimer);
+      bridgeCloseTimer = undefined;
+    }
+    if (!bridgeCapabilityChecked || (bridgeMode && !channel)) {
+      return new Promise((resolve) => {
+        bufferedStreamInputs.push({ text, resolve });
+        callbacks.onLog?.("claude_stream_input_buffered", { textLength: text.length, buffered: bufferedStreamInputs.length });
+      });
+    }
+    if (!bridgeMode) return Promise.resolve(false);
+    return writeBridgeFollowUp(text);
+  }
+
+  async function auditExecutionTarget() {
+    try {
+      const result = await exec(client, "hostname");
+      callbacks.onAudit?.({ transport: "ssh", eventType: "lifecycle", executionTarget: result.stdout.trim() });
+    } catch {
+      callbacks.onAudit?.({ transport: "ssh", eventType: "lifecycle" });
+    }
+  }
+
   const operation = (async () => {
     requestTimer = setTimeout(() => interruptRemote(
       "request_timeout",
-      "本次请求已运行 10 分钟，客户端为防止无限消耗已自动停止。"
+      "本次请求已运行 30 分钟，客户端为防止无限消耗已自动停止。"
     ), MAX_REQUEST_MS);
     requestTimer.unref?.();
     callbacks.onStatus?.("connecting");
     client = await connectWithRetry(config, callbacks.onUnknownHost, callbacks.onLog, callbacks.onStatus);
     if (cancelled) throw cancellationError();
     callbacks.onStatus?.("connected");
+    await auditExecutionTarget();
     let parser = new JsonLineParser();
-    const uploaded = await uploadAttachments(client, attachments, callbacks.conversationId, callbacks.onUploadProgress);
+    uploaded = await uploadAttachments(client, attachments, callbacks.conversationId, callbacks.onUploadProgress);
     if (cancelled) throw cancellationError();
     const attachmentNote = uploaded.length
       ? buildAttachmentNote(uploaded)
       : "";
     const home = (await exec(client, "printf %s \"$HOME\"")).stdout.trim();
     if (!home) throw new Error("无法确定 NAS 的 SSH 主目录。");
-    const bridgePath = `${home}/.claude-nas-chat/bridge/agent-sdk-bridge.mjs`;
-    const bridgeCheck = await exec(client, `test -r ${shellQuote(bridgePath)} && printf READY`);
+    const bridgePath = `${home}/.agent-orbit/bridge/agent-sdk-bridge.mjs`;
+    const bridgeCheck = await exec(client, [
+      `test -r ${shellQuote(bridgePath)}`,
+      `test -r ${shellQuote(`${home}/.agent-orbit/bridge/node_modules/@anthropic-ai/claude-agent-sdk/package.json`)}`,
+      `node --check ${shellQuote(bridgePath)}`,
+      "printf READY"
+    ].join(" && "));
     bridgeMode = bridgeCheck.stdout.trim() === "READY";
+    bridgeCapabilityChecked = true;
     const wakeName = String(config.wakeName || "claude").trim();
     let resolvedClaude = "";
     if (bridgeMode) {
       resolvedClaude = (await exec(client, `command -v -- ${shellQuote(wakeName)}`)).stdout.trim();
       if (!resolvedClaude) throw new Error(`NAS 找不到 Agent 唤醒命令：${wakeName}`);
     }
+    const directPrompt = message + attachmentNote;
+    if (!bridgeMode) rejectPendingFollowUps();
     const command = bridgeMode
       ? `node ${shellQuote(bridgePath)}`
-      : buildCommandWithMode(config.workModeId || "regular", message + attachmentNote, sessionId, config);
+      : buildCommandWithMode(config.workModeId || "regular", directPrompt, sessionId, config);
     if (!bridgeMode) {
       callbacks.onLog?.("bridge_unavailable_direct_fallback", { bridgePath, wakeName });
     }
@@ -333,51 +501,62 @@ function runClaude(config, message, sessionId, attachments = [], callbacks = {})
       wakeName: config.wakeName,
       workingDirectory: config.workingDirectory || "",
       transport: bridgeMode ? "agent-sdk-bridge" : "direct-cli",
-      command: command,
+      command,
       bridgeMode
     });
     let stderr = "";
     let responseText = "";
     let nextSessionId = "";
+    let usage;
     const tools = new Map();
     const outputPaths = new Set();
 
     try {
       await executeCommand();
     } catch (error) {
-      if (!error.connectionFailure || responseText || tools.size || cancelled) throw error;
+      if (!error.connectionFailure || responseText || tools.size || nextSessionId || cancelled) throw error;
       callbacks.onLog?.("ssh_stream_reconnect", { error: error.message, safeToRetry: true });
       callbacks.onStatus?.("reconnecting");
       client.end();
       await new Promise((resolve) => setTimeout(resolve, 600));
       client = await connectWithRetry(config, callbacks.onUnknownHost, callbacks.onLog, callbacks.onStatus);
       callbacks.onStatus?.("connected");
+      await auditExecutionTarget();
       parser = new JsonLineParser();
       stderr = "";
       await executeCommand();
     }
 
     const files = await inspectRemoteFiles(client, [...outputPaths], new Set(uploaded.map((file) => file.path)));
-    return { sessionId: nextSessionId || sessionId, text: responseText, files, tools: [...tools.values()] };
+    return { sessionId: nextSessionId || sessionId, text: responseText, lastTurnText, files, tools: [...tools.values()], usage };
 
     function handleEvents(events) {
       for (const item of events) {
+        auditTransportItem(callbacks.onAudit, item, bridgeMode ? "ssh-bridge" : "ssh-direct");
         if (!item.value) continue;
-        // 诊断日志：记录所有事件类型（帮助排查流解析问题）
-        callbacks.onLog?.("stream_event_debug", {
-          type: item.value.type,
-          hasEvent: Boolean(item.value.event),
-          eventType: item.value.event?.type,
-          deltaType: item.value.event?.delta?.type,
-          hasResult: "result" in item.value,
-          textLen: textFromEvent(item.value).length,
-          rawStart: item.raw ? item.raw.slice(0, 120) : undefined
-        });
         if (item.value.type === "bridge_ready") continue;
+        if (bridgeCloseTimer && !cancelled && ["assistant", "system"].includes(item.value.type)) {
+          clearTimeout(bridgeCloseTimer);
+          bridgeCloseTimer = undefined;
+          callbacks.onLog?.("claude_stream_input_next_turn_started", {});
+        }
+        if (item.value.type === "bridge_follow_up_received") {
+          const id = String(item.value.id || "");
+          settleFollowUp(id, true);
+          callbacks.onLog?.("claude_follow_up_accepted", { id });
+          continue;
+        }
+        if (item.value.type === "bridge_follow_up_rejected") {
+          const id = String(item.value.id || "");
+          settleFollowUp(id, false);
+          callbacks.onLog?.("claude_follow_up_rejected", { id });
+          continue;
+        }
         if (item.value.type === "bridge_interrupt_received") {
           if (interruptTimer) clearTimeout(interruptTimer);
           callbacks.onLog?.("claude_interrupt_ack", {});
           callbacks.onStatus?.("stopping");
+          closeBridgeInputSoon(0);
           continue;
         }
         if (item.value.type === "bridge_permission_request") {
@@ -395,39 +574,45 @@ function runClaude(config, message, sessionId, attachments = [], callbacks = {})
         const text = textFromEvent(item.value);
         if (text) {
           responseText += text;
+          currentTurnText += text;
           callbacks.onDelta?.(text);
         }
         const foundSession = sessionFromEvent(item.value);
-        if (foundSession) nextSessionId = foundSession;
+        if (foundSession && foundSession !== nextSessionId) {
+          nextSessionId = foundSession;
+          callbacks.onSessionId?.(foundSession);
+        }
+        const foundUsage = usageFromEvent(item.value);
+        if (foundUsage) {
+          usage = foundUsage;
+          callbacks.onUsage?.(usage);
+        }
         const previousToolCount = tools.size;
         handleToolPayload(item.value, tools, outputPaths, callbacks.onToolEvent);
         if (tools.size > previousToolCount) {
-          if (!responseText && tools.size >= MAX_SILENT_TOOL_CALLS) {
-            interruptRemote(
-              "silent_tool_limit",
-              `Agent 连续执行了 ${MAX_SILENT_TOOL_CALLS} 个操作但没有返回说明，客户端已自动停止，避免无限重试和消耗 Token。`
-            );
-          } else if (tools.size >= MAX_TOOL_CALLS) {
-            interruptRemote(
-              "tool_limit",
-              `Agent 本轮已执行 ${MAX_TOOL_CALLS} 个操作，达到安全上限，客户端已自动停止。请拆分任务后继续。`
-            );
+          for (const count of TOOL_PROGRESS_NOTICE_COUNTS) {
+            if (tools.size >= count && !announcedToolProgress.has(count)) {
+              announcedToolProgress.add(count);
+              callbacks.onLog?.("claude_tool_progress_notice", {
+                count,
+                responseStarted: Boolean(responseText),
+                message: `Agent 已连续执行 ${count} 个操作，仍在继续；如需停止请点击停止按钮。`
+              });
+              callbacks.onStatus?.("continuing");
+            }
           }
         }
-        if (item.value.type === "result") {
-          // result 事件可能包含完整文本（兜底）或权限拒绝信息
-          if (item.value.result && !responseText) {
-            responseText = item.value.result;
-            callbacks.onDelta?.(responseText);
-          }
-          // 记录 result 事件到日志（帮助排查短回复问题）
-          callbacks.onLog?.("stream_result", {
-            hasResult: Boolean(item.value.result),
-            resultLength: item.value.result?.length,
-            responseTextLength: responseText.length,
-            permissionDenials: (item.value.permission_denials || []).length,
-            sessionId: item.value.session_id
-          });
+        if (item.value.type === "result" && !currentTurnText && item.value.result) {
+          const resultText = String(item.value.result);
+          responseText += resultText;
+          currentTurnText = resultText;
+          callbacks.onDelta?.(resultText);
+        }
+        if (item.value.type === "result" && bridgeMode) {
+          lastTurnText = currentTurnText;
+          callbacks.onTurnComplete?.({ text: currentTurnText, pendingTurns: 0, sessionId: nextSessionId || sessionId || "", usage });
+          currentTurnText = "";
+          closeBridgeInputSoon();
         }
       }
     }
@@ -471,8 +656,19 @@ function runClaude(config, message, sessionId, attachments = [], callbacks = {})
         client.exec(command, { pty: false }, (error, stream) => {
           if (error) return reject(asConnectionFailure(error));
           channel = stream;
-          const bridgeStart = buildBridgeStartWithMode(config.workModeId || "regular", message + attachmentNote, sessionId, { ...config, workingDirectory: config.workingDirectory || home, claudePath: resolvedClaude });
-          stream.write(JSON.stringify(bridgeStart) + "\n");
+          const startPrompt = message + attachmentNote;
+          stream.write(JSON.stringify({
+            type: "start",
+            prompt: startPrompt,
+            automatic: Boolean(config.skipPermissions),
+            workingDirectory: config.workingDirectory || home,
+            claudePath: resolvedClaude,
+            sessionId: sessionId || ""
+          }) + "\n");
+          const followUps = bufferedStreamInputs.splice(0);
+          for (const followUp of followUps) {
+            writeBridgeFollowUp(followUp.text).then(followUp.resolve);
+          }
           if (cancelled) stream.write(JSON.stringify({ type: "interrupt" }) + "\n");
           stream.on("data", (data) => handleEvents(parser.push(data)));
           stream.stderr.on("data", (data) => { stderr += data.toString("utf8"); });
@@ -480,6 +676,8 @@ function runClaude(config, message, sessionId, attachments = [], callbacks = {})
           stream.on("close", (code) => {
             if (channel === stream) channel = undefined;
             if (interruptTimer) clearTimeout(interruptTimer);
+            if (bridgeCloseTimer) clearTimeout(bridgeCloseTimer);
+            rejectPendingFollowUps();
             handleEvents(parser.finish());
             callbacks.onLog?.("claude_command_close", {
               exitCode: code,
@@ -496,9 +694,12 @@ function runClaude(config, message, sessionId, attachments = [], callbacks = {})
         });
       });
     }
-  })().finally(() => {
+  })().finally(async () => {
     if (requestTimer) clearTimeout(requestTimer);
     if (interruptTimer) clearTimeout(interruptTimer);
+    if (bridgeCloseTimer) clearTimeout(bridgeCloseTimer);
+    rejectPendingFollowUps();
+    if (client && uploaded.length) await cleanupRemoteAttachments(client, uploaded).catch(() => {});
     client?.end();
   });
 
@@ -506,6 +707,9 @@ function runClaude(config, message, sessionId, attachments = [], callbacks = {})
     promise: operation,
     cancel() {
       interruptRemote("user", "已停止生成。");
+    },
+    pushFollowUp(message) {
+      return pushFollowUp(message);
     }
   };
 }
@@ -521,92 +725,91 @@ async function uploadAttachments(client, attachments, conversationId, onProgress
   const home = (await exec(client, "printf %s \"$HOME\"")).stdout.trim();
   if (!home) throw new Error("无法确定 NAS 的 SSH 主目录，附件未上传。");
   const safeFolder = String(conversationId || "default").replace(/[^a-zA-Z0-9-]/g, "");
-  const remoteDirectory = `${home}/.claude-nas-chat/uploads/${safeFolder}`;
+  const remoteDirectory = `${home}/.agent-orbit/uploads/${safeFolder}`;
   const created = await exec(client, `mkdir -p -- ${shellQuote(remoteDirectory)}`);
   if (created.code !== 0) throw new Error(created.stderr || "无法在 NAS 创建附件目录。");
   const sftp = await openSftp(client);
   const uploaded = [];
-  for (const [index, file] of attachments.entries()) {
-    const name = safeRemoteFileName(file.name || `attachment-${index + 1}`);
-    const remotePath = `${remoteDirectory}/${Date.now()}-${index + 1}-${name}`;
-    const data = Buffer.from(file.data);
-    await writeSftp(sftp, remotePath, data, (sent) => onProgress?.({
-      index,
-      name: file.name,
-      sent,
-      total: data.length,
-      overall: (index + (data.length ? sent / data.length : 1)) / attachments.length
-    }));
-    uploaded.push({ path: remotePath, name: file.name, mimeType: file.mimeType || mimeFromPath(file.name) });
-  }
-  sftp.end();
-  return uploaded;
+  try {
+    for (const [index, file] of attachments.entries()) {
+      const name = safeRemoteFileName(file.name || `attachment-${index + 1}`);
+      const remotePath = `${remoteDirectory}/${Date.now()}-${index + 1}-${name}`;
+      const data = Buffer.from(file.data);
+      await writeSftp(sftp, remotePath, data, (sent) => onProgress?.({
+        index,
+        name: file.name,
+        sent,
+        total: data.length,
+        overall: (index + (data.length ? sent / data.length : 1)) / attachments.length
+      }));
+      uploaded.push({ path: remotePath, name: file.name, mimeType: file.mimeType || mimeFromPath(file.name) });
+    }
+    return uploaded;
+  } catch (error) {
+    closeSftp(sftp);
+    await cleanupRemoteAttachments(client, uploaded).catch(() => {});
+    throw error;
+  } finally { closeSftp(sftp); }
 }
 
-const SFTP_TIMEOUT_MS = 30_000;
-const RETRY_MAX_ATTEMPTS = 3;
-const RETRY_BASE_DELAY_MS = 600;
-const RETRY_MAX_DELAY_MS = 15_000;
-
-function withTimeout(promise, ms, message) {
-  let timer;
-  const timeout = new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(message)), ms); });
-  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+async function cleanupRemoteAttachments(client, uploaded) {
+  const paths = (uploaded || []).map((file) => file?.path).filter(isSafeRemotePath);
+  if (!paths.length) return false;
+  const directories = [...new Set(paths.map((remotePath) => remotePath.slice(0, remotePath.lastIndexOf("/"))))];
+  const command = `rm -f -- ${paths.map(shellQuote).join(" ")}`
+    + (directories.length ? `; rmdir -- ${directories.map(shellQuote).join(" ")} 2>/dev/null || true` : "");
+  await exec(client, command);
+  return true;
 }
 
 function openSftp(client) {
-  return withTimeout(
-    new Promise((resolve, reject) => client.sftp((error, sftp) => error ? reject(error) : resolve(sftp))),
-    SFTP_TIMEOUT_MS,
-    "SFTP 通道打开超时，请检查网络连接。"
-  );
+  return withTimeout("SFTP 连接", SFTP_OPERATION_TIMEOUT_MS,
+    () => new Promise((resolve, reject) => client.sftp((error, sftp) => error ? reject(error) : resolve(sftp))),
+    () => client.end());
 }
 
 function writeSftp(sftp, remotePath, data, onProgress) {
-  return withTimeout(
-    new Promise((resolve, reject) => {
-      const stream = sftp.createWriteStream(remotePath, { mode: 0o600 });
-      stream.once("error", reject);
-      stream.once("close", resolve);
-      let offset = 0;
-      const writeNext = () => {
-        while (offset < data.length) {
-          const end = Math.min(offset + 64 * 1024, data.length);
-          const ready = stream.write(data.subarray(offset, end));
-          offset = end;
-          onProgress?.(offset);
-          if (!ready) return stream.once("drain", writeNext);
-        }
-        stream.end();
-      };
-      writeNext();
-    }),
-    SFTP_TIMEOUT_MS,
-    "文件上传超时，请检查网络连接。"
-  );
+  return withTimeout("SFTP 上传", SFTP_OPERATION_TIMEOUT_MS, () => new Promise((resolve, reject) => {
+    const stream = sftp.createWriteStream(remotePath, { mode: 0o600 });
+    stream.once("error", reject);
+    stream.once("close", resolve);
+    let offset = 0;
+    const writeNext = () => {
+      while (offset < data.length) {
+        const end = Math.min(offset + 64 * 1024, data.length);
+        const ready = stream.write(data.subarray(offset, end));
+        offset = end;
+        onProgress?.(offset);
+        if (!ready) return stream.once("drain", writeNext);
+      }
+      stream.end();
+    };
+    writeNext();
+  }), () => closeSftp(sftp));
 }
 
-function connectWithRetry(config, onUnknownHost, onLog, onStatus) {
+async function connectWithRetry(config, onUnknownHost, onLog, onStatus) {
   let lastError;
-  const attempt = async (remaining) => {
+  for (let attempt = 1; attempt <= MAX_CONNECT_ATTEMPTS; attempt += 1) {
     try {
       return await connect(config, onUnknownHost, onLog);
     } catch (error) {
       lastError = error;
-      if (remaining <= 1 || !isTransientConnectionError(error)) throw error;
-      const delay = Math.min(RETRY_BASE_DELAY_MS * Math.pow(2, RETRY_MAX_ATTEMPTS - remaining), RETRY_MAX_DELAY_MS);
-      onLog?.("ssh_reconnect_attempt", { host: config.host, attempt: RETRY_MAX_ATTEMPTS - remaining + 1, delay, error: error.message });
+      if (!isTransientConnectionError(error) || attempt === MAX_CONNECT_ATTEMPTS) throw error;
+      const maximumDelayMs = Math.min(15_000, 600 * (2 ** (attempt - 1)));
+      const delayMs = Math.floor(Math.random() * (maximumDelayMs + 1));
+      onLog?.("ssh_reconnect_attempt", { host: config.host, attempt: attempt + 1, maxAttempts: MAX_CONNECT_ATTEMPTS, delayMs, error: error.message });
       onStatus?.("reconnecting");
-      await new Promise((resolve) => setTimeout(resolve, delay));
-      return attempt(remaining - 1);
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
     }
-  };
-  return attempt(RETRY_MAX_ATTEMPTS);
+  }
+  throw lastError;
 }
 
 function isTransientConnectionError(error) {
   const value = String(error?.message || error);
-  return !/密码|账号|authentication|指纹|host key|ECONNREFUSED/i.test(value);
+  if (/密码|账号|authentication|指纹|host key/i.test(value)) return false;
+  return /ECONNREFUSED|ECONNRESET|EPIPE|ETIMEDOUT|EHOSTUNREACH|ENETUNREACH|EAI_AGAIN|连接超时|socket.*(?:closed|ended)/i.test(value);
 }
 
 function buildAttachmentNote(files) {
@@ -716,12 +919,14 @@ async function inspectRemoteFiles(client, candidates, uploadedPaths) {
         });
       } catch { /* File may have been temporary or removed by Claude. */ }
     }
-  } finally { sftp.end(); }
+  } finally { closeSftp(sftp); }
   return files;
 }
 
 function sftpStat(sftp, remotePath) {
-  return new Promise((resolve, reject) => sftp.stat(remotePath, (error, stat) => error ? reject(error) : resolve(stat)));
+  return withTimeout("SFTP 文件状态查询", SFTP_OPERATION_TIMEOUT_MS,
+    () => new Promise((resolve, reject) => sftp.stat(remotePath, (error, stat) => error ? reject(error) : resolve(stat))),
+    () => closeSftp(sftp));
 }
 
 function isSafeRemotePath(remotePath) {
@@ -730,10 +935,8 @@ function isSafeRemotePath(remotePath) {
 
 function mimeFromPath(filePath) {
   const extension = String(filePath).toLowerCase().match(/\.([a-z0-9]+)$/)?.[1] || "";
-  return ({ png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif", webp: "image/webp", svg: "image/svg+xml", pdf: "application/pdf", txt: "text/plain", md: "text/markdown", json: "application/json", csv: "text/csv", zip: "application/zip", docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" })[extension] || "application/octet-stream";
+  return ({ png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif", webp: "image/webp", svg: "image/svg+xml", pdf: "application/pdf", txt: "text/plain", md: "text/markdown", json: "application/json", csv: "text/csv", zip: "application/zip", docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", pptx: "application/vnd.openxmlformats-officedocument.presentationml.presentation" })[extension] || "application/octet-stream";
 }
-
-const SSH_OPERATION_TIMEOUT_MS = 60_000;
 
 async function readRemoteFile(config, remotePath, maximumBytes, onUnknownHost, onLog) {
   if (!isSafeRemotePath(remotePath)) throw new Error("远程文件路径无效。");
@@ -745,7 +948,7 @@ async function readRemoteFile(config, remotePath, maximumBytes, onUnknownHost, o
       if (!stat.isFile()) throw new Error("远程路径不是文件。");
       if (stat.size > maximumBytes) throw new Error(`文件超过 ${Math.round(maximumBytes / 1024 / 1024)} MB，无法直接预览。`);
       return await readSftp(sftp, remotePath, stat.size);
-    } finally { sftp.end(); }
+    } finally { closeSftp(sftp); }
   } finally { client.end(); }
 }
 
@@ -759,7 +962,7 @@ async function downloadRemoteFile(config, remotePath, localPath, onUnknownHost, 
       await fastGet(sftp, remotePath, temporary);
       fs.copyFileSync(temporary, localPath);
       fs.rmSync(temporary, { force: true });
-    } finally { sftp.end(); }
+    } finally { closeSftp(sftp); }
   } catch (error) {
     fs.rmSync(temporary, { force: true });
     throw error;
@@ -767,35 +970,74 @@ async function downloadRemoteFile(config, remotePath, localPath, onUnknownHost, 
   return localPath;
 }
 
-function readSftp(sftp, remotePath, expectedSize) {
-  return withTimeout(
-    new Promise((resolve, reject) => {
-      const chunks = [];
-      let total = 0;
-      const stream = sftp.createReadStream(remotePath);
-      stream.on("data", (chunk) => { chunks.push(chunk); total += chunk.length; });
-      stream.once("error", reject);
-      stream.once("end", () => resolve(Buffer.concat(chunks, total)));
-    }),
-    Math.max(SFTP_TIMEOUT_MS, (expectedSize || 0) / 1024 * 500),
-    "文件下载超时，请检查网络连接。"
-  );
+function readSftp(sftp, remotePath, _expectedSize) {
+  return withTimeout("SFTP 文件读取", SFTP_OPERATION_TIMEOUT_MS, () => new Promise((resolve, reject) => {
+    const chunks = [];
+    let total = 0;
+    const stream = sftp.createReadStream(remotePath);
+    stream.on("data", (chunk) => { chunks.push(chunk); total += chunk.length; });
+    stream.once("error", reject);
+    stream.once("end", () => resolve(Buffer.concat(chunks, total)));
+  }), () => closeSftp(sftp));
 }
 
 function fastGet(sftp, remotePath, localPath) {
-  return new Promise((resolve, reject) => sftp.fastGet(remotePath, localPath, {}, (error) => error ? reject(error) : resolve()));
+  return withTimeout("SFTP 文件下载", SFTP_OPERATION_TIMEOUT_MS,
+    () => new Promise((resolve, reject) => sftp.fastGet(remotePath, localPath, {}, (error) => error ? reject(error) : resolve())),
+    () => closeSftp(sftp));
 }
 
-function exec(client, command) {
+function closeSftp(sftp) {
+  try { sftp?.end(); } catch { /* The channel may already be closed after a timeout. */ }
+}
+
+function withTimeout(label, timeoutMs, operation, onTimeout) {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const finish = (callback, value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      callback(value);
+    };
+    const timer = setTimeout(() => {
+      try { onTimeout?.(); } catch { /* Preserve the original timeout error. */ }
+      finish(reject, new Error(`${label} 超时（${Math.round(timeoutMs / 1000)} 秒），已关闭当前传输，请检查网络后重试。`));
+    }, timeoutMs);
+    Promise.resolve().then(operation).then(
+      (value) => finish(resolve, value),
+      (error) => finish(reject, error)
+    );
+  });
+}
+
+function exec(client, command, options = {}) {
   return new Promise((resolve, reject) => {
     let stdout = "";
     let stderr = "";
-    client.exec(command, (error, stream) => {
-      if (error) return reject(error);
+    let settled = false;
+    let stream;
+    const finish = (callback, value) => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      callback(value);
+    };
+    const timeoutMs = Number(options.timeoutMs || 0);
+    let timer;
+    if (timeoutMs > 0) {
+      timer = setTimeout(() => {
+        try { stream?.close(); } catch { /* The SSH channel may not have opened. */ }
+        finish(reject, new Error(`${options.label || "远程操作"}超时（${Math.round(timeoutMs / 1000)} 秒），请检查 NAS 网络、权限或 npm 依赖源。`));
+      }, timeoutMs);
+    }
+    client.exec(command, (error, openedStream) => {
+      if (error) return finish(reject, error);
+      stream = openedStream;
       stream.on("data", (data) => { stdout += data.toString("utf8"); });
       stream.stderr.on("data", (data) => { stderr += data.toString("utf8"); });
-      stream.on("error", reject);
-      stream.on("close", (code) => resolve({ code, stdout, stderr }));
+      stream.on("error", (streamError) => finish(reject, streamError));
+      stream.on("close", (code) => finish(resolve, { code, stdout, stderr }));
     });
   });
 }
@@ -804,4 +1046,4 @@ function cleanError(value) {
   return value.replace(/\x1B\[[0-?]*[ -/]*[@-~]/g, "").trim();
 }
 
-module.exports = { buildAttachmentNote, downloadRemoteFile, ensureDeviceControlKey, finalizeDeviceControl, getAgentSdkBridgeStatus, handleToolPayload, installAgentSdkBridge, markDeviceControlDisabled, mimeFromPath, readRemoteFile, runClaude, safeRemoteFileName, uninstallAgentSdkBridge, verifyConnection, writeSftp };
+module.exports = { buildAttachmentNote, cleanupRemoteAttachments, downloadRemoteFile, ensureDeviceControlKey, finalizeDeviceControl, getAgentSdkBridgeStatus, getClaudeModelStatus, handleToolPayload, installAgentSdkBridge, markDeviceControlDisabled, mimeFromPath, readRemoteFile, runClaude, safeRemoteFileName, uninstallAgentSdkBridge, updateClaudeModel, verifyConnection, withTimeout, writeSftp };
