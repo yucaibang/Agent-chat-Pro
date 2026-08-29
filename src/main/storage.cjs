@@ -84,7 +84,7 @@ async function replaceFileSafely(destination, writer) {
 async function copyArchiveTree(source, destination) {
   try { await fs.promises.access(source); } catch (error) { if (error.code === "ENOENT") return 0; throw error; }
   if (samePath(source, destination) || isInside(source, destination)) {
-    throw new Error("不能把聊天记录目录选在原来的"会话存档"文件夹内部，否则会造成递归复制。请另选一个独立文件夹。");
+    throw new Error("不能把聊天记录目录选在原来的\"会话存档\"文件夹内部，否则会造成递归复制。请另选一个独立文件夹。");
   }
   let copied = 0;
   async function visit(from, to) {
@@ -115,7 +115,7 @@ async function migrateConversationDirectory(currentDirectory, nextDirectory) {
   const sourceArchive = path.join(current, ARCHIVE_FOLDER);
   const destinationArchive = path.join(target, ARCHIVE_FOLDER);
   if (samePath(sourceArchive, target) || isInside(sourceArchive, target)) {
-    throw new Error("不能选择原来的"会话存档"文件夹或它的子文件夹。请新建一个独立文件夹后重试。");
+    throw new Error("不能选择原来的\"会话存档\"文件夹或它的子文件夹。请新建一个独立文件夹后重试。");
   }
 
   const sourceFile = path.join(current, CONVERSATIONS_FILE);
