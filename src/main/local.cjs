@@ -3,22 +3,83 @@
 const fs = require("fs");
 const path = require("path");
 const { spawn, execFile } = require("child_process");
-const { JsonLineParser, buildClaudeArgs, sessionFromEvent, textFromEvent } = require("./protocol.cjs");
+const { JsonLineParser, buildClaudeArgs, sessionFromEvent, textFromEvent, usageFromEvent } = require("./protocol.cjs");
 const { buildLocalArgsWithMode } = require("./modes/mode-params.cjs");
 const { handleToolPayload, mimeFromPath } = require("./ssh.cjs");
+const { readModelSettings, replaceModelSettings } = require("./model-config.cjs");
+
+const MAX_REQUEST_MS = 30 * 60 * 1000;
+const TOOL_PROGRESS_NOTICE_COUNTS = [8, 24];
 
 async function verifyLocalConnection(config, onLog) {
   const command = await resolveLocalCommand(config.wakeName);
   const result = await runProcess(command, ["--version"], "", config.workingDirectory);
-  onLog?.("local_claude_version_result", { exitCode: result.code, version: result.stdout.trim(), stderr: cleanError(result.stderr) });
+  onLog?.("local_claude_version_result", { exitCode: result.code, version: result.stdout.trim(), stderr: result.stderr.trim() });
   if (result.code !== 0) throw new Error(cleanError(result.stderr) || "无法运行本机 Claude 命令。");
   return result.stdout.trim() || "本机 Claude 已就绪";
+}
+
+async function getLocalClaudeModelStatus(config, onLog) {
+  const settingsPath = path.join(process.env.USERPROFILE || process.env.HOME || "", ".claude", "settings.json");
+  try {
+    const content = fs.readFileSync(settingsPath, "utf8");
+    const parsed = readModelSettings(content);
+    return { model: parsed.model, models: parsed.models, consistent: parsed.consistent, settingsPath };
+  } catch (error) {
+    throw new Error("无法读取本机 Claude 模型配置：" + error.message);
+  }
+}
+
+async function updateLocalClaudeModel(modelName, onLog) {
+  const model = String(modelName || "").trim();
+  if (!model) throw new Error("请填写模型名称。");
+  const settingsPath = path.join(process.env.USERPROFILE || process.env.HOME || "", ".claude", "settings.json");
+  let current;
+  try {
+    current = fs.readFileSync(settingsPath, "utf8");
+  } catch (error) {
+    if (error.code === "ENOENT") {
+      const replacement = replaceModelSettings("{}", model);
+      const dir = path.dirname(settingsPath);
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(settingsPath, replacement.settings, { mode: 0o600 });
+      return { model: replacement.model, changedKeys: replacement.changedKeys };
+    }
+    throw new Error("无法读取本机 Claude 模型配置：" + error.message);
+  }
+  const replacement = replaceModelSettings(current, model);
+  const temporary = `${settingsPath}.claude-local-model-${process.pid}-${Date.now()}.tmp`;
+  try {
+    fs.writeFileSync(temporary, replacement.settings, { mode: 0o600, flag: "wx" });
+    fs.renameSync(temporary, settingsPath);
+  } catch (error) {
+    try { fs.unlinkSync(temporary); } catch {}
+    throw new Error("模型配置未能保存：" + error.message);
+  }
+  onLog?.("local_claude_model_changed", { model: replacement.model, changedKeys: replacement.changedKeys });
+  return { model: replacement.model, changedKeys: replacement.changedKeys };
 }
 
 function runLocalClaude(config, message, sessionId, attachments = [], callbacks = {}) {
   let child;
   let cancelled = false;
+  let requestTimer;
+  let currentTurnText = "";
+
+  function cancellationError() {
+    const error = new Error("已停止生成。");
+    error.cancelled = true;
+    return error;
+  }
+
   const operation = (async () => {
+    requestTimer = setTimeout(() => {
+      cancelled = true;
+      cancellationMessage = "本次请求已运行 30 分钟，客户端为防止无限消耗已自动停止。";
+      child?.kill();
+    }, MAX_REQUEST_MS);
+    requestTimer.unref?.();
+
     callbacks.onStatus?.("local-starting");
     const command = await resolveLocalCommand(config.wakeName);
     const uploaded = await writeLocalAttachments(config.localUploadDirectory, attachments, callbacks.conversationId, callbacks.onUploadProgress);
@@ -37,8 +98,10 @@ function runLocalClaude(config, message, sessionId, attachments = [], callbacks 
     let stderr = "";
     let responseText = "";
     let nextSessionId = "";
+    let usage;
     const tools = new Map();
     const outputPaths = new Set();
+    const announcedToolProgress = new Set();
 
     await new Promise((resolve, reject) => {
       child = spawn(launch.file, launch.args, {
@@ -51,13 +114,41 @@ function runLocalClaude(config, message, sessionId, attachments = [], callbacks 
         for (const item of events) {
           if (!item.value) continue;
           const text = textFromEvent(item.value);
-          if (text) { responseText += text; callbacks.onDelta?.(text); }
+          if (text) {
+            responseText += text;
+            currentTurnText += text;
+            callbacks.onDelta?.(text);
+          }
           const foundSession = sessionFromEvent(item.value);
-          if (foundSession) nextSessionId = foundSession;
+          if (foundSession && foundSession !== nextSessionId) {
+            nextSessionId = foundSessionId;
+            callbacks.onSessionId?.(foundSession);
+          }
+          const foundUsage = usageFromEvent(item.value);
+          if (foundUsage) {
+            usage = foundUsage;
+            callbacks.onUsage?.(usage);
+          }
+          const previousToolCount = tools.size;
           handleToolPayload(item.value, tools, outputPaths, callbacks.onToolEvent);
-          if (item.value.type === "result" && !responseText && item.value.result) {
-            responseText = item.value.result;
-            callbacks.onDelta?.(responseText);
+          if (tools.size > previousToolCount) {
+            for (const count of TOOL_PROGRESS_NOTICE_COUNTS) {
+              if (tools.size >= count && !announcedToolProgress.has(count)) {
+                announcedToolProgress.add(count);
+                callbacks.onLog?.("local_tool_progress_notice", {
+                  count,
+                  responseStarted: Boolean(responseText),
+                  message: `Agent 已连续执行 ${count} 个操作，仍在继续；如需停止请点击停止按钮。`
+                });
+                callbacks.onStatus?.("continuing");
+              }
+            }
+          }
+          if (item.value.type === "result" && !currentTurnText && item.value.result) {
+            const resultText = String(item.value.result);
+            responseText += resultText;
+            currentTurnText = resultText;
+            callbacks.onDelta?.(resultText);
           }
         }
       };
@@ -73,11 +164,7 @@ function runLocalClaude(config, message, sessionId, attachments = [], callbacks 
           sessionId: nextSessionId || sessionId || "",
           stderr: cleanError(stderr)
         });
-        if (cancelled) {
-          const error = new Error("已停止生成。");
-          error.cancelled = true;
-          return reject(error);
-        }
+        if (cancelled) return reject(cancellationError());
         if (code !== 0) return reject(new Error(cleanError(stderr) || `本机 Claude 已退出（代码 ${code}）。`));
         resolve();
       });
@@ -85,8 +172,10 @@ function runLocalClaude(config, message, sessionId, attachments = [], callbacks 
     });
 
     const files = inspectLocalFiles([...outputPaths], new Set(uploaded.map((file) => normalizePath(file.path))));
-    return { sessionId: nextSessionId || sessionId, text: responseText, files, tools: [...tools.values()] };
-  })();
+    return { sessionId: nextSessionId || sessionId, text: responseText, lastTurnText: currentTurnText, files, tools: [...tools.values()], usage };
+  })().finally(() => {
+    if (requestTimer) clearTimeout(requestTimer);
+  });
 
   return {
     promise: operation,
@@ -124,7 +213,7 @@ async function resolveLocalCommand(value) {
   }
   const scriptMatch = candidates.find((item) => /\.(?:cmd|bat)$/i.test(item));
   if (scriptMatch) return scriptMatch;
-  throw new Error(`这台 Windows 没有找到“${command}”。请先安装 Claude Code，或填写 claude.exe/claude.cmd 的完整路径。`);
+  throw new Error(`这台 Windows 没有找到"${command}"。请先安装 Claude Code，或填写 claude.exe/claude.cmd 的完整路径。`);
 }
 
 function launchSpec(command, args) {
@@ -204,20 +293,20 @@ function copyLocalFile(source, destination) {
 function runProcess(command, args, stdin, workingDirectory) {
   const launch = launchSpec(command, args);
   return new Promise((resolve, reject) => {
-    const child = spawn(launch.file, launch.args, { cwd: validatedWorkingDirectory(workingDirectory), windowsHide: true, shell: false, stdio: ["pipe", "pipe", "pipe"] });
+    const childProcess = spawn(launch.file, launch.args, { cwd: validatedWorkingDirectory(workingDirectory), windowsHide: true, shell: false, stdio: ["pipe", "pipe", "pipe"] });
     let stdout = "";
     let stderr = "";
-    child.stdout.on("data", (data) => { stdout += data.toString("utf8"); });
-    child.stderr.on("data", (data) => { stderr += data.toString("utf8"); });
-    child.once("error", (error) => reject(localLaunchError(error, command)));
-    child.once("close", (code) => resolve({ code, stdout, stderr }));
-    child.stdin.end(stdin);
+    childProcess.stdout.on("data", (data) => { stdout += data.toString("utf8"); });
+    childProcess.stderr.on("data", (data) => { stderr += data.toString("utf8"); });
+    childProcess.once("error", (error) => reject(localLaunchError(error, command)));
+    childProcess.once("close", (code) => resolve({ code, stdout, stderr }));
+    childProcess.stdin.end(stdin);
   });
 }
 
 function localLaunchError(error, command) {
   return error?.code === "ENOENT"
-    ? new Error(`找不到本机 Claude 命令“${command}”。请先安装 Claude Code或填写完整路径。`)
+    ? new Error(`找不到本机 Claude 命令"${command}"。请先安装 Claude Code或填写完整路径。`)
     : new Error("启动本机 Claude 失败：" + error.message);
 }
 
@@ -233,4 +322,4 @@ function cleanError(value) {
   return String(value || "").replace(/\x1B\[[0-?]*[ -/]*[@-~]/g, "").trim();
 }
 
-module.exports = { buildLocalAttachmentNote, copyLocalFile, inspectLocalFiles, launchSpec, readLocalFile, resolveLocalCommand, runLocalClaude, safeSessionId, verifyLocalConnection };
+module.exports = { buildLocalAttachmentNote, copyLocalFile, getLocalClaudeModelStatus, inspectLocalFiles, launchSpec, readLocalFile, resolveLocalCommand, runLocalClaude, safeSessionId, updateLocalClaudeModel, verifyLocalConnection };
