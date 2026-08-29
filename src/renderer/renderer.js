@@ -30,9 +30,21 @@ let hasCloudApiKey = false;
 let authStatus = { authorized: false, locked: false, violations: 0, canUseSSH: false, canUseExternalNetwork: false, canUseCloudAI: true };
 const messages = new Map();
 
+// ── 外观设置状态 ──
+let appearanceSettings = {
+  frostedGlass: false,
+  frostedBlur: 20,
+  frostedOpacity: 85,
+  backgroundImage: "",
+  backgroundBlur: 0,
+  backgroundOpacity: 100
+};
+
 function settingsFromForm() {
   const data = new FormData(elements.form);
   const network = networkSettingsFromForm();
+  const provider = document.querySelector("#cloud-provider")?.value || "zhipu";
+  const config = CLOUD_PROVIDERS[provider];
   return {
     connectionMode: data.get("connectionMode"),
     host: data.get("host"),
@@ -47,13 +59,11 @@ function settingsFromForm() {
     workModeId: currentModeId,
     networkType: document.querySelector("#network-type").value,
     externalMethod: document.querySelector("#external-method").value,
-    cloudAi: {
-      apiKey: document.querySelector("#cloud-api-key")?.value || "",
-      clearApiKey: !document.querySelector("#cloud-api-key")?.value && hasCloudApiKey,
-      baseURL: document.querySelector("#cloud-base-url")?.value || "https://open.bigmodel.cn/api/paas/v4/",
-      model: document.querySelector("#cloud-model")?.value || "glm-4-flash",
-      maxTokens: 4096
-    },
+    cloudAiProvider: provider,
+    cloudAiModel: document.querySelector("#cloud-model")?.value || "glm-4-flash",
+    cloudAiBaseUrl: document.querySelector("#cloud-base-url")?.value || (config?.baseUrl || ""),
+    cloudAiApiKey: document.querySelector("#cloud-api-key")?.value || "",
+    clearCloudAiApiKey: !document.querySelector("#cloud-api-key")?.value && hasCloudApiKey,
     ...network
   };
 }
@@ -80,29 +90,26 @@ function populateSettings(settings) {
     : "请输入 SSH 密码";
   const controlSource = document.querySelector("#device-control-source");
   if (!controlSource.value) controlSource.value = settings.host || "";
-  // 云端 AI 设置填充
+  // 云端 AI 设置填充（扁平字段）
   const cloudApiKey = document.querySelector("#cloud-api-key");
   const cloudBaseURL = document.querySelector("#cloud-base-url");
   const cloudModel = document.querySelector("#cloud-model");
   const cloudProvider = document.querySelector("#cloud-provider");
-  if (settings.cloudAi) {
-    hasCloudApiKey = Boolean(settings.cloudAi.hasApiKey);
-    if (cloudApiKey) {
-      cloudApiKey.value = "";
-      cloudApiKey.type = "password";
-      cloudApiKey.placeholder = hasCloudApiKey ? "已安全保存密钥；留空不会修改" : "在此粘贴你的 API 密钥";
-      document.querySelector("#toggle-cloud-key").textContent = "显示";
-    }
-    if (cloudBaseURL) cloudBaseURL.value = settings.cloudAi.baseURL || "https://open.bigmodel.cn/api/paas/v4/";
-    if (cloudModel) cloudModel.value = settings.cloudAi.model || "glm-4-flash";
-    if (cloudProvider) {
-      const baseURL = settings.cloudAi.baseURL || "";
-      if (baseURL.includes("siliconflow")) cloudProvider.value = "siliconflow";
-      else if (baseURL.includes("bigmodel") || baseURL.includes("zhipu")) cloudProvider.value = "zhipu";
-      else cloudProvider.value = "custom";
-      cloudProvider.dispatchEvent(new Event("change"));
-    }
+  hasCloudApiKey = Boolean(settings.hasCloudAiConfig || settings.cloudAi?.hasApiKey);
+  if (cloudApiKey) {
+    cloudApiKey.value = "";
+    cloudApiKey.type = "password";
+    cloudApiKey.placeholder = hasCloudApiKey ? "已安全保存密钥；留空不会修改" : "在此粘贴你的 API 密钥";
+    document.querySelector("#toggle-cloud-key").textContent = "显示";
   }
+  // 从扁平字段回填
+  const provider = settings.cloudAiProvider || "zhipu";
+  const baseURL = settings.cloudAiBaseUrl || "";
+  const model = settings.cloudAiModel || "glm-4-flash";
+  if (cloudProvider) cloudProvider.value = provider;
+  if (cloudBaseURL) cloudBaseURL.value = baseURL || (CLOUD_PROVIDERS[provider]?.baseUrl || "");
+  if (cloudModel) cloudModel.value = model;
+  if (cloudProvider) cloudProvider.dispatchEvent(new Event("change"));
 }
 
 function updateConnectionModeUI() {
@@ -257,43 +264,8 @@ function addMessage(kind, text = "") {
   content.className = "message-content";
   content.textContent = text;
   item.append(content);
-  // 消息操作按钮
-  const actions = document.createElement("div");
-  actions.className = "message-actions";
-  if (kind === "user") {
-    const editBtn = document.createElement("button");
-    editBtn.type = "button";
-    editBtn.className = "message-action";
-    editBtn.title = "编辑消息";
-    editBtn.textContent = "✎";
-    editBtn.addEventListener("click", () => {
-      elements.prompt.value = content.textContent;
-      adjustTextarea();
-      elements.prompt.focus();
-    });
-    actions.append(editBtn);
-  } else if (kind === "assistant") {
-    const retryBtn = document.createElement("button");
-    retryBtn.type = "button";
-    retryBtn.className = "message-action";
-    retryBtn.title = "重新生成";
-    retryBtn.textContent = "↻";
-    retryBtn.addEventListener("click", () => retryFromMessage(item));
-    actions.append(retryBtn);
-    const copyBtn = document.createElement("button");
-    copyBtn.type = "button";
-    copyBtn.className = "message-action";
-    copyBtn.title = "复制回复";
-    copyBtn.textContent = "📋";
-    copyBtn.addEventListener("click", () => {
-      navigator.clipboard.writeText(content.textContent).then(() => {
-        copyBtn.textContent = "✓";
-        setTimeout(() => { copyBtn.textContent = "📋"; }, 1200);
-      });
-    });
-    actions.append(copyBtn);
-  }
-  item.append(actions);
+  // 右键菜单替代悬浮操作栏
+  item.addEventListener("contextmenu", (event) => showMessageContextMenu(event, item, kind));
   elements.messages.append(item);
   elements.messages.scrollTop = elements.messages.scrollHeight;
   return item;
@@ -814,8 +786,9 @@ async function sendMessage() {
 }
 
 document.querySelector("#show-settings").addEventListener("click", openSettings);
-document.querySelector("#header-settings").addEventListener("click", openSettings);
+document.querySelector("#header-appearance").addEventListener("click", openAppearanceDialog);
 document.querySelector("#close-settings").addEventListener("click", () => elements.dialog.close());
+document.querySelector("#close-appearance").addEventListener("click", () => document.querySelector("#appearance-dialog").close());
 elements.dialog.addEventListener("close", async () => {
   try { populateSettings(await window.claudeNas.loadSettings()); }
   catch (error) { setConnection("重新读取设置失败：" + error.message, "error"); }
@@ -942,30 +915,115 @@ document.querySelectorAll("[data-connection-mode]").forEach((button) => {
   });
 });
 
-// ── 云端 AI 设置事件 ──
+// ── 云端 AI 设置事件（通用适配器） ──
+const CLOUD_PROVIDERS = {
+  zhipu: {
+    name: "智谱 AI",
+    baseUrl: "https://open.bigmodel.cn/api/paas/v4/",
+    models: [
+      { value: "glm-4-flash", label: "GLM-4-Flash（永久免费）" },
+      { value: "glm-4.7-flash", label: "GLM-4.7-Flash（免费）" },
+      { value: "glm-4-plus", label: "GLM-4-Plus（付费，更强）" },
+      { value: "glm-4-long", label: "GLM-4-Long（付费，超长文本）" }
+    ],
+    registerUrl: "https://open.bigmodel.cn/user/apikey",
+    hint: '还没有密钥？<a href="https://open.bigmodel.cn/user/apikey" id="cloud-register-link">点击免费注册智谱 AI</a>，注册后在 API Keys 页面创建密钥。'
+  },
+  deepseek: {
+    name: "DeepSeek",
+    baseUrl: "https://api.deepseek.com/v1/",
+    models: [
+      { value: "deepseek-chat", label: "DeepSeek-V3（对话）" },
+      { value: "deepseek-reasoner", label: "DeepSeek-R1（推理）" }
+    ],
+    registerUrl: "https://platform.deepseek.com/api_keys",
+    hint: '还没有密钥？<a href="https://platform.deepseek.com/" id="cloud-register-link">点击注册 DeepSeek</a>。'
+  },
+  kimi: {
+    name: "Kimi（月之暗面）",
+    baseUrl: "https://api.moonshot.cn/v1/",
+    models: [
+      { value: "moonshot-v1-8k", label: "Moonshot V1 8K" },
+      { value: "moonshot-v1-32k", label: "Moonshot V1 32K" },
+      { value: "moonshot-v1-128k", label: "Moonshot V1 128K" }
+    ],
+    registerUrl: "https://platform.moonshot.cn/console/api-keys",
+    hint: '还没有密钥？<a href="https://platform.moonshot.cn/" id="cloud-register-link">点击注册 Kimi</a>。'
+  },
+  doubao: {
+    name: "豆包（字节跳动）",
+    baseUrl: "https://ark.cn-beijing.volces.com/api/v3/",
+    models: [
+      { value: "doubao-pro-4k", label: "Doubao Pro 4K" },
+      { value: "doubao-pro-32k", label: "Doubao Pro 32K" },
+      { value: "doubao-pro-128k", label: "Doubao Pro 128K" },
+      { value: "doubao-lite-4k", label: "Doubao Lite 4K（免费额度）" }
+    ],
+    registerUrl: "https://console.volcengine.com/ark",
+    hint: '还没有密钥？<a href="https://console.volcengine.com/ark" id="cloud-register-link">点击注册豆包</a>，在火山引擎控制台创建 API Key。'
+  },
+  openai: {
+    name: "OpenAI（ChatGPT）",
+    baseUrl: "https://api.openai.com/v1/",
+    models: [
+      { value: "gpt-4o", label: "GPT-4o" },
+      { value: "gpt-4o-mini", label: "GPT-4o Mini" },
+      { value: "gpt-4-turbo", label: "GPT-4 Turbo" },
+      { value: "o1-preview", label: "o1 Preview" }
+    ],
+    registerUrl: "https://platform.openai.com/api-keys",
+    hint: '需要 OpenAI API Key。<a href="https://platform.openai.com/api-keys" id="cloud-register-link">点击管理密钥</a>。'
+  },
+  gemini: {
+    name: "Google Gemini",
+    baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai/",
+    models: [
+      { value: "gemini-2.0-flash", label: "Gemini 2.0 Flash" },
+      { value: "gemini-1.5-pro", label: "Gemini 1.5 Pro" },
+      { value: "gemini-1.5-flash", label: "Gemini 1.5 Flash" }
+    ],
+    registerUrl: "https://aistudio.google.com/apikey",
+    hint: '需要 Google AI API Key。<a href="https://aistudio.google.com/apikey" id="cloud-register-link">点击获取密钥</a>。'
+  },
+  siliconflow: {
+    name: "硅基流动",
+    baseUrl: "https://api.siliconflow.cn/v1/",
+    models: [
+      { value: "deepseek-ai/DeepSeek-V3", label: "DeepSeek V3" },
+      { value: "Qwen/Qwen3-8B", label: "Qwen3 8B（免费）" },
+      { value: "Qwen/Qwen2.5-72B-Instruct", label: "Qwen2.5 72B" },
+      { value: "meta-llama/Meta-Llama-3.1-8B-Instruct", label: "Llama 3.1 8B" }
+    ],
+    registerUrl: "https://cloud.siliconflow.cn/",
+    hint: '还没有密钥？<a href="https://cloud.siliconflow.cn/" id="cloud-register-link">点击免费注册硅基流动</a>。'
+  },
+  custom: {
+    name: "自定义",
+    baseUrl: "",
+    models: [{ value: "custom", label: "自定义模型（请在下方填写）" }],
+    registerUrl: "",
+    hint: '填写任意 OpenAI 兼容的 API 地址和密钥。'
+  }
+};
+
 document.querySelector("#cloud-provider")?.addEventListener("change", () => {
   const provider = document.querySelector("#cloud-provider").value;
   const modelSelect = document.querySelector("#cloud-model");
   const customFields = document.querySelector("#cloud-custom-fields");
   const keyHint = document.querySelector("#cloud-key-hint");
-  const registerLink = document.querySelector("#cloud-register-link");
-  if (provider === "zhipu") {
-    modelSelect.innerHTML = '<option value="glm-4-flash">GLM-4-Flash（永久免费）</option><option value="glm-4.7-flash">GLM-4.7-Flash（免费）</option><option value="glm-4-plus">GLM-4-Plus（付费，更强）</option><option value="glm-4-long">GLM-4-Long（付费，超长文本）</option>';
-    customFields.hidden = true;
-    document.querySelector("#cloud-base-url").value = "https://open.bigmodel.cn/api/paas/v4/";
-    if (registerLink) registerLink.href = "https://open.bigmodel.cn/user/apikey";
-    if (keyHint) keyHint.innerHTML = '还没有密钥？<a href="https://open.bigmodel.cn/user/apikey" id="cloud-register-link">点击免费注册智谱 AI</a>，注册后在 API Keys 页面创建密钥。';
-  } else if (provider === "siliconflow") {
-    modelSelect.innerHTML = '<option value="deepseek-ai/DeepSeek-V3">DeepSeek V3</option><option value="Qwen/Qwen3-8B">Qwen3 8B（免费）</option><option value="Qwen/Qwen2.5-72B-Instruct">Qwen2.5 72B</option><option value="meta-llama/Meta-Llama-3.1-8B-Instruct">Llama 3.1 8B</option>';
-    customFields.hidden = true;
-    document.querySelector("#cloud-base-url").value = "https://api.siliconflow.cn/v1/";
-    if (keyHint) keyHint.innerHTML = '还没有密钥？<a href="https://cloud.siliconflow.cn/" id="cloud-register-link">点击免费注册硅基流动</a>。';
-  } else {
-    modelSelect.innerHTML = '<option value="custom">自定义模型（请在下方填写）</option>';
-    customFields.hidden = false;
-    document.querySelector("#cloud-base-url").value = "";
-    if (keyHint) keyHint.innerHTML = '填写任意 OpenAI 兼容的 API 地址和密钥。';
-  }
+  const providerHint = document.querySelector("#cloud-provider-hint");
+  const config = CLOUD_PROVIDERS[provider];
+  if (!config) return;
+  // 更新模型下拉
+  modelSelect.innerHTML = config.models.map((m) => `<option value="${m.value}">${m.label}</option>`).join("");
+  // 更新服务商提示
+  if (providerHint) providerHint.textContent = config.name === "智谱 AI" ? "智谱 AI 的 GLM-4-Flash 模型永久免费，适合日常对话。" : `${config.name} — 在下方输入 API 密钥后即可使用。`;
+  // 显示/隐藏自定义字段
+  customFields.hidden = provider !== "custom";
+  if (config.baseUrl) document.querySelector("#cloud-base-url").value = config.baseUrl;
+  else document.querySelector("#cloud-base-url").value = "";
+  // 更新密钥提示
+  if (keyHint) keyHint.innerHTML = config.hint;
 });
 
 document.querySelector("#toggle-cloud-key")?.addEventListener("click", () => {
@@ -1054,17 +1112,6 @@ window.claudeNas.onChatEvent((event) => {
     elements.messages.scrollTop = elements.messages.scrollHeight;
   }
 });
-async function runAppAction(action) {
-  if (action === "new-chat") await createNewConversation();
-  else if (action === "settings") await openSettings();
-  else if (action === "archive") {
-    try { await window.claudeNas.openArchiveDirectory(); }
-    catch (error) { alert(error.message); }
-  } else if (action === "diagnostics") {
-    try { await window.claudeNas.openDiagnostics(); }
-    catch (error) { alert(error.message); }
-  }
-}
 
 function closeAppMenus(except) {
   document.querySelectorAll(".menu-group.open").forEach((group) => {
@@ -1541,16 +1588,26 @@ window.claudeNas.onNetworkStatusChange((event) => {
 
 function applyTheme(theme) {
   document.documentElement.setAttribute("data-theme", theme);
-  const toggle = document.querySelector("#theme-toggle");
-  if (toggle) toggle.textContent = theme === "dark" ? "🌙" : "☀️";
+  // 更新外观面板中的主题按钮状态
+  document.querySelector("#theme-dark")?.classList.toggle("active", theme === "dark");
+  document.querySelector("#theme-light")?.classList.toggle("active", theme === "light");
+  // 更新毛玻璃 RGB 值（深色/浅色不同底色）
+  updateFrostedGlassRGB(theme);
   try { localStorage.setItem("theme", theme); } catch {}
 }
 
-document.querySelector("#theme-toggle").addEventListener("click", async () => {
-  const current = document.documentElement.getAttribute("data-theme") || "dark";
-  const next = current === "dark" ? "light" : "dark";
-  applyTheme(next);
-  try { await window.claudeNas.saveSettings({ ...(await window.claudeNas.loadSettings()), theme: next }); } catch {}
+function updateFrostedGlassRGB(theme) {
+  const dark = theme !== "light";
+  document.documentElement.style.setProperty("--main-bg-rgb", dark ? "27, 34, 39" : "240, 242, 245");
+}
+
+document.querySelector("#theme-dark")?.addEventListener("click", async () => {
+  applyTheme("dark");
+  try { await window.claudeNas.saveSettings({ ...(await window.claudeNas.loadSettings()), theme: "dark" }); } catch {}
+});
+document.querySelector("#theme-light")?.addEventListener("click", async () => {
+  applyTheme("light");
+  try { await window.claudeNas.saveSettings({ ...(await window.claudeNas.loadSettings()), theme: "light" }); } catch {}
 });
 
 // 初始化主题（优先使用主进程推送，回退到设置和 localStorage）
@@ -1561,7 +1618,6 @@ function initTheme(theme) {
   applyTheme(theme || "dark");
 }
 window.claudeNas.onThemeInit((theme) => initTheme(theme));
-// 回退：如果主进程推送未到达，1秒后用 localStorage 或默认值
 setTimeout(() => {
   if (!themeInitialized) initTheme(localStorage.getItem("theme") || "dark");
 }, 1000);
@@ -1585,6 +1641,15 @@ window.claudeNas.onNetworkLatency((summary) => {
   if (currentMode) updateModeDisplay(currentMode);
   // 初始化网络配置
   populateNetworkSettings(settings);
+  // 初始化外观设置
+  appearanceSettings.frostedGlass = Boolean(settings.frostedGlass);
+  appearanceSettings.frostedBlur = Number(settings.frostedBlur) || 20;
+  appearanceSettings.frostedOpacity = Number(settings.frostedOpacity) || 85;
+  appearanceSettings.backgroundImage = settings.backgroundImage || "";
+  appearanceSettings.backgroundBlur = Number(settings.backgroundBlur) || 0;
+  appearanceSettings.backgroundOpacity = Number(settings.backgroundOpacity) || 100;
+  applyFrostedGlass();
+  applyBackgroundImage();
   const conversations = await window.claudeNas.listConversations();
   if (conversations.length) await loadConversation(conversations[0].id);
   else await createNewConversation();
@@ -1759,3 +1824,342 @@ document.addEventListener("keydown", (e) => {
     submitAuthCode();
   }
 });
+
+// ── 右键菜单 ──────────────────────────────────────────
+
+let activeContextMenu = null;
+
+function showMessageContextMenu(event, item, kind) {
+  event.preventDefault();
+  closeContextMenu();
+  const menu = document.querySelector("#context-menu");
+  const content = menu.querySelector(".context-menu-content");
+  content.replaceChildren();
+
+  // 通用：复制
+  const copyItem = createContextMenuItem("📋", "复制文本", () => {
+    const text = item.querySelector(".message-content").textContent;
+    navigator.clipboard.writeText(text).then(() => {}).catch(() => {});
+    closeContextMenu();
+  });
+  content.append(copyItem);
+
+  if (kind === "user") {
+    // 用户消息：编辑、引用、删除+同步删除AI回复
+    const editItem = createContextMenuItem("✎", "编辑消息", () => {
+      elements.prompt.value = item.querySelector(".message-content").textContent;
+      adjustTextarea();
+      elements.prompt.focus();
+      closeContextMenu();
+    });
+    content.append(editItem);
+
+    const quoteItem = createContextMenuItem("❝", "引用到输入框", () => {
+      const text = item.querySelector(".message-content").textContent;
+      elements.prompt.value = `> ${text.split("\n").join("\n> ")}\n\n` + elements.prompt.value;
+      adjustTextarea();
+      elements.prompt.focus();
+      closeContextMenu();
+    });
+    content.append(quoteItem);
+
+    content.append(createContextMenuSeparator());
+
+    const deleteItem = createContextMenuItem("🗑", "删除此条及下方所有消息", () => {
+      const allMessages = Array.from(elements.messages.querySelectorAll(".message"));
+      const startIndex = allMessages.indexOf(item);
+      if (startIndex === -1) { closeContextMenu(); return; }
+      // 删除当前及后续所有消息
+      for (let i = allMessages.length - 1; i >= startIndex; i--) {
+        allMessages[i].remove();
+      }
+      // 如果没有消息了，显示空状态
+      if (!elements.messages.querySelector(".message")) {
+        elements.empty.hidden = false;
+      }
+      closeContextMenu();
+    }, true);
+    content.append(deleteItem);
+  } else if (kind === "assistant") {
+    // AI消息：重新生成
+    content.append(createContextMenuSeparator());
+
+    const retryItem = createContextMenuItem("↻", "重新生成", () => {
+      retryFromMessage(item);
+      closeContextMenu();
+    });
+    content.append(retryItem);
+  }
+
+  // 定位菜单
+  menu.hidden = false;
+  const menuRect = menu.getBoundingClientRect();
+  const x = Math.min(event.clientX, window.innerWidth - menuRect.width - 8);
+  const y = Math.min(event.clientY, window.innerHeight - menuRect.height - 8);
+  menu.style.left = x + "px";
+  menu.style.top = y + "px";
+  activeContextMenu = menu;
+
+  // 点击其他地方关闭
+  setTimeout(() => document.addEventListener("click", closeContextMenu, true));
+}
+
+function createContextMenuItem(icon, label, handler, isDanger = false) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "context-menu-item" + (isDanger ? " danger" : "");
+  button.innerHTML = `<span class="context-icon">${icon}</span>${label}`;
+  button.addEventListener("click", handler);
+  return button;
+}
+
+function createContextMenuSeparator() {
+  const div = document.createElement("div");
+  div.className = "context-menu-separator";
+  return div;
+}
+
+function closeContextMenu() {
+  const menu = document.querySelector("#context-menu");
+  if (menu) menu.hidden = true;
+  document.removeEventListener("click", closeContextMenu, true);
+  activeContextMenu = null;
+}
+
+// Escape 关闭右键菜单
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && activeContextMenu) {
+    closeContextMenu();
+    e.preventDefault();
+  }
+});
+
+// ── 外观设置面板 ──────────────────────────────────────────
+
+async function openAppearanceDialog() {
+  const dialog = document.querySelector("#appearance-dialog");
+  // 加载当前设置
+  const settings = await window.claudeNas.loadSettings();
+  appearanceSettings.frostedGlass = Boolean(settings.frostedGlass);
+  appearanceSettings.frostedBlur = Number(settings.frostedBlur) || 20;
+  appearanceSettings.frostedOpacity = Number(settings.frostedOpacity) || 85;
+  appearanceSettings.backgroundImage = settings.backgroundImage || "";
+  appearanceSettings.backgroundBlur = Number(settings.backgroundBlur) || 0;
+  appearanceSettings.backgroundOpacity = Number(settings.backgroundOpacity) || 100;
+
+  // 硬件检测
+  const toggle = document.querySelector("#frosted-glass-toggle");
+  const statusEl = document.querySelector("#frosted-glass-status");
+  const hardwareOK = detectFrostedGlassSupport();
+  if (!hardwareOK) {
+    toggle.disabled = true;
+    toggle.checked = false;
+    statusEl.textContent = "⚠️ 当前设备不支持毛玻璃效果（需 GPU 加速）";
+    appearanceSettings.frostedGlass = false;
+  } else {
+    toggle.disabled = false;
+    toggle.checked = appearanceSettings.frostedGlass;
+    statusEl.textContent = appearanceSettings.frostedGlass ? "毛玻璃效果已开启" : "点击开关启用毛玻璃效果";
+  }
+
+  // 滑块
+  document.querySelector("#frosted-blur-range").value = appearanceSettings.frostedBlur;
+  document.querySelector("#blur-value-label").textContent = appearanceSettings.frostedBlur + "px";
+  document.querySelector("#frosted-opacity-range").value = appearanceSettings.frostedOpacity;
+  document.querySelector("#opacity-value-label").textContent = appearanceSettings.frostedOpacity + "%";
+
+  // 主题按钮状态
+  const currentTheme = document.documentElement.getAttribute("data-theme") || "dark";
+  document.querySelector("#theme-dark").classList.toggle("active", currentTheme === "dark");
+  document.querySelector("#theme-light").classList.toggle("active", currentTheme === "light");
+
+  // 背景图片
+  updateBackgroundPreview();
+
+  dialog.showModal();
+}
+
+function detectFrostedGlassSupport() {
+  // 检测 GPU 和 backdrop-filter 支持
+  try {
+    // WebGL 检测
+    const canvas = document.createElement("canvas");
+    const gl = canvas.getContext("webgl") || canvas.getContext("experimental-webgl");
+    if (!gl) return false;
+    // 检查 renderer 是否为软件渲染
+    const debugInfo = gl.getExtension("WEBGL_debug_renderer_info");
+    if (debugInfo) {
+      const renderer = gl.getParameter(debugInfo.UNMASKED_RENDERER_WEBGL);
+      // 排除已知软件渲染器
+      if (renderer && (renderer.includes("SwiftShader") || renderer.includes("llvmpipe") || renderer.includes("Software"))) {
+        return false;
+      }
+    }
+    // CSS backdrop-filter 检测
+    return CSS.supports("backdrop-filter", "blur(1px)") || CSS.supports("-webkit-backdrop-filter", "blur(1px)");
+  } catch {
+    return false;
+  }
+}
+
+function updateBackgroundPreview() {
+  const noneCard = document.querySelector("#background-preview-none");
+  const uploadCard = document.querySelector("#background-preview-upload");
+  const uploadSection = document.querySelector("#background-upload-section");
+  const blurRow = document.querySelector("#background-blur-row");
+  const opacityRow = document.querySelector("#background-opacity-row");
+  const pathInput = document.querySelector("#background-image-path");
+
+  noneCard.classList.toggle("background-preview-active", !appearanceSettings.backgroundImage);
+  uploadCard.classList.toggle("background-preview-active", Boolean(appearanceSettings.backgroundImage));
+  uploadSection.hidden = !appearanceSettings.backgroundImage && !pathInput?.value;
+  if (appearanceSettings.backgroundImage) {
+    pathInput.value = appearanceSettings.backgroundImage === "[uploaded]" ? "已选择本地图片" : appearanceSettings.backgroundImage;
+    uploadSection.hidden = false;
+  }
+  blurRow.hidden = !appearanceSettings.backgroundImage;
+  opacityRow.hidden = !appearanceSettings.backgroundImage;
+  if (blurRow.hidden === false) {
+    document.querySelector("#background-blur-range").value = appearanceSettings.backgroundBlur;
+    document.querySelector("#bg-blur-value-label").textContent = appearanceSettings.backgroundBlur + "px";
+    document.querySelector("#background-opacity-range").value = appearanceSettings.backgroundOpacity;
+    document.querySelector("#bg-opacity-value-label").textContent = appearanceSettings.backgroundOpacity + "%";
+  }
+}
+
+function applyFrostedGlass() {
+  const main = document.querySelector(".main");
+  if (!main) return;
+  main.classList.toggle("frosted", appearanceSettings.frostedGlass);
+  document.documentElement.style.setProperty("--frosted-blur", appearanceSettings.frostedBlur + "px");
+  document.documentElement.style.setProperty("--frosted-opacity", (appearanceSettings.frostedOpacity / 100).toFixed(2));
+}
+
+function applyBackgroundImage() {
+  const main = document.querySelector(".main");
+  if (!main) return;
+  if (appearanceSettings.backgroundImage) {
+    main.classList.add("background-image");
+    main.style.setProperty("--bg-image-blur", appearanceSettings.backgroundBlur + "px");
+    if (appearanceSettings.backgroundImage.startsWith("data:") || appearanceSettings.backgroundImage.startsWith("blob:")) {
+      main.style.backgroundImage = `url(${appearanceSettings.backgroundImage})`;
+    } else {
+      main.style.backgroundImage = `url(${appearanceSettings.backgroundImage.replace(/'/g, "\\'")})`;
+    }
+    // 背景透明度通过 opacity 滤镜叠加
+    main.style.setProperty("--bg-image-opacity", (appearanceSettings.backgroundOpacity / 100).toFixed(2));
+  } else {
+    main.classList.remove("background-image");
+    main.style.backgroundImage = "";
+    main.style.removeProperty("--bg-image-blur");
+    main.style.removeProperty("--bg-image-opacity");
+  }
+}
+
+// ── 外观设置事件绑定 ──
+
+// 毛玻璃开关
+document.querySelector("#frosted-glass-toggle")?.addEventListener("change", async () => {
+  appearanceSettings.frostedGlass = document.querySelector("#frosted-glass-toggle").checked;
+  document.querySelector("#frosted-glass-status").textContent = appearanceSettings.frostedGlass ? "毛玻璃效果已开启" : "点击开关启用毛玻璃效果";
+  applyFrostedGlass();
+  try { await window.claudeNas.saveSettings({ ...(await window.claudeNas.loadSettings()), frostedGlass: appearanceSettings.frostedGlass, frostedBlur: appearanceSettings.frostedBlur, frostedOpacity: appearanceSettings.frostedOpacity }); } catch {}
+});
+
+// 毛玻璃模糊强度
+document.querySelector("#frosted-blur-range")?.addEventListener("input", () => {
+  appearanceSettings.frostedBlur = Number(document.querySelector("#frosted-blur-range").value);
+  document.querySelector("#blur-value-label").textContent = appearanceSettings.frostedBlur + "px";
+  applyFrostedGlass();
+});
+document.querySelector("#frosted-blur-range")?.addEventListener("change", async () => {
+  try { await window.claudeNas.saveSettings({ ...(await window.claudeNas.loadSettings()), frostedBlur: appearanceSettings.frostedBlur }); } catch {}
+});
+
+// 毛玻璃透明度
+document.querySelector("#frosted-opacity-range")?.addEventListener("input", () => {
+  appearanceSettings.frostedOpacity = Number(document.querySelector("#frosted-opacity-range").value);
+  document.querySelector("#opacity-value-label").textContent = appearanceSettings.frostedOpacity + "%";
+  applyFrostedGlass();
+});
+document.querySelector("#frosted-opacity-range")?.addEventListener("change", async () => {
+  try { await window.claudeNas.saveSettings({ ...(await window.claudeNas.loadSettings()), frostedOpacity: appearanceSettings.frostedOpacity }); } catch {}
+});
+
+// 背景图片选择
+document.querySelector("#background-preview-none")?.addEventListener("click", async () => {
+  appearanceSettings.backgroundImage = "";
+  updateBackgroundPreview();
+  applyBackgroundImage();
+  try { await window.claudeNas.saveSettings({ ...(await window.claudeNas.loadSettings()), backgroundImage: "", backgroundBlur: 0, backgroundOpacity: 100 }); } catch {}
+});
+
+document.querySelector("#background-preview-upload")?.addEventListener("click", () => {
+  document.querySelector("#background-upload-section").hidden = false;
+  document.querySelector("#choose-background-image").click();
+});
+
+document.querySelector("#choose-background-image")?.addEventListener("click", () => {
+  const input = document.createElement("input");
+  input.type = "file";
+  input.accept = "image/jpeg,image/png,image/webp";
+  input.addEventListener("change", () => {
+    const file = input.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = async () => {
+      appearanceSettings.backgroundImage = reader.result; // data URL
+      updateBackgroundPreview();
+      applyBackgroundImage();
+      try { await window.claudeNas.saveSettings({ ...(await window.claudeNas.loadSettings()), backgroundImage: appearanceSettings.backgroundImage, backgroundBlur: appearanceSettings.backgroundBlur, backgroundOpacity: appearanceSettings.backgroundOpacity }); } catch {}
+    };
+    reader.readAsDataURL(file);
+  });
+  input.click();
+});
+
+document.querySelector("#clear-background-image")?.addEventListener("click", async () => {
+  appearanceSettings.backgroundImage = "";
+  document.querySelector("#background-image-path").value = "";
+  updateBackgroundPreview();
+  applyBackgroundImage();
+  try { await window.claudeNas.saveSettings({ ...(await window.claudeNas.loadSettings()), backgroundImage: "", backgroundBlur: 0, backgroundOpacity: 100 }); } catch {}
+});
+
+// 背景模糊滑块
+document.querySelector("#background-blur-range")?.addEventListener("input", () => {
+  appearanceSettings.backgroundBlur = Number(document.querySelector("#background-blur-range").value);
+  document.querySelector("#bg-blur-value-label").textContent = appearanceSettings.backgroundBlur + "px";
+  applyBackgroundImage();
+});
+document.querySelector("#background-blur-range")?.addEventListener("change", async () => {
+  try { await window.claudeNas.saveSettings({ ...(await window.claudeNas.loadSettings()), backgroundBlur: appearanceSettings.backgroundBlur }); } catch {}
+});
+
+// 背景透明度滑块
+document.querySelector("#background-opacity-range")?.addEventListener("input", () => {
+  appearanceSettings.backgroundOpacity = Number(document.querySelector("#background-opacity-range").value);
+  document.querySelector("#bg-opacity-value-label").textContent = appearanceSettings.backgroundOpacity + "%";
+  applyBackgroundImage();
+});
+document.querySelector("#background-opacity-range")?.addEventListener("change", async () => {
+  try { await window.claudeNas.saveSettings({ ...(await window.claudeNas.loadSettings()), backgroundOpacity: appearanceSettings.backgroundOpacity }); } catch {}
+});
+
+// 外观设置面板关闭时同步
+document.querySelector("#appearance-dialog")?.addEventListener("close", () => {});
+
+// ── 菜单增加"外观设置" ──
+
+async function runAppAction(action) {
+  if (action === "new-chat") await createNewConversation();
+  else if (action === "settings") await openSettings();
+  else if (action === "appearance") await openAppearanceDialog();
+  else if (action === "archive") {
+    try { await window.claudeNas.openArchiveDirectory(); }
+    catch (error) { alert(error.message); }
+  } else if (action === "diagnostics") {
+    try { await window.claudeNas.openDiagnostics(); }
+    catch (error) { alert(error.message); }
+  }
+}

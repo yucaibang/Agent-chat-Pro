@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self'; script-src 'self'; img-src 'self' data:" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self'; script-src 'self'; img-src 'self' data: blob:; connect-src 'self' https:" />
     <title>Agent Chat Pro</title>
     <link rel="stylesheet" href="styles.css" />
     <script defer src="renderer.js"></script>
@@ -48,6 +48,7 @@
             <button type="button" class="menu-trigger">设置</button>
             <div class="menu-dropdown">
               <button type="button" data-app-action="settings">连接设置</button>
+              <button type="button" data-app-action="appearance">外观设置</button>
               <button type="button" data-app-action="archive">打开会话存档</button>
               <button type="button" data-app-action="diagnostics">打开诊断日志</button>
             </div>
@@ -123,8 +124,7 @@
           <p id="connection-subtitle">通过 SSH 使用 NAS 上的 Agent CLI</p>
           <span id="chat-mode-badge" class="chat-mode-badge" title="当前模式">🛡 常规模式</span>
         </div>
-        <button id="theme-toggle" class="icon-button" title="切换主题">🌙</button>
-        <button id="header-settings" class="icon-button" title="连接设置">⚙</button>
+        <button id="header-appearance" class="icon-button" title="外观设置">⚙</button>
       </header>
 
       <section id="empty-state" class="empty-state">
@@ -148,6 +148,7 @@
     </main>
       </div>
 
+    <!-- ── 连接设置弹窗 ── -->
     <dialog id="settings-dialog">
       <form id="settings-form" autocomplete="off">
         <div class="dialog-heading">
@@ -167,10 +168,15 @@
           <label>API 服务商
             <select id="cloud-provider">
               <option value="zhipu">智谱 AI（GLM-4-Flash 永久免费）</option>
+              <option value="deepseek">DeepSeek</option>
+              <option value="kimi">Kimi（月之暗面）</option>
+              <option value="doubao">豆包（字节跳动）</option>
+              <option value="openai">OpenAI（ChatGPT）</option>
+              <option value="gemini">Google Gemini</option>
               <option value="siliconflow">硅基流动</option>
               <option value="custom">自定义 OpenAI 兼容 API</option>
             </select>
-            <span class="field-hint">智谱 AI 的 GLM-4-Flash 模型永久免费，适合日常对话。注册即送 2000 万 Token。</span>
+            <span class="field-hint" id="cloud-provider-hint">智谱 AI 的 GLM-4-Flash 模型永久免费，适合日常对话。</span>
           </label>
           <label>API 密钥
             <div class="password-row">
@@ -209,7 +215,7 @@
         <label>Agent 唤醒命令<input name="wakeName" required placeholder="当前例如：claude 或完整路径" /></label>
         <label>本机标识
           <input name="clientLabel" required maxlength="32" placeholder="例如：JIANG-PC" />
-          <span class="field-hint">每次消息会在后台附加“来源电脑”，便于 Agent 判断“我的桌面”是哪台电脑；聊天气泡不会重复显示。</span>
+          <span class="field-hint">每次消息会在后台附加"来源电脑"，便于 Agent 判断"我的桌面"是哪台电脑；聊天气泡不会重复显示。</span>
         </label>
         <label>聊天记录保存位置
           <div class="directory-row">
@@ -218,7 +224,7 @@
             <button type="button" id="open-directory" class="password-toggle">打开</button>
             <button type="button" id="open-archive" class="password-toggle">存档</button>
           </div>
-          <span class="field-hint">会话自动另存到此目录下的“会话存档”；可选择 D 盘，切换时会复制现有历史和存档</span>
+          <span class="field-hint">会话自动另存到此目录下的"会话存档"；可选择 D 盘，切换时会复制现有历史和存档</span>
         </label>
         <details>
           <summary>可选设置</summary>
@@ -336,6 +342,93 @@
         </div>
       </form>
     </dialog>
+
+    <!-- ── 外观设置弹窗 ── -->
+    <dialog id="appearance-dialog">
+      <div class="dialog-heading">
+        <div><h2>外观设置</h2><p>调整主题、背景和视觉效果</p></div>
+        <button type="button" class="close-button" id="close-appearance">×</button>
+      </div>
+      <div class="appearance-body">
+        <label class="appearance-row">
+          <div class="appearance-label">
+            <strong>主题</strong>
+            <small>切换深色或浅色外观</small>
+          </div>
+          <div class="mode-switch" role="group" aria-label="主题">
+            <button type="button" id="theme-dark" data-theme-value="dark">🌙 深色</button>
+            <button type="button" id="theme-light" data-theme-value="light">☀️ 浅色</button>
+          </div>
+        </label>
+        <label class="appearance-row">
+          <div class="appearance-label">
+            <strong>毛玻璃效果</strong>
+            <small id="frosted-glass-status">检测硬件支持中…</small>
+          </div>
+          <label class="toggle-switch">
+            <input type="checkbox" id="frosted-glass-toggle" />
+            <span class="toggle-slider"></span>
+          </label>
+        </label>
+        <label class="appearance-row">
+          <div class="appearance-label">
+            <strong>毛玻璃模糊强度</strong>
+            <small id="blur-value-label">20px</small>
+          </div>
+          <input type="range" id="frosted-blur-range" min="4" max="60" value="20" class="appearance-range" />
+        </label>
+        <label class="appearance-row">
+          <div class="appearance-label">
+            <strong>背景透明度</strong>
+            <small id="opacity-value-label">85%</small>
+          </div>
+          <input type="range" id="frosted-opacity-range" min="20" max="100" value="85" class="appearance-range" />
+        </label>
+        <div class="appearance-section">
+          <div class="appearance-section-heading">
+            <strong>背景图片</strong>
+            <small>设置聊天区背景，支持本地上传或网络搜索</small>
+          </div>
+          <div class="background-preview-area" id="background-preview-area">
+            <div id="background-preview-none" class="background-preview-card background-preview-active">
+              <span>🎨</span>
+              <small>无背景</small>
+            </div>
+            <div id="background-preview-upload" class="background-preview-card">
+              <span>📁</span>
+              <small>本地上传</small>
+            </div>
+          </div>
+          <div id="background-upload-section" hidden>
+            <div class="directory-row">
+              <input id="background-image-path" readonly placeholder="选择本地图片作为背景" />
+              <button type="button" id="choose-background-image" class="password-toggle">选择图片</button>
+              <button type="button" id="clear-background-image" class="password-toggle danger-button">清除</button>
+            </div>
+            <span class="field-hint">支持 JPG、PNG、WebP 格式，建议分辨率与屏幕接近</span>
+          </div>
+          <label class="appearance-row" id="background-blur-row" hidden>
+            <div class="appearance-label">
+              <strong>背景模糊</strong>
+              <small id="bg-blur-value-label">0px</small>
+            </div>
+            <input type="range" id="background-blur-range" min="0" max="30" value="0" class="appearance-range" />
+          </label>
+          <label class="appearance-row" id="background-opacity-row" hidden>
+            <div class="appearance-label">
+              <strong>背景透明度</strong>
+              <small id="bg-opacity-value-label">100%</small>
+            </div>
+            <input type="range" id="background-opacity-range" min="10" max="100" value="100" class="appearance-range" />
+          </label>
+        </div>
+      </div>
+    </dialog>
+
+    <!-- ── 右键菜单 ── -->
+    <div id="context-menu" class="context-menu" hidden>
+      <div class="context-menu-content"></div>
+    </div>
 
     <dialog id="mode-edit-dialog">
       <form id="mode-edit-form" autocomplete="off">

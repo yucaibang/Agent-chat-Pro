@@ -643,7 +643,12 @@ app.whenReady().then(async () => {
     }
     if (mode === "cloud") {
       const savedConfig = getCloudAiConfig();
-      const config = { ...savedConfig, ...(input?.cloudAi || {}) };
+      const inputOverrides = {};
+      if (input?.cloudAiApiKey) inputOverrides.apiKey = input.cloudAiApiKey;
+      if (input?.cloudAiBaseUrl) inputOverrides.baseURL = input.cloudAiBaseUrl;
+      if (input?.cloudAiModel) inputOverrides.model = input.cloudAiModel;
+      if (input?.cloudAiProvider) inputOverrides.provider = input.cloudAiProvider;
+      const config = { ...savedConfig, ...inputOverrides };
       if (!config.apiKey) throw new Error("请输入云端 AI 密钥。");
       writeLog("connection_test_start", { connectionMode: "cloud", baseURL: config.baseURL, model: config.model });
       try {
