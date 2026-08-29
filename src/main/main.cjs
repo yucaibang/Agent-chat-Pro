@@ -1,9 +1,10 @@
 "use strict";
 
 const { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, shell } = require("electron");
+const fs = require("fs");
 const path = require("path");
 const { randomUUID } = require("crypto");
-const { getConnection, getSettings, getSshConnection, getCloudAiConfig, saveSettings, setModelAdminPassword, trustHostFingerprint, verifyModelAdminPassword } = require("./settings.cjs");
+const { getConnection, getSettings, getSshConnection, getCloudAiConfig, sameSshTarget, saveSettings, setModelAdminPassword, trustHostFingerprint, verifyModelAdminPassword } = require("./settings.cjs");
 const { downloadRemoteFile, ensureDeviceControlKey, finalizeDeviceControl, getAgentSdkBridgeStatus, getClaudeModelStatus, installAgentSdkBridge, markDeviceControlDisabled, readRemoteFile, runClaude, uninstallAgentSdkBridge, updateClaudeModel, verifyConnection } = require("./ssh.cjs");
 const { copyLocalFile, getLocalClaudeModelStatus, readLocalFile, runLocalClaude, updateLocalClaudeModel, verifyLocalConnection } = require("./local.cjs");
 const { getDeviceControlStatus, installDeviceControl, preferredAddress, uninstallDeviceControl } = require("./device-control.cjs");
@@ -20,6 +21,8 @@ const {
   archiveDirectory,
   prepareConversationDirectory,
   renameConversation,
+  setConversationPinned,
+  saveConversationSession,
   saveAssistantDraft,
   searchConversations,
   sessionForMode,
@@ -34,11 +37,25 @@ const { NetworkManager, STATES } = require("./network/network-manager.cjs");
 const { LatencyMonitor } = require("./network/latency-monitor.cjs");
 const { sendCloudChat, buildMessages, verifyCloudConnection } = require("./cloud-chat.cjs");
 const { AuthManager } = require("./auth/auth-manager.cjs");
-const { AUDIT_FILE_FORMATS, AUDIT_TOOL_ACTIONS, auditToolDetails, createStatusSignalObserver, normalizeStatusEvent } = require("./status-event-normalizer.cjs");
+const {
+  AUDIT_FILE_FORMATS,
+  AUDIT_TOOL_ACTIONS,
+  auditToolDetails,
+  createStatusSignalObserver,
+  normalizeStatusEvent
+} = require("./status-event-normalizer.cjs");
+const { readModelSettings, replaceModelSettings } = require("./model-config.cjs");
 
 let window;
 const activeRequests = new Map();
-const statusSignalObserver = createStatusSignalObserver({ enabled: true, onGap: (entry) => writeLog("status_signal_gap", entry) });
+const networkManager = new NetworkManager();
+const authManager = new AuthManager();
+let latencyMonitor = null;
+
+const statusSignalObserver = createStatusSignalObserver({
+  enabled: true,
+  onGap: (entry) => writeLog("status_signal_gap", entry)
+});
 
 function normalizeAndObserveStatusEvent(event, config) {
   const normalized = normalizeStatusEvent(event, { connection: config });
@@ -58,9 +75,115 @@ function statusJournalEntry(input = {}) {
     label: String(input.label || "其他活动").slice(0, 80)
   };
 }
-const networkManager = new NetworkManager();
-const authManager = new AuthManager();
-let latencyMonitor = null;
+
+function statusSignalEntry(input = {}) {
+  const directions = new Set(["renderer-sent", "preload-sent", "main-received", "executor-emitted", "main-sent", "preload-received", "renderer-received"]);
+  const signals = new Set(["chat-send", "chat-cancel", "chat-delta", "chat-event", "runner-event", "transport-event", "request-outcome"]);
+  const dispositions = new Set(["received", "accepted", "current", "stale", "missing-answer", "invalid", "attempt", "emitted", "started", "completed", "failed", "cancelled"]);
+  const eventTypes = new Set(["connection", "upload", "tool", "permission", "usage", "delta", "lifecycle", "transport"]);
+  const eventStatuses = new Set(["connecting", "reconnecting", "connected", "continuing", "stopping", "local-starting", "running", "completed", "failed", "denied", "waiting", "allowed", "started", "finished", "cancelled"]);
+  const safeToken = (value, fallback = "") => String(value || "").replace(/[^a-z0-9_-]/gi, "").slice(0, 80) || fallback;
+  return {
+    requestId: /^[0-9a-f-]{36}$/i.test(String(input.requestId || "")) ? input.requestId : "",
+    direction: directions.has(input.direction) ? input.direction : "renderer-received",
+    signal: signals.has(input.signal) ? input.signal : "chat-event",
+    disposition: dispositions.has(input.disposition) ? input.disposition : "invalid",
+    eventType: eventTypes.has(input.eventType) ? input.eventType : "",
+    eventStatus: eventStatuses.has(input.eventStatus) ? input.eventStatus : "",
+    toolId: safeToken(input.toolId),
+    toolName: safeToken(input.toolName),
+    toolStatus: eventStatuses.has(input.toolStatus) ? input.toolStatus : "",
+    textLength: Math.max(0, Math.min(10000000, Number(input.textLength) || 0)),
+    attachmentCount: Math.max(0, Math.min(10, Number(input.attachmentCount) || 0)),
+    attempt: Math.max(0, Math.min(12, Number(input.attempt) || 0)),
+    uploadPercent: Math.max(0, Math.min(100, Number(input.uploadPercent) || 0)),
+    transport: safeToken(input.transport),
+    parser: new Set(["parsed", "unparsed", "empty"]).has(input.parser) ? input.parser : "",
+    rawType: safeToken(input.rawType),
+    rawEventType: safeToken(input.rawEventType),
+    rawContentKind: safeToken(input.rawContentKind),
+    rawLength: Math.max(0, Math.min(10000000, Number(input.rawLength) || 0)),
+    toolAction: AUDIT_TOOL_ACTIONS.has(input.toolAction) ? input.toolAction : "",
+    fileFormats: Array.isArray(input.fileFormats) ? [...new Set(input.fileFormats.filter((format) => AUDIT_FILE_FORMATS.has(format)))].slice(0, 16) : [],
+    executionTarget: safeToken(input.executionTarget),
+    toolTargets: Array.isArray(input.toolTargets) ? [...new Set(input.toolTargets.map((target) => safeToken(target)).filter(Boolean))].slice(0, 8) : []
+  };
+}
+
+function statusToolLifecycleEntry(input = {}) {
+  const tones = new Set(["working", "proxy", "danger", "error"]);
+  const statuses = new Set(["running", "completed", "failed", "denied"]);
+  const safeToken = (value, fallback = "") => String(value || "").replace(/[^a-z0-9_-]/gi, "").slice(0, 80) || fallback;
+  const tool = input.tool || {};
+  const list = (value) => Array.isArray(value) ? value.slice(0, 30).map((item) => ({
+    id: safeToken(item?.id),
+    tone: tones.has(item?.tone) ? item.tone : "",
+    status: statuses.has(item?.status) ? item.status : ""
+  })).filter((item) => item.id) : [];
+  return {
+    requestId: /^[0-9a-f-]{36}$/i.test(String(input.requestId || "")) ? input.requestId : "",
+    transition: safeToken(input.transition, "unknown"),
+    toolId: safeToken(tool.toolId || tool.id),
+    toolName: safeToken(tool.toolName || tool.name),
+    toolStatus: statuses.has(tool.toolStatus || tool.status) ? (tool.toolStatus || tool.status) : "",
+    toolAction: AUDIT_TOOL_ACTIONS.has(tool.toolAction) ? tool.toolAction : "",
+    fileFormats: Array.isArray(tool.fileFormats) ? [...new Set(tool.fileFormats.filter((format) => AUDIT_FILE_FORMATS.has(format)))].slice(0, 16) : [],
+    toolTargets: Array.isArray(tool.toolTargets) ? [...new Set(tool.toolTargets.map((target) => safeToken(target)).filter(Boolean))].slice(0, 8) : [],
+    previousState: tones.has(input.previousState) || input.previousState === "idle" || input.previousState === "connected" ? input.previousState : "",
+    displayedState: tones.has(input.displayedState) || input.displayedState === "idle" || input.displayedState === "connected" ? input.displayedState : "",
+    previousTools: list(input.previousTools),
+    activeTools: list(input.activeTools),
+    selectedToolId: safeToken(input.selectedToolId),
+    selectedToolTone: tones.has(input.selectedToolTone) ? input.selectedToolTone : ""
+  };
+}
+
+function sendWorkStatusSignal(sender, channel, payload) {
+  const event = payload || {};
+  const tool = event.tool || {};
+  writeLog("work_status_signal", statusSignalEntry({
+    requestId: event.id,
+    direction: "main-sent",
+    signal: channel === "chat:delta" ? "chat-delta" : "chat-event",
+    disposition: "accepted",
+    eventType: event.type,
+    eventStatus: event.status,
+    toolId: tool.id,
+    toolName: tool.name,
+    ...(event.audit || (event.type === "tool" ? auditToolDetails(tool) : {})),
+    textLength: channel === "chat:delta" ? String(event.text || "").length : 0,
+    uploadPercent: event.type === "upload" ? Math.round(Number(event.overall || 0) * 100) : 0
+  }));
+  sender.send(channel, payload);
+}
+
+function applicationIconPath() {
+  return app.isPackaged
+    ? path.join(process.resourcesPath, "app-icon.ico")
+    : path.join(__dirname, "../../build/icon.ico");
+}
+
+function cleanupOpenFileCache() {
+  const directory = path.join(app.getPath("temp"), "Agent Orbit");
+  try { fs.rmSync(directory, { recursive: true, force: true }); }
+  catch (error) { writeLog("open_file_cache_cleanup_failed", { error }); }
+}
+
+function assertModelAdminPassword(value) {
+  if (!verifyModelAdminPassword(value)) throw new Error("模型管理员密码不正确。");
+}
+
+function bundledBridgeFiles() {
+  const directory = app.isPackaged
+    ? path.join(process.resourcesPath, "bridge")
+    : path.join(__dirname, "../bridge");
+  const files = ["agent-sdk-bridge.mjs", "package.json", "package-lock.json"];
+  return files.map((name) => {
+    const filePath = path.join(directory, name);
+    if (!fs.existsSync(filePath)) throw new Error(`增强 Bridge 资源不完整，缺少 ${name}。请重新下载完整程序。`);
+    return { name, data: fs.readFileSync(filePath) };
+  });
+}
 
 /** 保存网络连接状态到 settings */
 function persistNetworkState() {
@@ -77,19 +200,6 @@ function persistNetworkState() {
   }
 }
 
-function bundledBridgeFiles() {
-  const fs = require("fs");
-  const directory = path.join(__dirname, "../bridge");
-  const required = ["agent-sdk-bridge.mjs", "package.json"];
-  const optional = ["package-lock.json"];
-  const files = required.map((name) => ({ name, data: fs.readFileSync(path.join(directory, name)) }));
-  for (const name of optional) {
-    const filePath = path.join(directory, name);
-    if (fs.existsSync(filePath)) files.push({ name, data: fs.readFileSync(filePath) });
-  }
-  return files;
-}
-
 function createWindow() {
   window = new BrowserWindow({
     // ── 授权检查 ──
@@ -104,6 +214,7 @@ function createWindow() {
     hasShadow: true,
     roundedCorners: true,
     autoHideMenuBar: true,
+    icon: applicationIconPath(),
     webPreferences: {
       preload: path.join(__dirname, "preload.cjs"),
       contextIsolation: true,
@@ -124,6 +235,11 @@ function createWindow() {
   const publishState = () => window?.webContents.send("window:maximized", window.isMaximized());
   window.on("maximize", publishState);
   window.on("unmaximize", publishState);
+  window.on("focus", () => {
+    if (window.isDestroyed()) return;
+    window.webContents.focus();
+    window.webContents.send("window:focus");
+  });
   window.webContents.on("did-finish-load", publishState);
   window.webContents.on("render-process-gone", (_event, details) => writeLog("renderer_process_gone", details));
   window.on("unresponsive", () => writeLog("window_unresponsive"));
@@ -162,6 +278,7 @@ app.whenReady().then(async () => {
   // 授权通过或未授权（未授权时可使用云端AI）
   authManager.startPeriodicCheck();
 
+  cleanupOpenFileCache();
   try {
     const archived = ensureConversationArchives();
     writeLog("conversation_archives_ready", { conversations: archived, directory: archiveDirectory() });
@@ -226,6 +343,44 @@ app.whenReady().then(async () => {
       }
     }
   });
+  // ── 模型管理 IPC ──
+  ipcMain.handle("model:status", async () => {
+    const config = getConnection();
+    return config.connectionMode === "local"
+      ? getLocalClaudeModelStatus()
+      : getClaudeModelStatus(config, (fingerprint) => trustHost(config, fingerprint), writeLog);
+  });
+  ipcMain.handle("model:initialize-password", (_event, input) => {
+    const state = getSettings().modelAdminPasswordState;
+    if (state === "ready") throw new Error("模型管理员密码已初始化；如需更换请联系管理员。");
+    if (state === "unavailable") throw new Error("Windows 系统加密不可用，无法安全保存模型管理员密码。");
+    const password = String(input?.password || "");
+    if (password !== String(input?.confirmation || "")) throw new Error("两次输入的管理员密码不一致。");
+    setModelAdminPassword(password);
+    writeLog("model_admin_password_initialized");
+    return getSettings();
+  });
+  ipcMain.handle("model:update", async (_event, input) => {
+    if (activeRequests.size) throw new Error("Agent 正在回复，暂时不能切换模型。请等待当前回复结束后再操作。");
+    assertModelAdminPassword(input?.adminPassword);
+    const model = input?.model;
+    const config = getConnection();
+    const local = config.connectionMode === "local";
+    const answer = await dialog.showMessageBox(window, {
+      type: "warning",
+      title: "切换 Claude 模型",
+      message: `将${local ? "本机 Windows" : "目标 NAS"}上的 Claude 模型统一切换为：${String(model || "").trim()}`,
+      detail: "软件会只修改 ~/.claude/settings.json 的 OPUS、SONNET、HAIKU、SUBAGENT 和 SMALL_FAST 五个模型项，保留 Base URL、认证、权限、hooks 和其他配置。正在进行的回复不受影响；下一次发送消息将使用新模型。",
+      buttons: ["取消", "切换模型"],
+      defaultId: 0,
+      cancelId: 0
+    });
+    if (answer.response !== 1) return { cancelled: true };
+    writeLog("claude_model_change_requested", { connectionMode: config.connectionMode, host: config.host || "", model: String(model || "").trim() });
+    return local
+      ? updateLocalClaudeModel(model, writeLog)
+      : updateClaudeModel(config, model, (fingerprint) => trustHost(config, fingerprint), writeLog);
+  });
   ipcMain.handle("storage:choose", async () => {
     const current = getSettings().dataDirectory;
     const result = await dialog.showOpenDialog(window, {
@@ -260,6 +415,18 @@ app.whenReady().then(async () => {
     writeLog("diagnostics_opened");
     shell.showItemInFolder(logPath());
     return logPath();
+  });
+  ipcMain.on("status:journal", (event, input) => {
+    if (event.sender !== window?.webContents) return;
+    writeLog("work_status_change", statusJournalEntry(input));
+  });
+  ipcMain.on("status:signal", (event, input) => {
+    if (event.sender !== window?.webContents) return;
+    writeLog("work_status_signal", statusSignalEntry(input));
+  });
+  ipcMain.on("status:tool-lifecycle", (event, input) => {
+    if (event.sender !== window?.webContents) return;
+    writeLog("work_status_tool_lifecycle", statusToolLifecycleEntry(input));
   });
   ipcMain.handle("device-control:status", () => getDeviceControlStatus());
   ipcMain.handle("device-control:install", async (_event, input) => {
@@ -346,7 +513,7 @@ app.whenReady().then(async () => {
       type: "warning",
       title: "安装增强 Bridge",
       message: "允许在目标 NAS 安装增强聊天组件吗？",
-      detail: `目标：${config.username}@${config.host}:${config.port}\n\n软件会写入当前 SSH 账号目录 ~/.claude-nas-chat/bridge，并通过 npm 安装 Agent SDK 依赖。基础聊天不需要此组件；安装后可获得精确停止和工具确认。不会修改 Claude 的模型、账号或全局设置。`,
+      detail: `目标：${config.username}@${config.host}:${config.port}\n\n软件会写入当前 SSH 账号目录 ~/.agent-orbit/bridge，并通过 npm 安装 Agent SDK 依赖。基础聊天不需要此组件；安装后可获得精确停止和工具确认。不会修改 Claude 的模型、账号或全局设置。`,
       buttons: ["取消", "安装增强 Bridge"],
       defaultId: 0,
       cancelId: 0
@@ -361,7 +528,7 @@ app.whenReady().then(async () => {
       type: "warning",
       title: "移除增强 Bridge",
       message: "确定移除该 NAS 的增强 Bridge 吗？",
-      detail: "将删除当前 SSH 账号目录 ~/.claude-nas-chat/bridge。基础直连聊天仍可使用，但精确停止和工具确认会降级。",
+      detail: "将删除当前 SSH 账号目录 ~/.agent-orbit/bridge。基础直连聊天仍可使用，但精确停止和工具确认会降级。",
       buttons: ["取消", "移除增强 Bridge"],
       defaultId: 0,
       cancelId: 0
@@ -430,10 +597,10 @@ app.whenReady().then(async () => {
     const conversation = getConversation(id);
     return conversation ? { ...conversation, sessionId: sessionForMode(conversation, getSettings().connectionMode) } : null;
   });
-  ipcMain.handle("conversations:rename", (_event, id, title) => renameConversation(id, title));
-  ipcMain.handle("conversations:delete", (_event, id) => deleteConversation(id));
   ipcMain.handle("conversations:clear-session", (_event, id) => clearConversationSession(id));
+  ipcMain.handle("conversations:rename", (_event, id, title) => renameConversation(id, title));
   ipcMain.handle("conversations:set-pinned", (_event, id, pinned) => setConversationPinned(id, pinned));
+  ipcMain.handle("conversations:delete", (_event, id) => deleteConversation(id));
   ipcMain.handle("conversations:search", (_event, query, limit) => searchConversations(query, limit));
   ipcMain.handle("file:preview", async (_event, file) => {
     const mimeType = previewMime(file?.name);
@@ -457,7 +624,7 @@ app.whenReady().then(async () => {
     return result.filePath;
   });
   ipcMain.handle("file:open", async (_event, file) => {
-    const directory = path.join(app.getPath("temp"), "Agent Chat Pro");
+    const directory = path.join(app.getPath("temp"), "Agent Orbit");
     require("fs").mkdirSync(directory, { recursive: true });
     const localPath = path.join(directory, `${randomUUID()}-${safeFileName(file?.name)}`);
     const config = file?.localPath ? null : getSshConnection();
@@ -508,6 +675,14 @@ app.whenReady().then(async () => {
     }
   });
   ipcMain.handle("chat:send", async (event, input) => {
+    writeLog("work_status_signal", statusSignalEntry({
+      requestId: input?.id,
+      direction: "main-received",
+      signal: "chat-send",
+      disposition: "received",
+      textLength: String(input?.message || "").length,
+      attachmentCount: Array.isArray(input?.attachments) ? input.attachments.length : 0
+    }));
     const id = input.id || randomUUID();
     const settings = getSettings();
     const connectionMode = settings.connectionMode;
@@ -518,8 +693,21 @@ app.whenReady().then(async () => {
     }
     const message = String(input.message || "").trim();
     const attachments = Array.isArray(input.attachments) ? input.attachments : [];
+    if (attachments.length > 10) throw new Error("一次最多添加 10 个附件。");
+    if (attachments.some((file) => Number(file?.data?.byteLength || 0) > 30 * 1024 * 1024)) {
+      throw new Error("单个附件不能超过 30 MB。");
+    }
     if (!message && !attachments.length) throw new Error("请输入消息或添加附件。");
     if (!input.conversationId) throw new Error("请先新建一个对话。");
+    writeLog("work_status_signal", statusSignalEntry({
+      requestId: id,
+      direction: "main-received",
+      signal: "chat-send",
+      disposition: "accepted",
+      textLength: message.length,
+      attachmentCount: attachments.length
+    }));
+    const startedAt = Date.now();
     addUserMessage(input.conversationId, message, attachments.map((file) => file.name));
     writeLog("chat_send_start", {
       requestId: id,
@@ -551,13 +739,13 @@ app.whenReady().then(async () => {
       const cloudCallbacks = {
         onDelta: (text) => {
           streamedText += text;
-          event.sender.send("chat:delta", { id, text });
+          sendWorkStatusSignal(event.sender, "chat:delta", { id, text });
           if (!draftTimer) draftTimer = setTimeout(persistDraft, 1000);
         },
-        onStatus: (status) => event.sender.send("chat:event", { id, type: "connection", status }),
+        onStatus: (status) => sendWorkStatusSignal(event.sender, "chat:event", { id, type: "connection", status }),
         onLog: writeLog
       };
-      event.sender.send("chat:event", { id, type: "connection", status: "connecting" });
+      sendWorkStatusSignal(event.sender, "chat:event", normalizeAndObserveStatusEvent({ id, type: "lifecycle", status: "connecting" }, { connectionMode: "cloud" }));
       const cloudPromise = sendCloudChat({
         apiKey: cloudConfig.apiKey,
         baseURL: cloudConfig.baseURL,
@@ -565,21 +753,28 @@ app.whenReady().then(async () => {
         maxTokens: modeConfig?.maxTokens || cloudConfig.maxTokens || 4096,
         temperature: modeConfig?.hallucinationControl === "strict" ? 0.3 : modeConfig?.hallucinationControl === "creative" ? 0.9 : undefined,
       }, cloudMessages, cloudCallbacks);
-      activeRequests.set(id, { promise: cloudPromise, cancel: () => { cloudPromise.cancel?.(); } });
+      activeRequests.set(id, { promise: cloudPromise, cancel: () => { cloudPromise.cancel?.(); }, conversationId: input.conversationId });
       try {
         const result = await cloudPromise;
         if (draftTimer) clearTimeout(draftTimer);
         if (result.cancelled) {
           addAssistantMessage(input.conversationId, streamedText || "已停止。", "", [], [], id, "cloud");
+          writeLog("work_status_signal", statusSignalEntry({ requestId: id, direction: "main-received", signal: "request-outcome", disposition: "cancelled", eventType: "lifecycle", eventStatus: "cancelled" }));
+          sendWorkStatusSignal(event.sender, "chat:event", normalizeAndObserveStatusEvent({ id, type: "lifecycle", status: "cancelled" }, { connectionMode: "cloud" }));
           return { id, cancelled: true, text: streamedText, sessionId: "", tools: [], files: [] };
         }
         addAssistantMessage(input.conversationId, result.text, "", [], [], id, "cloud");
+        const stats = conversationStats(getConversation(input.conversationId));
         writeLog("chat_send_success", { requestId: id, conversationId: input.conversationId, textLength: result.text.length, connectionMode: "cloud" });
-        return { id, ...result, sessionId: "", tools: [], files: [] };
+        writeLog("work_status_signal", statusSignalEntry({ requestId: id, direction: "main-received", signal: "request-outcome", disposition: "completed", eventType: "lifecycle", eventStatus: "finished" }));
+        sendWorkStatusSignal(event.sender, "chat:event", normalizeAndObserveStatusEvent({ id, type: "lifecycle", status: "finished" }, { connectionMode: "cloud" }));
+        return { id, ...result, sessionId: "", tools: [], files: [], stats };
       } catch (error) {
         if (draftTimer) clearTimeout(draftTimer);
         persistDraft();
         writeLog("chat_send_failed", { requestId: id, conversationId: input.conversationId, error: error.message });
+        writeLog("work_status_signal", statusSignalEntry({ requestId: id, direction: "main-received", signal: "request-outcome", disposition: "failed", eventType: "lifecycle", eventStatus: "failed" }));
+        sendWorkStatusSignal(event.sender, "chat:event", normalizeAndObserveStatusEvent({ id, type: "lifecycle", status: "failed" }, { connectionMode: "cloud" }));
         throw error;
       } finally {
         if (draftTimer) clearTimeout(draftTimer);
@@ -599,28 +794,10 @@ app.whenReady().then(async () => {
     let draftTimer;
     const persistDraft = () => {
       draftTimer = undefined;
-      if (!streamedText) return;
-      try { saveAssistantDraft(input.conversationId, id, streamedText); }
+      if (!streamedTurnText) return;
+      try { saveAssistantDraft(input.conversationId, id, streamedTurnText); }
       catch (error) { writeLog("conversation_draft_save_failed", { requestId: id, conversationId: input.conversationId, error }); }
     };
-    function sendWorkStatusSignal(sender, channel, payload) {
-      const event = payload || {};
-      const tool = event.tool || {};
-      writeLog("work_status_signal", {
-        requestId: event.id,
-        direction: "main-sent",
-        signal: channel === "chat:delta" ? "chat-delta" : "chat-event",
-        disposition: "accepted",
-        eventType: event.type,
-        eventStatus: event.status,
-        toolId: tool.id,
-        toolName: tool.name,
-        ...(event.audit || (event.type === "tool" ? auditToolDetails(tool) : {})),
-        textLength: channel === "chat:delta" ? String(event.text || "").length : 0,
-        uploadPercent: event.type === "upload" ? Math.round(Number(event.overall || 0) * 100) : 0
-      });
-      sender.send(channel, payload);
-    }
     const callbacks = {
       conversationId: input.conversationId,
       onDelta: (text) => {
@@ -630,29 +807,29 @@ app.whenReady().then(async () => {
         streamedText += text;
         streamedTurnText += text;
         const normalized = normalizeAndObserveStatusEvent({ id, type: "delta", text }, config);
-        writeLog("work_status_signal", { requestId: id, direction: "executor-emitted", signal: "runner-event", disposition: "emitted", eventType: "delta", textLength: String(text || "").length });
+        writeLog("work_status_signal", statusSignalEntry({ requestId: id, direction: "executor-emitted", signal: "runner-event", disposition: "emitted", eventType: "delta", textLength: String(text || "").length }));
         sendWorkStatusSignal(event.sender, "chat:delta", normalized);
         if (!draftTimer) draftTimer = setTimeout(persistDraft, 1000);
       },
       onUploadProgress: (progress) => {
         const normalized = normalizeAndObserveStatusEvent({ id, type: "upload", ...progress }, config);
-        writeLog("work_status_signal", { requestId: id, direction: "executor-emitted", signal: "runner-event", disposition: "emitted", eventType: "upload", uploadPercent: Math.round(Number(progress?.overall || 0) * 100) });
+        writeLog("work_status_signal", statusSignalEntry({ requestId: id, direction: "executor-emitted", signal: "runner-event", disposition: "emitted", eventType: "upload", uploadPercent: Math.round(Number(progress?.overall || 0) * 100) }));
         sendWorkStatusSignal(event.sender, "chat:event", normalized);
       },
       onToolEvent: (tool) => {
         const normalized = normalizeAndObserveStatusEvent({ id, type: "tool", tool }, config);
         const audit = normalized.audit;
-        writeLog("work_status_signal", { requestId: id, direction: "executor-emitted", signal: "runner-event", disposition: "emitted", eventType: "tool", ...audit });
+        writeLog("work_status_signal", statusSignalEntry({ requestId: id, direction: "executor-emitted", signal: "runner-event", disposition: "emitted", eventType: "tool", ...audit }));
         sendWorkStatusSignal(event.sender, "chat:event", normalized);
       },
       onUsage: (usage) => {
         const normalized = normalizeAndObserveStatusEvent({ id, type: "usage", usage }, config);
-        writeLog("work_status_signal", { requestId: id, direction: "executor-emitted", signal: "runner-event", disposition: "emitted", eventType: "usage" });
+        writeLog("work_status_signal", statusSignalEntry({ requestId: id, direction: "executor-emitted", signal: "runner-event", disposition: "emitted", eventType: "usage" }));
         sendWorkStatusSignal(event.sender, "chat:event", normalized);
       },
       onStatus: (status) => {
         const normalized = normalizeAndObserveStatusEvent({ id, type: "connection", status }, config);
-        writeLog("work_status_signal", { requestId: id, direction: "executor-emitted", signal: "runner-event", disposition: "emitted", eventType: "connection", eventStatus: status });
+        writeLog("work_status_signal", statusSignalEntry({ requestId: id, direction: "executor-emitted", signal: "runner-event", disposition: "emitted", eventType: "connection", eventStatus: status }));
         sendWorkStatusSignal(event.sender, "chat:event", normalized);
       },
       onSessionId: (sessionId) => {
@@ -670,7 +847,7 @@ app.whenReady().then(async () => {
         const completedText = String(text || streamedTurnText || "");
         if (completedText) {
           saveAssistantDraft(input.conversationId, id, completedText);
-          addAssistantMessage(input.conversationId, completedText, turnSessionId || latestSessionId, [], [], id, config.connectionMode, turnUsage, Date.now() - startedAt);
+          addAssistantMessage(input.conversationId, completedText, turnSessionId || latestSessionId, [], [], id, config.connectionMode, turnUsage);
           completedTurnCount += 1;
         }
         streamedTurnText = "";
@@ -678,7 +855,7 @@ app.whenReady().then(async () => {
       },
       onPermissionRequest: async (request) => {
         const waiting = normalizeAndObserveStatusEvent({ id, type: "permission", status: "waiting", toolName: request.toolName || "" }, config);
-        writeLog("work_status_signal", { requestId: id, direction: "executor-emitted", signal: "runner-event", disposition: "emitted", eventType: "permission", eventStatus: "waiting", toolName: request.toolName });
+        writeLog("work_status_signal", statusSignalEntry({ requestId: id, direction: "executor-emitted", signal: "runner-event", disposition: "emitted", eventType: "permission", eventStatus: "waiting", toolName: request.toolName }));
         sendWorkStatusSignal(event.sender, "chat:event", waiting);
         const detail = JSON.stringify(request.input || {}, null, 2);
         const answer = await dialog.showMessageBox(window, {
@@ -696,16 +873,22 @@ app.whenReady().then(async () => {
         return allowed;
       },
       onUnknownHost: (fingerprint) => trustHost(config, fingerprint),
-      onAudit: (entry) => writeLog("work_status_signal", { requestId: id, direction: "executor-emitted", signal: "transport-event", disposition: "emitted", eventType: "transport", ...entry }),
+      onAudit: (entry) => writeLog("work_status_signal", statusSignalEntry({
+        requestId: id,
+        direction: "executor-emitted",
+        signal: "transport-event",
+        disposition: "emitted",
+        eventType: "transport",
+        ...entry
+      })),
       onLog: writeLog
     };
-    const startedAt = Date.now();
     config.localUploadDirectory = path.join(app.getPath("userData"), "local-uploads");
     config.workModeId = input.workModeId || config.workModeId || "regular";
     const operation = config.connectionMode === "local"
       ? runLocalClaude(config, agentMessage, activeSessionId, attachments, callbacks)
       : runClaude(config, agentMessage, activeSessionId, attachments, callbacks);
-    writeLog("work_status_signal", { requestId: id, direction: "main-received", signal: "request-outcome", disposition: "started", eventType: "lifecycle", eventStatus: "started", transport: config.connectionMode === "local" ? "local-stdio" : "ssh" });
+    writeLog("work_status_signal", statusSignalEntry({ requestId: id, direction: "main-received", signal: "request-outcome", disposition: "started", eventType: "lifecycle", eventStatus: "started", transport: config.connectionMode === "local" ? "local-stdio" : "ssh" }));
     activeRequests.set(id, { operation, conversationId: input.conversationId });
     sendWorkStatusSignal(event.sender, "chat:event", normalizeAndObserveStatusEvent({ id, type: "lifecycle", status: "started" }, config));
     try {
@@ -716,7 +899,7 @@ app.whenReady().then(async () => {
       }
       const stats = conversationStats(getConversation(input.conversationId));
       writeLog("chat_send_success", { requestId: id, conversationId: input.conversationId, sessionId: result.sessionId, textLength: result.text.length });
-      writeLog("work_status_signal", { requestId: id, direction: "main-received", signal: "request-outcome", disposition: "completed", eventType: "lifecycle", eventStatus: "finished" });
+      writeLog("work_status_signal", statusSignalEntry({ requestId: id, direction: "main-received", signal: "request-outcome", disposition: "completed", eventType: "lifecycle", eventStatus: "finished" }));
       sendWorkStatusSignal(event.sender, "chat:event", normalizeAndObserveStatusEvent({ id, type: "lifecycle", status: "finished" }, config));
       return { id, ...result, stats };
     } catch (error) {
@@ -724,12 +907,12 @@ app.whenReady().then(async () => {
       persistDraft();
       if (error?.cancelled || /^已停止/.test(String(error?.message || ""))) {
         writeLog("chat_send_cancelled", { requestId: id, conversationId: input.conversationId, textLength: streamedText.length });
-        writeLog("work_status_signal", { requestId: id, direction: "main-received", signal: "request-outcome", disposition: "cancelled", eventType: "lifecycle", eventStatus: "cancelled" });
+        writeLog("work_status_signal", statusSignalEntry({ requestId: id, direction: "main-received", signal: "request-outcome", disposition: "cancelled", eventType: "lifecycle", eventStatus: "cancelled" }));
         sendWorkStatusSignal(event.sender, "chat:event", normalizeAndObserveStatusEvent({ id, type: "lifecycle", status: "cancelled" }, config));
         return { id, cancelled: true, text: streamedText, sessionId: activeSessionId, files: [], tools: [] };
       }
       writeLog("chat_send_failed", { requestId: id, conversationId: input.conversationId, error });
-      writeLog("work_status_signal", { requestId: id, direction: "main-received", signal: "request-outcome", disposition: "failed", eventType: "lifecycle", eventStatus: "failed" });
+      writeLog("work_status_signal", statusSignalEntry({ requestId: id, direction: "main-received", signal: "request-outcome", disposition: "failed", eventType: "lifecycle", eventStatus: "failed" }));
       sendWorkStatusSignal(event.sender, "chat:event", normalizeAndObserveStatusEvent({ id, type: "lifecycle", status: "failed" }, config));
       throw error;
     } finally {
@@ -737,62 +920,44 @@ app.whenReady().then(async () => {
       activeRequests.delete(id);
     }
   });
-  ipcMain.handle("chat:cancel", (_event, id) => activeRequests.get(id)?.cancel());
   ipcMain.handle("chat:push-follow-up", async (_event, input) => {
     const id = String(input?.id || "");
-    const message = String(input?.message || "").trim();
+    const followUpMessage = String(input?.message || "").trim();
     const request = activeRequests.get(id);
-    if (!request || !message || typeof request.operation?.pushFollowUp !== "function") return { accepted: false };
-    const config = getConnection();
-    const agentMessage = `${message}\n\n[来源电脑：${config.clientLabel}]`;
+    if (!request || !followUpMessage || typeof request.operation?.pushFollowUp !== "function") return { accepted: false };
+    const followUpConfig = getConnection();
+    const agentMessage = `${followUpMessage}\n\n[来源电脑：${followUpConfig.clientLabel}]`;
     if (!(await request.operation.pushFollowUp(agentMessage))) return { accepted: false };
-    addUserMessage(request.conversationId, message);
-    writeLog("chat_follow_up_accepted", { requestId: id, conversationId: request.conversationId, textLength: message.length });
+    addUserMessage(request.conversationId, followUpMessage);
+    writeLog("chat_follow_up_accepted", { requestId: id, conversationId: request.conversationId, textLength: followUpMessage.length });
     return { accepted: true };
   });
-  // ── 模型管理 IPC ──
-  ipcMain.handle("model:status", async () => {
-    const config = getConnection();
-    return config.connectionMode === "local"
-      ? getLocalClaudeModelStatus()
-      : getClaudeModelStatus(config, (fingerprint) => trustHost(config, fingerprint), writeLog);
-  });
-  ipcMain.handle("model:initialize-password", (_event, input) => {
-    const state = getSettings().modelAdminPasswordState;
-    if (state === "ready") throw new Error("模型管理员密码已初始化；如需更换请联系管理员。");
-    if (state === "unavailable") throw new Error("Windows 系统加密不可用，无法安全保存模型管理员密码。");
-    const password = String(input?.password || "");
-    const confirmation = String(input?.confirmation || "");
-    if (password !== confirmation) throw new Error("两次输入的管理员密码不一致。");
-    setModelAdminPassword(password);
-    writeLog("model_admin_password_initialized");
-    return getSettings();
-  });
-  ipcMain.handle("model:update", async (_event, input) => {
-    if (activeRequests.size) throw new Error("Agent 正在回复，暂时不能切换模型。请等待当前回复结束后再操作。");
-    assertModelAdminPassword(input?.adminPassword);
-    const model = input?.model;
-    const config = getConnection();
-    const local = config.connectionMode === "local";
-    const answer = await dialog.showMessageBox(window, {
-      type: "warning",
-      title: "切换 Claude 模型",
-      message: `将${local ? "本机 Windows" : "目标 NAS"}上的 Claude 模型统一切换为：${String(model || "").trim()}`,
-      detail: "软件会只修改 ~/.claude/settings.json 的 OPUS、SONNET、HAIKU、SUBAGENT 和 SMALL_FAST 五个模型项，保留 Base URL、认证、权限和其他配置。正在进行的回复不受影响；下一次发送消息将使用新模型。",
-      buttons: ["取消", "切换模型"],
-      defaultId: 0,
-      cancelId: 0
-    });
-    if (answer.response !== 1) return { cancelled: true };
-    writeLog("claude_model_change_requested", { connectionMode: config.connectionMode, host: config.host || "", model: String(model || "").trim() });
-    return local
-      ? updateLocalClaudeModel(model, writeLog)
-      : updateClaudeModel(config, model, (fingerprint) => trustHost(config, fingerprint), writeLog);
+  ipcMain.handle("chat:cancel", (_event, id) => {
+    writeLog("work_status_signal", statusSignalEntry({ requestId: id, direction: "main-received", signal: "chat-cancel", disposition: "accepted" }));
+    const request = activeRequests.get(id);
+    if (!request) return false;
+    try {
+      request.operation.cancel();
+      writeLog("chat_cancel_requested", { requestId: id });
+      return true;
+    } catch (error) {
+      writeLog("chat_cancel_failed", { requestId: id, error });
+      return false;
+    }
   });
   ipcMain.handle("window:is-maximized", () => Boolean(window?.isMaximized()));
-  ipcMain.handle("window:action", (_event, action) => handleWindowAction(action));
+  ipcMain.handle("window:focus", () => {
+    if (!window || window.isDestroyed()) return false;
+    window.show();
+    window.focus();
+    window.webContents.focus();
+    return true;
+  });
   ipcMain.handle("window:restore-native-dialog-focus", async (event) => {
     if (event.sender !== window?.webContents || !window || window.isDestroyed()) return false;
+    // Chromium on Windows can leave editable DOM controls inert after a
+    // renderer-owned alert/confirm closes. Restore native focus first, then
+    // let the renderer select its textarea via the window:focus notification.
     window.blur();
     await new Promise((resolve) => setTimeout(resolve, 0));
     if (window.isDestroyed()) return false;
@@ -800,6 +965,7 @@ app.whenReady().then(async () => {
     window.webContents.focus();
     return true;
   });
+  ipcMain.handle("window:action", (_event, action) => handleWindowAction(action));
   createWindow();
   app.on("activate", () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
 
@@ -843,17 +1009,13 @@ function handleWindowAction(action) {
   else if (action === "fullscreen") window.setFullScreen(!window.isFullScreen());
   else if (action === "about") dialog.showMessageBox(window, {
     type: "info",
-    title: "关于 Agent Chat Pro",
-    message: "Agent Chat Pro",
-    detail: `版本 ${app.getVersion()}\n支持本机或 SSH 运行 Agent CLI；当前内置 Claude Code 适配器。`,
+    title: "关于 Agent Orbit",
+    message: "Agent Orbit",
+    detail: `版本 ${app.getVersion()}\n支持内网直连/外网穿透双模式 SSH 远程 AI 聊天；支持云端 AI 直连和本机模式；当前内置 Claude Code 适配器。`,
     buttons: ["确定"]
   });
   else return false;
   return true;
-}
-
-function assertModelAdminPassword(value) {
-  if (!verifyModelAdminPassword(value)) throw new Error("模型管理员密码不正确。");
 }
 
 function trustHost(config, fingerprint) {
