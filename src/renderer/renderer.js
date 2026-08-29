@@ -2155,6 +2155,7 @@ async function runAppAction(action) {
   if (action === "new-chat") await createNewConversation();
   else if (action === "settings") await openSettings();
   else if (action === "appearance") await openAppearanceDialog();
+  else if (action === "auth") showAuthDialog();
   else if (action === "archive") {
     try { await window.claudeNas.openArchiveDirectory(); }
     catch (error) { alert(error.message); }
