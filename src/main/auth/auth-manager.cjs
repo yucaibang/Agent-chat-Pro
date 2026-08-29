@@ -100,7 +100,7 @@ function request(method, urlPath, body = null) {
       });
     });
     req.on("error", reject);
-    req.on("timeout", () => { req.destroy(); reject(new Error("授权服务器连接超时")); }));
+    req.on("timeout", () => { req.destroy(); reject(new Error("授权服务器连接超时")); });
     if (body) req.write(JSON.stringify(body));
     req.end();
   });
