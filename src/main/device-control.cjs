@@ -5,9 +5,9 @@ const os = require("os");
 const path = require("path");
 const { spawn } = require("child_process");
 
-const ACCOUNT_NAME = "ClaudeAgentControl";
-const FIREWALL_RULE = "ClaudeNAS-Agent-Control";
-const STATE_FOLDER = "ClaudeNasAgent";
+const ACCOUNT_NAME = "AgentChatProControl";
+const FIREWALL_RULE = "AgentChatPro-Agent-Control";
+const STATE_FOLDER = "AgentChatProAgent";
 
 function validatePublicKey(value) {
   const key = String(value || "").trim();
@@ -127,7 +127,7 @@ async function uninstallDeviceControl() {
 
 function runElevated(config) {
   return new Promise((resolve, reject) => {
-    const temporary = fs.mkdtempSync(path.join(os.tmpdir(), "claude-nas-agent-"));
+    const temporary = fs.mkdtempSync(path.join(os.tmpdir(), "agent-chat-pro-"));
     const configPath = path.join(temporary, "config.json");
     const resultPath = path.join(temporary, "result.txt");
     const scriptPath = installerScriptPath();

@@ -21,10 +21,12 @@
  *   node scripts/obfuscate.cjs obfuscate  — 混淆所有源文件
  *   node scripts/obfuscate.cjs restore     — 从 git 还原原始文件
  *   node scripts/obfuscate.cjs check        — 检查当前是否已混淆
+ *   node scripts/obfuscate.cjs hash         — 计算 auth-manager.cjs 的 SHA256 哈希
  */
 
 const JavaScriptObfuscator = require("javascript-obfuscator");
 const { execSync } = require("child_process");
+const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
 
@@ -69,6 +71,9 @@ const OBFUSCATE_FILES = {
     "main/modes/mode-manager.cjs",
     "main/modes/mode-params.cjs",
     "main/cloud-chat.cjs",        // 纯 Node.js 模块，可以混淆
+    "main/auth/auth-manager.cjs", // 授权管理器（重点保护）
+    "main/model-config.cjs",      // 模型配置
+    "main/status-event-normalizer.cjs", // 状态归一化
   ],
 };
 
@@ -136,11 +141,66 @@ const OBFUSCATOR_CONFIGS = {
     reservedNames: ["^require$", "^module$", "^exports$", "^__dirname$", "^__filename$", "^process$"],
     reservedStrings: ["^node:", "^electron$", "^@electron/"],
   },
+
+  // 🔴 auth-manager — 高强度混淆
+  // 在 medium 基础上加强：RC4 字符串编码、全部字符串编码、更强控制流平坦化、死代码注入、字符串拆分
+  heavy: {
+    compact: true,
+    controlFlowFlattening: true,
+    controlFlowFlatteningThreshold: 0.5,
+    deadCodeInjection: true,
+    deadCodeInjectionThreshold: 0.1,
+    debugProtection: false,                  // ← 禁止（主进程也需要调试）
+    disableConsoleOutput: false,
+    identifierNamesGenerator: "hexadecimal",
+    renameGlobals: false,
+    selfDefending: false,                   // ← 禁止（v1 白屏根因之一）
+    simplify: true,
+    splitStrings: true,
+    splitStringsChunkLength: 5,
+    stringArray: true,
+    stringArrayCallsTransform: true,
+    stringArrayEncoding: ["rc4"],            // ← RC4 比 base64 更强
+    stringArrayIndexShift: true,
+    stringArrayRotate: true,
+    stringArrayShuffle: true,
+    stringArrayWrappersCount: 2,
+    stringArrayWrappersChainedCalls: true,
+    stringArrayWrappersParametersMaxCount: 2,
+    stringArrayWrappersType: "function",
+    stringArrayThreshold: 1.0,               // ← 全部字符串编码
+    transformObjectKeys: false,              // ← 禁止（会破坏 IPC 通道名和事件名映射）
+    unicodeEscapeSequence: false,
+    // 保留 require 调用和 module.exports，防止 Electron 加载断裂
+    reservedNames: ["^require$", "^module$", "^exports$", "^__dirname$", "^__filename$", "^process$"],
+    reservedStrings: [
+      "^node:", "^electron$", "^@electron/",
+      "^/api/",                               // ← auth 相关路径
+      "^verify$", "^violation$",              // ← auth 关键词
+    ],
+  },
 };
+
+// ── auth-manager 专用文件路径 ──────────────────────────────
+
+const AUTH_MANAGER_REL = "main/auth/auth-manager.cjs";
+
+// ── 计算文件 SHA256 哈希 ──────────────────────────────────
+
+function computeFileHash(relativePath) {
+  const fullPath = path.join(SRC_DIR, relativePath);
+  if (!fs.existsSync(fullPath)) {
+    console.error(`  ✗ 文件不存在：${relativePath}`);
+    return null;
+  }
+  const source = fs.readFileSync(fullPath);
+  const hash = crypto.createHash("sha256").update(source).digest("hex");
+  return hash;
+}
 
 // ── 混淆文件 ──────────────────────────────────────────
 
-function obfuscateFile(relativePath, config) {
+function obfuscateFile(relativePath, config, hashInjection) {
   const fullPath = path.join(SRC_DIR, relativePath);
   if (!fs.existsSync(fullPath)) {
     console.log(`  ⚠ 跳过（文件不存在）：${relativePath}`);
@@ -155,9 +215,29 @@ function obfuscateFile(relativePath, config) {
       ...config,
       inputFileName: relativePath,
     });
-    const obfuscated = result.getObfuscatedCode();
-    const newSize = Buffer.byteLength(obfuscated, "utf8");
+    let obfuscated = result.getObfuscatedCode();
 
+    // 如果需要注入哈希（用于 auth-manager 的 _expectedHash）
+    if (hashInjection) {
+      // 计算混淆后文件的哈希
+      const obfuscatedHash = crypto.createHash("sha256").update(obfuscated).digest("hex");
+      // 替换 _expectedHash 属性值
+      obfuscated = obfuscated.replace(
+        /(["'])_expectedHash\1\s*:\s*(["'])([0-9a-fA-F]{64})\2/,
+        `$1_expectedHash$1:$2${obfuscatedHash}$2`
+      );
+      // 如果上面没匹配到，尝试赋值形式
+      if (!/["_]expectedHash["']?\s*[:=]\s*["'][0-9a-fA-F]{64}["']/.test(obfuscated)) {
+        // 尝试赋值形式替换
+        obfuscated = obfuscated.replace(
+          /(["'])_expectedHash\1\s*=\s*(["'])([0-9a-fA-F]{64})\2/,
+          `$1_expectedHash$1=$2${obfuscatedHash}$2`
+        );
+      }
+      console.log(`  🔑 _expectedHash 已注入：${obfuscatedHash.slice(0, 16)}…`);
+    }
+
+    const newSize = Buffer.byteLength(obfuscated, "utf8");
     fs.writeFileSync(fullPath, obfuscated, "utf8");
     const ratio = newSize / originalSize;
     console.log(`  ✓ ${relativePath}：${formatSize(originalSize)} → ${formatSize(newSize)}（${ratio.toFixed(1)}x）`);
@@ -274,6 +354,17 @@ function formatSize(bytes) {
 
 const command = process.argv[2] || "check";
 
+if (command === "hash") {
+  console.log("🔑 计算 auth-manager.cjs 的 SHA256 哈希…\n");
+  const hash = computeFileHash(AUTH_MANAGER_REL);
+  if (hash) {
+    console.log(`文件：src/${AUTH_MANAGER_REL}`);
+    console.log(`SHA256：${hash}`);
+    console.log(`\n将此哈希值填入 auth-manager.cjs 的 _expectedHash 属性。`);
+  }
+  process.exit(hash ? 0 : 1);
+}
+
 if (command === "restore") {
   console.log("🔄 从 git 还原原始文件…");
   const count = restoreFromGit();
@@ -338,11 +429,19 @@ if (command === "obfuscate") {
     if (obfuscateFile(file, OBFUSCATOR_CONFIGS.light)) success++;
   }
 
-  // 中等混淆
+  // 中等混淆（排除 auth-manager，它单独用 heavy）
   console.log("\n🟠 主进程 — 中等混淆：");
   for (const file of OBFUSCATE_FILES.medium) {
+    if (file === AUTH_MANAGER_REL) continue; // auth-manager 用 heavy 级别单独处理
     total++;
     if (obfuscateFile(file, OBFUSCATOR_CONFIGS.medium)) success++;
+  }
+
+  // auth-manager — 高强度混淆 + 哈希注入
+  if (OBFUSCATE_FILES.medium.includes(AUTH_MANAGER_REL)) {
+    console.log("\n🔴 auth-manager — 高强度混淆：");
+    total++;
+    if (obfuscateFile(AUTH_MANAGER_REL, OBFUSCATOR_CONFIGS.heavy, true)) success++;
   }
 
   console.log(`\n✅ 混淆完成：${success}/${total} 个文件`);
@@ -370,9 +469,10 @@ if (command === "obfuscate") {
   process.exit(0);
 }
 
-console.log("用法：node scripts/obfuscate.cjs [obfuscate|restore|check]");
+console.log("用法：node scripts/obfuscate.cjs [obfuscate|restore|check|hash]");
 console.log();
 console.log("  obfuscate  — 混淆源文件（打包前执行）");
 console.log("  restore     — 从 git 还原原始文件（打包后执行）");
 console.log("  check       — 检查当前混淆状态");
+console.log("  hash         — 计算 auth-manager.cjs 的 SHA256 哈希");
 process.exit(1);

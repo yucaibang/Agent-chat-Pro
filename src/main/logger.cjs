@@ -8,7 +8,7 @@ const PRIVATE_KEYS = /password|secret|token|prompt|message|content|data/i;
 
 function logPath() {
   const { app } = require("electron");
-  return path.join(app.getPath("logs"), "claude-nas-chat.log");
+  return path.join(app.getPath("logs"), "agent-chat-pro.log");
 }
 
 function writeLog(event, details = {}) {

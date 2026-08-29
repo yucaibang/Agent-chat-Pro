@@ -120,7 +120,7 @@ async function updateClaudeModel(config, modelName, onUnknownHost, onLog) {
     const current = await exec(client, `cat -- ${shellQuote(settingsPath)}`);
     if (current.code !== 0) throw new Error("无法读取目标 NAS 的 Claude 模型配置：" + cleanError(current.stderr));
     const replacement = replaceModelSettings(current.stdout, modelName);
-    const temporaryPath = `${settingsPath}.claude-nas-model-${process.pid}-${Date.now()}.tmp`;
+    const temporaryPath = `${settingsPath}.agent-chat-pro-model-${process.pid}-${Date.now()}.tmp`;
     try {
       const sftp = await openSftp(client);
       try { await writeSftp(sftp, temporaryPath, Buffer.from(replacement.settings, "utf8")); }
@@ -205,8 +205,8 @@ async function finalizeDeviceControl(config, key, metadata, onUnknownHost, onLog
     if (scan.code !== 0) throw new Error("NAS 无法读取这台 Windows 的 SSH 主机指纹，请检查本机地址和防火墙。");
     const destination = `ClaudeAgentControl@${target}`;
     const sshArguments = `-p ${targetPort} -i ${shellQuote(key.privateKeyPath)} -o BatchMode=yes -o IdentitiesOnly=yes -o PasswordAuthentication=no -o StrictHostKeyChecking=yes -o UserKnownHostsFile=${shellQuote(knownHosts)} ${shellQuote(destination)}`;
-    const probe = await exec(client, `ssh ${sshArguments} ${shellQuote("echo CLAUDE_NAS_AGENT_READY")}`);
-    if (probe.code !== 0 || !probe.stdout.includes("CLAUDE_NAS_AGENT_READY")) {
+    const probe = await exec(client, `ssh ${sshArguments} ${shellQuote("echo AGENT_CHAT_PRO_READY")}`);
+    if (probe.code !== 0 || !probe.stdout.includes("AGENT_CHAT_PRO_READY")) {
       throw new Error(probe.stderr.trim() || "NAS 使用专属密钥回连 Windows 失败。");
     }
     const script = `#!/bin/sh\nexec ssh ${sshArguments} \"$@\"\n`;
@@ -954,7 +954,7 @@ async function readRemoteFile(config, remotePath, maximumBytes, onUnknownHost, o
 
 async function downloadRemoteFile(config, remotePath, localPath, onUnknownHost, onLog) {
   if (!isSafeRemotePath(remotePath)) throw new Error("远程文件路径无效。");
-  const temporary = `${localPath}.claude-nas-part-${process.pid}`;
+  const temporary = `${localPath}.agent-chat-pro-part-${process.pid}`;
   const client = await connectWithRetry(config, onUnknownHost, onLog);
   try {
     const sftp = await openSftp(client);

@@ -164,7 +164,7 @@ function applicationIconPath() {
 }
 
 function cleanupOpenFileCache() {
-  const directory = path.join(app.getPath("temp"), "Agent Orbit");
+  const directory = path.join(app.getPath("temp"), "Agent Chat Pro");
   try { fs.rmSync(directory, { recursive: true, force: true }); }
   catch (error) { writeLog("open_file_cache_cleanup_failed", { error }); }
 }
@@ -629,7 +629,7 @@ app.whenReady().then(async () => {
     return result.filePath;
   });
   ipcMain.handle("file:open", async (_event, file) => {
-    const directory = path.join(app.getPath("temp"), "Agent Orbit");
+    const directory = path.join(app.getPath("temp"), "Agent Chat Pro");
     require("fs").mkdirSync(directory, { recursive: true });
     const localPath = path.join(directory, `${randomUUID()}-${safeFileName(file?.name)}`);
     const config = file?.localPath ? null : getSshConnection();
@@ -1019,8 +1019,8 @@ function handleWindowAction(action) {
   else if (action === "fullscreen") window.setFullScreen(!window.isFullScreen());
   else if (action === "about") dialog.showMessageBox(window, {
     type: "info",
-    title: "关于 Agent Orbit",
-    message: "Agent Orbit",
+    title: "关于 Agent Chat Pro",
+    message: "Agent Chat Pro",
     detail: `版本 ${app.getVersion()}\n支持内网直连/外网穿透双模式 SSH 远程 AI 聊天；支持云端 AI 直连和本机模式；当前内置 Claude Code 适配器。`,
     buttons: ["确定"]
   });

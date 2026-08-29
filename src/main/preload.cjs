@@ -22,7 +22,7 @@ function eventAuditDetails(payload = {}) {
   };
 }
 
-contextBridge.exposeInMainWorld("claudeNas", {
+contextBridge.exposeInMainWorld("agentChatPro", {
   // ── 设置 IPC ──
   loadSettings: () => ipcRenderer.invoke("settings:load"),
   saveSettings: (settings) => ipcRenderer.invoke("settings:save", settings),
@@ -130,8 +130,8 @@ contextBridge.exposeInMainWorld("claudeNas", {
   }),
   onTurnStart: (handler) => ipcRenderer.on("chat:turn-start", (_event, payload) => handler(payload)),
   onTurnComplete: (handler) => ipcRenderer.on("chat:turn-complete", (_event, payload) => handler(payload)),
-  onMenuAction: (handler) => ipcRenderer.on("app:menu", (_event, action) => handler(action)),
   onWindowMaximized: (handler) => ipcRenderer.on("window:maximized", (_event, value) => handler(value)),
+  onWindowFocus: (handler) => ipcRenderer.on("window:focus", () => handler()),
   onNetworkStatusChange: (handler) => ipcRenderer.on("network:status-change", (_event, event) => handler(event)),
   onNetworkLatency: (handler) => ipcRenderer.on("network:latency", (_event, summary) => handler(summary)),
   onThemeInit: (handler) => ipcRenderer.once("theme:init", (_event, theme) => handler(theme)),

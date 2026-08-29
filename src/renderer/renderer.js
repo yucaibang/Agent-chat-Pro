@@ -202,7 +202,7 @@ function renderDeviceControlStatus(status) {
 }
 
 async function refreshDeviceControlStatus() {
-  try { renderDeviceControlStatus(await window.claudeNas.getDeviceControlStatus()); }
+  try { renderDeviceControlStatus(await window.agentChatPro.getDeviceControlStatus()); }
   catch (error) { document.querySelector("#device-control-info").textContent = "状态检查失败：" + error.message; }
 }
 
@@ -221,7 +221,7 @@ function renderBridgeStatus(status) {
 }
 
 async function refreshBridgeStatus() {
-  try { renderBridgeStatus(await window.claudeNas.getBridgeStatus()); }
+  try { renderBridgeStatus(await window.agentChatPro.getBridgeStatus()); }
   catch (error) {
     document.querySelector("#bridge-title").textContent = "尚未连接目标 NAS";
     document.querySelector("#bridge-detail").textContent = error.message;
@@ -238,7 +238,7 @@ function setToolModeAppearance(enabled) {
 
 async function changeToolMode(enabled) {
   try {
-    const settings = await window.claudeNas.setToolMode(enabled);
+    const settings = await window.agentChatPro.setToolMode(enabled);
     if (settings.cancelled) return false;
     setToolModeAppearance(settings.skipPermissions);
     elements.form.elements.namedItem("skipPermissions").checked = settings.skipPermissions;
@@ -273,12 +273,12 @@ function addMessage(kind, text = "") {
 
 async function renderAssistant(item, text) {
   const content = item.querySelector(".message-content");
-  content.innerHTML = await window.claudeNas.renderMarkdown(text);
+  content.innerHTML = await window.agentChatPro.renderMarkdown(text);
   content.classList.add("rendered");
   content.querySelectorAll("a[href]").forEach((link) => {
     link.addEventListener("click", (event) => {
       event.preventDefault();
-      window.claudeNas.openLink(link.getAttribute("href")).catch((error) => alert(error.message));
+      window.agentChatPro.openLink(link.getAttribute("href")).catch((error) => alert(error.message));
     });
   });
   content.querySelectorAll("pre").forEach((pre) => {
@@ -411,7 +411,7 @@ function renderReturnedFiles(item, files = []) {
       const preview = document.createElement("img");
       preview.alt = file.name;
       preview.className = "remote-image loading";
-      window.claudeNas.previewRemoteFile(file).then((source) => {
+      window.agentChatPro.previewRemoteFile(file).then((source) => {
         preview.src = source;
         preview.classList.remove("loading");
       }).catch(() => { preview.classList.add("failed"); preview.alt = "图片预览加载失败，可保存后查看"; });
@@ -429,11 +429,11 @@ function renderReturnedFiles(item, files = []) {
     const save = document.createElement("button");
     save.type = "button";
     save.textContent = "另存为";
-    save.addEventListener("click", () => runFileAction(save, () => window.claudeNas.saveRemoteFile(file)));
+    save.addEventListener("click", () => runFileAction(save, () => window.agentChatPro.saveRemoteFile(file)));
     const open = document.createElement("button");
     open.type = "button";
     open.textContent = "打开";
-    open.addEventListener("click", () => runFileAction(open, () => window.claudeNas.openRemoteFile(file)));
+    open.addEventListener("click", () => runFileAction(open, () => window.agentChatPro.openRemoteFile(file)));
     actions.append(save, open);
     card.append(details, actions);
     list.append(card);
@@ -490,7 +490,7 @@ async function refreshConversationList() {
   const query = elements.conversationSearch.value.trim();
   if (query) {
     // 全文搜索：搜索标题和消息内容
-    const results = await window.claudeNas.searchConversations(query);
+    const results = await window.agentChatPro.searchConversations(query);
     elements.historyCount.textContent = `${results.length} 条结果`;
     elements.conversationList.replaceChildren();
     results.forEach((conv) => {
@@ -523,7 +523,7 @@ async function refreshConversationList() {
       elements.conversationList.append(empty);
     }
   } else {
-    conversationCache = await window.claudeNas.listConversations();
+    conversationCache = await window.agentChatPro.listConversations();
     elements.historyCount.textContent = String(conversationCache.length);
     elements.conversationList.replaceChildren();
     conversationCache.forEach((conversation) => {
@@ -561,13 +561,13 @@ function showConversationMenu(event, conversation) {
   rename.addEventListener("click", async () => {
     const title = prompt("输入新的对话名称", conversation.title);
     if (title === null) return;
-    try { await window.claudeNas.renameConversation(conversation.id, title); await refreshConversationList(); }
+    try { await window.agentChatPro.renameConversation(conversation.id, title); await refreshConversationList(); }
     catch (error) { alert(error.message); }
   });
   const archive = document.createElement("button");
   archive.textContent = "打开存档";
   archive.addEventListener("click", async () => {
-    try { await window.claudeNas.showConversationArchive(conversation.id); popover.remove(); }
+    try { await window.agentChatPro.showConversationArchive(conversation.id); popover.remove(); }
     catch (error) { alert(error.message); }
   });
   const remove = document.createElement("button");
@@ -575,10 +575,10 @@ function showConversationMenu(event, conversation) {
   remove.textContent = "删除";
   remove.addEventListener("click", async () => {
     if (!confirm(`确定删除“${conversation.title}”吗？此操作只删除本机聊天记录，NAS 文件不会删除。`)) return;
-    await window.claudeNas.deleteConversation(conversation.id);
+    await window.agentChatPro.deleteConversation(conversation.id);
     popover.remove();
     if (conversation.id === conversationId) {
-      const remaining = await window.claudeNas.listConversations();
+      const remaining = await window.agentChatPro.listConversations();
       if (remaining.length) await loadConversation(remaining[0].id);
       else await createNewConversation();
     } else await refreshConversationList();
@@ -596,7 +596,7 @@ function showConversationMenu(event, conversation) {
 
 async function loadConversation(id) {
   if (activeId) return;
-  const conversation = await window.claudeNas.getConversation(id);
+  const conversation = await window.agentChatPro.getConversation(id);
   if (!conversation) return;
   conversationId = conversation.id;
   sessionId = conversation.sessionId || "";
@@ -627,7 +627,7 @@ async function loadConversation(id) {
 
 async function createNewConversation() {
   if (activeId) return;
-  const conversation = await window.claudeNas.createConversation();
+  const conversation = await window.agentChatPro.createConversation();
   await loadConversation(conversation.id);
   elements.prompt.focus();
 }
@@ -679,7 +679,7 @@ function stopActiveMessage() {
   elements.send.classList.add("stopping");
   elements.send.disabled = true;
   elements.send.title = "正在停止…";
-  window.claudeNas.cancelMessage(activeId);
+  window.agentChatPro.cancelMessage(activeId);
 }
 
 function renderAttachments() {
@@ -718,7 +718,7 @@ function adjustTextarea() {
 
 async function openSettings() {
   setStatus("");
-  populateSettings(await window.claudeNas.loadSettings());
+  populateSettings(await window.agentChatPro.loadSettings());
   if (currentConnectionMode === "ssh") await refreshDeviceControlStatus();
   elements.dialog.showModal();
 }
@@ -744,7 +744,7 @@ async function sendMessage() {
     })));
     attachments = [];
     renderAttachments();
-    const result = await window.claudeNas.sendMessage({
+    const result = await window.agentChatPro.sendMessage({
       id: activeId,
       message,
       sessionId,
@@ -790,7 +790,7 @@ document.querySelector("#header-appearance").addEventListener("click", openAppea
 document.querySelector("#close-settings").addEventListener("click", () => elements.dialog.close());
 document.querySelector("#close-appearance").addEventListener("click", () => document.querySelector("#appearance-dialog").close());
 elements.dialog.addEventListener("close", async () => {
-  try { populateSettings(await window.claudeNas.loadSettings()); }
+  try { populateSettings(await window.agentChatPro.loadSettings()); }
   catch (error) { setConnection("重新读取设置失败：" + error.message, "error"); }
 });
 document.querySelector("#new-chat").addEventListener("click", createNewConversation);
@@ -803,7 +803,7 @@ elements.form.addEventListener("submit", async (event) => {
   saveButton.textContent = "正在保存和迁移…";
   try {
     const formData = settingsFromForm();
-    const settings = await window.claudeNas.saveSettings(formData);
+    const settings = await window.agentChatPro.saveSettings(formData);
     populateSettings(settings);
     await refreshConversationList();
     if (conversationId && conversationCache.some((item) => item.id === conversationId)) await loadConversation(conversationId);
@@ -814,7 +814,7 @@ elements.form.addEventListener("submit", async (event) => {
     // 外网模式下保存设置后触发网络连接
     if (formData.networkType === "external") {
       try {
-        await window.claudeNas.networkConnect(formData);
+        await window.agentChatPro.networkConnect(formData);
         setConnection("外网连接已建立", "connected");
       } catch (error) {
         setConnection("外网连接失败：" + error.message, "error");
@@ -832,14 +832,14 @@ document.querySelector("#test-connection").addEventListener("click", async () =>
   const modeLabel = mode === "cloud" ? "云端 AI" : mode === "local" ? "本机" : "SSH";
   setStatus(mode === "cloud" ? "正在测试云端 AI 连接…" : mode === "local" ? "正在检查本机 Claude 命令…" : "正在连接并检查 Claude 命令…");
   try {
-    const version = await window.claudeNas.testConnection(settingsFromForm());
+    const version = await window.agentChatPro.testConnection(settingsFromForm());
     setStatus(`${modeLabel}连接成功${mode === "cloud" ? "" : "：Claude Code " + version}`);
   } catch (error) {
     setStatus(error.message, true);
   }
 });
 document.querySelector("#open-diagnostics").addEventListener("click", async () => {
-  const path = await window.claudeNas.openDiagnostics();
+  const path = await window.agentChatPro.openDiagnostics();
   setStatus(`已打开日志位置：${path}`);
 });
 document.querySelector("#refresh-device-control").addEventListener("click", refreshDeviceControlStatus);
@@ -849,7 +849,7 @@ document.querySelector("#install-bridge").addEventListener("click", async () => 
   button.disabled = true;
   setStatus("正在部署增强 Bridge 并安装其依赖…");
   try {
-    const result = await window.claudeNas.installBridge();
+    const result = await window.agentChatPro.installBridge();
     if (result.cancelled) setStatus("已取消部署。基础直连聊天不受影响。");
     else { renderBridgeStatus(result); setStatus("增强 Bridge 已安装并校验完成。"); }
   } catch (error) { setStatus(error.message, true); await refreshBridgeStatus(); }
@@ -860,7 +860,7 @@ document.querySelector("#uninstall-bridge").addEventListener("click", async () =
   button.disabled = true;
   setStatus("正在移除增强 Bridge…");
   try {
-    const result = await window.claudeNas.uninstallBridge();
+    const result = await window.agentChatPro.uninstallBridge();
     if (result.cancelled) setStatus("已取消移除。");
     else { renderBridgeStatus(result); setStatus("增强 Bridge 已移除；基础直连聊天仍可使用。"); }
   } catch (error) { setStatus(error.message, true); await refreshBridgeStatus(); }
@@ -871,9 +871,9 @@ document.querySelector("#install-device-control").addEventListener("click", asyn
   button.disabled = true;
   setStatus("正在准备联动密钥。确认 Windows 管理员授权后，安装会在后台继续，通常需要几十秒；请留在软件窗口等待结果。");
   try {
-    const settings = await window.claudeNas.saveSettings(settingsFromForm());
+    const settings = await window.agentChatPro.saveSettings(settingsFromForm());
     populateSettings(settings);
-    const status = await window.claudeNas.installDeviceControl({
+    const status = await window.agentChatPro.installDeviceControl({
       sourceAddress: document.querySelector("#device-control-source").value,
       targetAddress: document.querySelector("#device-control-target").value,
       targetPort: document.querySelector("#device-control-port").value,
@@ -896,7 +896,7 @@ document.querySelector("#uninstall-device-control").addEventListener("click", as
   button.disabled = true;
   setStatus("正在卸载联动控件…");
   try {
-    const status = await window.claudeNas.uninstallDeviceControl();
+    const status = await window.agentChatPro.uninstallDeviceControl();
     if (status.cancelled) setStatus("已取消卸载。", true);
     else {
       renderDeviceControlStatus(status);
@@ -1045,19 +1045,19 @@ document.querySelector("#toggle-password").addEventListener("click", () => {
   passwordInput.focus();
 });
 document.querySelector("#choose-directory").addEventListener("click", async () => {
-  const selected = await window.claudeNas.chooseStorageDirectory();
+  const selected = await window.agentChatPro.chooseStorageDirectory();
   if (selected) elements.form.elements.namedItem("dataDirectory").value = selected;
 });
 document.querySelector("#open-directory").addEventListener("click", async () => {
   try {
-    await window.claudeNas.openStorageDirectory(elements.form.elements.namedItem("dataDirectory").value);
+    await window.agentChatPro.openStorageDirectory(elements.form.elements.namedItem("dataDirectory").value);
   } catch (error) {
     setStatus(error.message, true);
   }
 });
 document.querySelector("#open-archive").addEventListener("click", async () => {
   try {
-    const path = await window.claudeNas.openArchiveDirectory();
+    const path = await window.agentChatPro.openArchiveDirectory();
     setStatus(`已打开会话存档：${path}`);
   } catch (error) {
     setStatus(error.message, true);
@@ -1090,13 +1090,13 @@ window.addEventListener("focus", () => requestAnimationFrame(() => focusPrompt()
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "visible") requestAnimationFrame(() => focusPrompt());
 });
-window.claudeNas.onDelta(({ id, text }) => {
+window.agentChatPro.onDelta(({ id, text }) => {
   const answer = messages.get(id);
   if (!answer) return;
   answer.querySelector(".message-content").textContent += text;
   elements.messages.scrollTop = elements.messages.scrollHeight;
 });
-window.claudeNas.onChatEvent((event) => {
+window.agentChatPro.onChatEvent((event) => {
   const answer = messages.get(event.id);
   if (event.type === "upload") {
     setConnection(`正在上传 ${event.name} · ${Math.round(event.overall * 100)}%`, "");
@@ -1131,7 +1131,7 @@ document.querySelectorAll(".menu-trigger").forEach((trigger) => {
 document.querySelectorAll("[data-window-action]").forEach((button) => {
   button.addEventListener("click", async () => {
     closeAppMenus();
-    await window.claudeNas.windowAction(button.dataset.windowAction);
+    await window.agentChatPro.windowAction(button.dataset.windowAction);
   });
 });
 document.querySelectorAll("[data-app-action]").forEach((button) => {
@@ -1142,7 +1142,7 @@ document.querySelectorAll("[data-app-action]").forEach((button) => {
 });
 document.addEventListener("click", () => closeAppMenus());
 document.querySelector(".titlebar").addEventListener("dblclick", (event) => {
-  if (!event.target.closest("button, nav")) window.claudeNas.windowAction("toggle-maximize");
+  if (!event.target.closest("button, nav")) window.agentChatPro.windowAction("toggle-maximize");
 });
 document.addEventListener("keydown", (event) => {
   if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "n") {
@@ -1166,8 +1166,11 @@ function setMaximized(maximized) {
   button.setAttribute("aria-label", maximized ? "还原" : "最大化");
 }
 
-window.claudeNas.onMenuAction(runAppAction);
-window.claudeNas.onWindowMaximized(setMaximized);
+window.agentChatPro.onWindowMaximized(setMaximized);
+window.agentChatPro.onWindowFocus(() => {
+  const prompt = document.getElementById("prompt");
+  if (prompt && !window.getSelection().toString()) prompt.focus();
+});
 
 // ── 模式选择器 ──────────────────────────────────
 
@@ -1181,7 +1184,7 @@ function closeModeDropdown() {
 
 async function refreshModeSelector() {
   try {
-    const modes = await window.claudeNas.listModes();
+    const modes = await window.agentChatPro.listModes();
     window._cachedModes = modes;
     const list = document.querySelector("#mode-list");
     list.replaceChildren();
@@ -1194,7 +1197,7 @@ async function refreshModeSelector() {
         updateModeDisplay(mode);
         // 保存到设置
         try {
-          const settings = await window.claudeNas.saveSettings({ ...(await window.claudeNas.loadSettings()), workModeId: mode.id });
+          const settings = await window.agentChatPro.saveSettings({ ...(await window.agentChatPro.loadSettings()), workModeId: mode.id });
           populateSettings(settings);
         } catch (error) { setConnection("模式切换失败：" + error.message, "error"); }
         closeModeDropdown();
@@ -1337,14 +1340,14 @@ function updateSystemPromptPreview() {
   clearTimeout(promptPreviewTimer);
   promptPreviewTimer = setTimeout(async () => {
     try {
-      const html = await window.claudeNas.renderMarkdown(text);
+      const html = await window.agentChatPro.renderMarkdown(text);
       preview.innerHTML = html;
       preview.classList.add("rendered");
       // 链接拦截
       preview.querySelectorAll("a[href]").forEach((link) => {
         link.addEventListener("click", (event) => {
           event.preventDefault();
-          window.claudeNas.openLink(link.getAttribute("href")).catch(() => {});
+          window.agentChatPro.openLink(link.getAttribute("href")).catch(() => {});
         });
       });
     } catch {
@@ -1366,13 +1369,13 @@ deleteModeBtn.addEventListener("click", async () => {
   if (!mode || mode.isBuiltIn) return;
   if (!confirm(`确定删除模式"${mode.name}"吗？此操作不可撤销。`)) return;
   try {
-    await window.claudeNas.deleteMode(id);
+    await window.agentChatPro.deleteMode(id);
     if (currentModeId === id) {
       currentModeId = "regular";
-      const regular = await window.claudeNas.getMode("regular");
+      const regular = await window.agentChatPro.getMode("regular");
       if (regular) updateModeDisplay(regular);
-      const settings = await window.claudeNas.loadSettings();
-      await window.claudeNas.saveSettings({ ...settings, workModeId: "regular" });
+      const settings = await window.agentChatPro.loadSettings();
+      await window.agentChatPro.saveSettings({ ...settings, workModeId: "regular" });
     }
     await refreshModeSelector();
     modeEditDialog.close();
@@ -1398,9 +1401,9 @@ modeEditForm.addEventListener("submit", async (event) => {
   try {
     let result;
     if (id) {
-      result = await window.claudeNas.updateMode(id, input);
+      result = await window.agentChatPro.updateMode(id, input);
     } else {
-      result = await window.claudeNas.createMode(input);
+      result = await window.agentChatPro.createMode(input);
     }
     // 如果编辑的是当前模式，刷新显示
     if (result.id === currentModeId) {
@@ -1423,7 +1426,7 @@ document.querySelector("#mode-import").addEventListener("click", async () => {
   try {
     const json = prompt("粘贴导出的模式 JSON：");
     if (!json) return;
-    const result = await window.claudeNas.importModes(json);
+    const result = await window.agentChatPro.importModes(json);
     await refreshModeSelector();
     setConnection(`导入成功：新增 ${result.added} 个模式`, "connected");
   } catch (error) { alert("导入失败：" + error.message); }
@@ -1432,7 +1435,7 @@ document.querySelector("#mode-import").addEventListener("click", async () => {
 document.querySelector("#mode-export").addEventListener("click", async () => {
   closeModeDropdown();
   try {
-    const json = await window.claudeNas.exportModes();
+    const json = await window.agentChatPro.exportModes();
     await navigator.clipboard.writeText(json);
     alert("自定义模式已复制到剪贴板。");
   } catch (error) { alert("导出失败：" + error.message); }
@@ -1580,7 +1583,7 @@ function updateNetworkStatus(status) {
   }
 }
 
-window.claudeNas.onNetworkStatusChange((event) => {
+window.agentChatPro.onNetworkStatusChange((event) => {
   updateNetworkStatus(networkManager.getStatus());
 });
 
@@ -1603,11 +1606,11 @@ function updateFrostedGlassRGB(theme) {
 
 document.querySelector("#theme-dark")?.addEventListener("click", async () => {
   applyTheme("dark");
-  try { await window.claudeNas.saveSettings({ ...(await window.claudeNas.loadSettings()), theme: "dark" }); } catch {}
+  try { await window.agentChatPro.saveSettings({ ...(await window.agentChatPro.loadSettings()), theme: "dark" }); } catch {}
 });
 document.querySelector("#theme-light")?.addEventListener("click", async () => {
   applyTheme("light");
-  try { await window.claudeNas.saveSettings({ ...(await window.claudeNas.loadSettings()), theme: "light" }); } catch {}
+  try { await window.agentChatPro.saveSettings({ ...(await window.agentChatPro.loadSettings()), theme: "light" }); } catch {}
 });
 
 // 初始化主题（优先使用主进程推送，回退到设置和 localStorage）
@@ -1617,12 +1620,12 @@ function initTheme(theme) {
   themeInitialized = true;
   applyTheme(theme || "dark");
 }
-window.claudeNas.onThemeInit((theme) => initTheme(theme));
+window.agentChatPro.onThemeInit((theme) => initTheme(theme));
 setTimeout(() => {
   if (!themeInitialized) initTheme(localStorage.getItem("theme") || "dark");
 }, 1000);
 
-window.claudeNas.onNetworkLatency((summary) => {
+window.agentChatPro.onNetworkLatency((summary) => {
   const latencyLabel = document.querySelector("#network-latency-label");
   if (latencyLabel) {
     latencyLabel.textContent = `${summary.avgLatency}ms · ${summary.label}`;
@@ -1631,13 +1634,13 @@ window.claudeNas.onNetworkLatency((summary) => {
 });
 
 (async () => {
-  setMaximized(await window.claudeNas.isWindowMaximized());
-  const settings = await window.claudeNas.loadSettings();
+  setMaximized(await window.agentChatPro.isWindowMaximized());
+  const settings = await window.agentChatPro.loadSettings();
   populateSettings(settings);
   // 初始化模式选择器
   currentModeId = settings.workModeId || "regular";
   await refreshModeSelector();
-  const currentMode = await window.claudeNas.getMode(currentModeId);
+  const currentMode = await window.agentChatPro.getMode(currentModeId);
   if (currentMode) updateModeDisplay(currentMode);
   // 初始化网络配置
   populateNetworkSettings(settings);
@@ -1650,7 +1653,7 @@ window.claudeNas.onNetworkLatency((summary) => {
   appearanceSettings.backgroundOpacity = Number(settings.backgroundOpacity) || 100;
   applyFrostedGlass();
   applyBackgroundImage();
-  const conversations = await window.claudeNas.listConversations();
+  const conversations = await window.agentChatPro.listConversations();
   if (conversations.length) await loadConversation(conversations[0].id);
   else await createNewConversation();
   if (!settings.wakeName || (settings.connectionMode !== "local" && (!settings.host || !settings.username || !settings.hasPassword))) openSettings();
@@ -1661,7 +1664,7 @@ window.claudeNas.onNetworkLatency((summary) => {
 /** 刷新授权状态并更新 UI */
 async function refreshAuthStatus() {
   try {
-    authStatus = await window.claudeNas.getAuthStatus();
+    authStatus = await window.agentChatPro.getAuthStatus();
     updateAuthUI();
   } catch (error) {
     console.error("获取授权状态失败:", error);
@@ -1772,13 +1775,13 @@ async function submitAuthCode() {
   if (errorEl) errorEl.textContent = "验证中…";
 
   try {
-    const result = await window.claudeNas.verifyAuthCode(code);
+    const result = await window.agentChatPro.verifyAuthCode(code);
     if (result.valid) {
       hideAuthDialog();
       await refreshAuthStatus();
       // 如果之前被锁定，需要重新初始化界面
       if (authStatus.authorized) {
-        const settings = await window.claudeNas.loadSettings();
+        const settings = await window.agentChatPro.loadSettings();
         populateSettings(settings);
       }
     } else {
@@ -1794,15 +1797,15 @@ async function submitAuthCode() {
 // ── 授权事件监听 ──
 
 // 主进程推送：显示锁屏
-window.claudeNas.onAuthShowLockScreen && window.claudeNas.onAuthShowLockScreen(() => {
+window.agentChatPro.onAuthShowLockScreen && window.agentChatPro.onAuthShowLockScreen(() => {
   showAuthDialog("设备已被锁定，请输入授权码以继续使用");
 });
 
 // 主进程推送：授权解锁成功
-window.claudeNas.onAuthUnlockSuccess && window.claudeNas.onAuthUnlockSuccess(() => {
+window.agentChatPro.onAuthUnlockSuccess && window.agentChatPro.onAuthUnlockSuccess(() => {
   hideAuthDialog();
   refreshAuthStatus().then(() => {
-    const settings = window.claudeNas.loadSettings();
+    const settings = window.agentChatPro.loadSettings();
     settings.then((s) => populateSettings(s));
   });
 });
@@ -1942,7 +1945,7 @@ document.addEventListener("keydown", (e) => {
 async function openAppearanceDialog() {
   const dialog = document.querySelector("#appearance-dialog");
   // 加载当前设置
-  const settings = await window.claudeNas.loadSettings();
+  const settings = await window.agentChatPro.loadSettings();
   appearanceSettings.frostedGlass = Boolean(settings.frostedGlass);
   appearanceSettings.frostedBlur = Number(settings.frostedBlur) || 20;
   appearanceSettings.frostedOpacity = Number(settings.frostedOpacity) || 85;
@@ -2066,7 +2069,7 @@ document.querySelector("#frosted-glass-toggle")?.addEventListener("change", asyn
   appearanceSettings.frostedGlass = document.querySelector("#frosted-glass-toggle").checked;
   document.querySelector("#frosted-glass-status").textContent = appearanceSettings.frostedGlass ? "毛玻璃效果已开启" : "点击开关启用毛玻璃效果";
   applyFrostedGlass();
-  try { await window.claudeNas.saveSettings({ ...(await window.claudeNas.loadSettings()), frostedGlass: appearanceSettings.frostedGlass, frostedBlur: appearanceSettings.frostedBlur, frostedOpacity: appearanceSettings.frostedOpacity }); } catch {}
+  try { await window.agentChatPro.saveSettings({ ...(await window.agentChatPro.loadSettings()), frostedGlass: appearanceSettings.frostedGlass, frostedBlur: appearanceSettings.frostedBlur, frostedOpacity: appearanceSettings.frostedOpacity }); } catch {}
 });
 
 // 毛玻璃模糊强度
@@ -2076,7 +2079,7 @@ document.querySelector("#frosted-blur-range")?.addEventListener("input", () => {
   applyFrostedGlass();
 });
 document.querySelector("#frosted-blur-range")?.addEventListener("change", async () => {
-  try { await window.claudeNas.saveSettings({ ...(await window.claudeNas.loadSettings()), frostedBlur: appearanceSettings.frostedBlur }); } catch {}
+  try { await window.agentChatPro.saveSettings({ ...(await window.agentChatPro.loadSettings()), frostedBlur: appearanceSettings.frostedBlur }); } catch {}
 });
 
 // 毛玻璃透明度
@@ -2086,7 +2089,7 @@ document.querySelector("#frosted-opacity-range")?.addEventListener("input", () =
   applyFrostedGlass();
 });
 document.querySelector("#frosted-opacity-range")?.addEventListener("change", async () => {
-  try { await window.claudeNas.saveSettings({ ...(await window.claudeNas.loadSettings()), frostedOpacity: appearanceSettings.frostedOpacity }); } catch {}
+  try { await window.agentChatPro.saveSettings({ ...(await window.agentChatPro.loadSettings()), frostedOpacity: appearanceSettings.frostedOpacity }); } catch {}
 });
 
 // 背景图片选择
@@ -2094,7 +2097,7 @@ document.querySelector("#background-preview-none")?.addEventListener("click", as
   appearanceSettings.backgroundImage = "";
   updateBackgroundPreview();
   applyBackgroundImage();
-  try { await window.claudeNas.saveSettings({ ...(await window.claudeNas.loadSettings()), backgroundImage: "", backgroundBlur: 0, backgroundOpacity: 100 }); } catch {}
+  try { await window.agentChatPro.saveSettings({ ...(await window.agentChatPro.loadSettings()), backgroundImage: "", backgroundBlur: 0, backgroundOpacity: 100 }); } catch {}
 });
 
 document.querySelector("#background-preview-upload")?.addEventListener("click", () => {
@@ -2114,7 +2117,7 @@ document.querySelector("#choose-background-image")?.addEventListener("click", ()
       appearanceSettings.backgroundImage = reader.result; // data URL
       updateBackgroundPreview();
       applyBackgroundImage();
-      try { await window.claudeNas.saveSettings({ ...(await window.claudeNas.loadSettings()), backgroundImage: appearanceSettings.backgroundImage, backgroundBlur: appearanceSettings.backgroundBlur, backgroundOpacity: appearanceSettings.backgroundOpacity }); } catch {}
+      try { await window.agentChatPro.saveSettings({ ...(await window.agentChatPro.loadSettings()), backgroundImage: appearanceSettings.backgroundImage, backgroundBlur: appearanceSettings.backgroundBlur, backgroundOpacity: appearanceSettings.backgroundOpacity }); } catch {}
     };
     reader.readAsDataURL(file);
   });
@@ -2126,7 +2129,7 @@ document.querySelector("#clear-background-image")?.addEventListener("click", asy
   document.querySelector("#background-image-path").value = "";
   updateBackgroundPreview();
   applyBackgroundImage();
-  try { await window.claudeNas.saveSettings({ ...(await window.claudeNas.loadSettings()), backgroundImage: "", backgroundBlur: 0, backgroundOpacity: 100 }); } catch {}
+  try { await window.agentChatPro.saveSettings({ ...(await window.agentChatPro.loadSettings()), backgroundImage: "", backgroundBlur: 0, backgroundOpacity: 100 }); } catch {}
 });
 
 // 背景模糊滑块
@@ -2136,7 +2139,7 @@ document.querySelector("#background-blur-range")?.addEventListener("input", () =
   applyBackgroundImage();
 });
 document.querySelector("#background-blur-range")?.addEventListener("change", async () => {
-  try { await window.claudeNas.saveSettings({ ...(await window.claudeNas.loadSettings()), backgroundBlur: appearanceSettings.backgroundBlur }); } catch {}
+  try { await window.agentChatPro.saveSettings({ ...(await window.agentChatPro.loadSettings()), backgroundBlur: appearanceSettings.backgroundBlur }); } catch {}
 });
 
 // 背景透明度滑块
@@ -2146,7 +2149,7 @@ document.querySelector("#background-opacity-range")?.addEventListener("input", (
   applyBackgroundImage();
 });
 document.querySelector("#background-opacity-range")?.addEventListener("change", async () => {
-  try { await window.claudeNas.saveSettings({ ...(await window.claudeNas.loadSettings()), backgroundOpacity: appearanceSettings.backgroundOpacity }); } catch {}
+  try { await window.agentChatPro.saveSettings({ ...(await window.agentChatPro.loadSettings()), backgroundOpacity: appearanceSettings.backgroundOpacity }); } catch {}
 });
 
 // 外观设置面板关闭时同步
@@ -2160,10 +2163,10 @@ async function runAppAction(action) {
   else if (action === "appearance") await openAppearanceDialog();
   else if (action === "auth") showAuthDialog();
   else if (action === "archive") {
-    try { await window.claudeNas.openArchiveDirectory(); }
+    try { await window.agentChatPro.openArchiveDirectory(); }
     catch (error) { alert(error.message); }
   } else if (action === "diagnostics") {
-    try { await window.claudeNas.openDiagnostics(); }
+    try { await window.agentChatPro.openDiagnostics(); }
     catch (error) { alert(error.message); }
   }
 }

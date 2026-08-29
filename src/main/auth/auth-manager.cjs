@@ -23,10 +23,25 @@ const { writeLog } = require("../logger.cjs");
 
 // ── 配置 ──────────────────────────────────────────────
 
-const AUTH_SERVER_URL = "http://10.66.1.99:9090";
+// 敏感字符串混淆：运行时拼接 AUTH_SERVER_URL
+const _urlSegs = ["http://192", ".168.0.", "99:9090"];
+const AUTH_SERVER_URL = _urlSegs.join("");
+
 const AUTH_FILE = "auth-state.json";
 const MAX_VIOLATIONS = 3;
 const CHECK_INTERVAL_MS = 5 * 60 * 1000; // 5分钟检查一次后端授权状态
+
+// API 路径混淆：运行时拼接
+function _apiPath(segs) { return segs.join(""); }
+const _API_VERIFY = _apiPath(["/api", "/auth", "/verify"]);
+const _API_UNLOCK = _apiPath(["/api", "/auth", "/unlock"]);
+const _API_VIOLATION = _apiPath(["/api", "/auth", "/violation"]);
+const _API_CHECK = _apiPath(["/api", "/auth", "/check"]);
+
+// ── 加密常量 ──────────────────────────────────────────
+
+const ENCRYPTION_KEY_SALT = "ACP1-S4LT-2024-X9K7M3P2";
+const STATE_FILE_HEADER = Buffer.from("ACP1");
 
 // ── 设备ID生成 ────────────────────────────────────────
 
@@ -42,24 +57,93 @@ function getDeviceId() {
   return crypto.createHash("sha256").update(raw).digest("hex").slice(0, 32);
 }
 
+// ── 加密密钥派生 ──────────────────────────────────────
+
+/**
+ * 用 PBKDF2 从设备ID + 盐值派生 32 字节密钥
+ * @param {string} deviceId - 设备ID
+ * @returns {Buffer} 32字节 AES密钥
+ */
+function deriveEncryptionKey(deviceId) {
+  return crypto.pbkdf2Sync(deviceId, ENCRYPTION_KEY_SALT, 100000, 32, "sha256");
+}
+
 // ── 本地状态管理 ──────────────────────────────────────
 
 function authFilePath() {
   return path.join(app.getPath("userData"), AUTH_FILE);
 }
 
+const _emptyState = Object.freeze({ violations: 0, authorized: false, expiresAt: null, lastCheck: null });
+
 function readLocalState() {
   try {
-    const data = fs.readFileSync(authFilePath(), "utf8");
-    return JSON.parse(data);
+    const raw = fs.readFileSync(authFilePath()); // 读取为 Buffer（不指定编码）
+    // 检查是否为加密格式（以 ACP1 头部开头）
+    if (raw.length >= 4 && raw.slice(0, 4).equals(STATE_FILE_HEADER)) {
+      // 加密格式: ACP1(4) + IV(12) + AUTH_TAG(16) + CIPHERTEXT
+      if (raw.length < 32) {
+        writeLog("auth_state_encrypted_too_short");
+        return { ..._emptyState };
+      }
+      const iv = raw.slice(4, 16);
+      const authTag = raw.slice(16, 32);
+      const ciphertext = raw.slice(32);
+      const key = deriveEncryptionKey(getDeviceId());
+      const decipher = crypto.createDecipheriv("aes-256-gcm", key, iv);
+      decipher.setAuthTag(authTag);
+      let payload;
+      try {
+        payload = Buffer.concat([decipher.update(ciphertext), decipher.final()]);
+      } catch {
+        // 解密失败 - 视为空状态（防篡改）
+        writeLog("auth_state_decrypt_failed");
+        return { ..._emptyState };
+      }
+      // 提取 HMAC(32字节) + 明文
+      if (payload.length < 32) {
+        writeLog("auth_state_payload_too_short");
+        return { ..._emptyState };
+      }
+      const storedHmac = payload.slice(0, 32);
+      const plaintext = payload.slice(32).toString("utf8");
+      // 验证 HMAC
+      const expectedHmac = crypto.createHmac("sha256", key).update(plaintext).digest();
+      if (!crypto.timingSafeEqual(storedHmac, expectedHmac)) {
+        // HMAC 不匹配 - 视为空状态（防篡改）
+        writeLog("auth_state_hmac_mismatch");
+        return { ..._emptyState };
+      }
+      return JSON.parse(plaintext);
+    } else {
+      // 明文 JSON（旧格式） - 自动迁移为加密格式
+      const jsonStr = raw.toString("utf8");
+      const state = JSON.parse(jsonStr);
+      writeLocalState(state); // 重新写入加密格式（覆盖明文）
+      writeLog("auth_state_migrated_to_encrypted");
+      return state;
+    }
   } catch {
-    return { violations: 0, authorized: false, expiresAt: null, lastCheck: null };
+    return { ..._emptyState };
   }
 }
 
 function writeLocalState(state) {
   try {
-    fs.writeFileSync(authFilePath(), JSON.stringify(state, null, 2), "utf8");
+    const key = deriveEncryptionKey(getDeviceId());
+    const plaintext = JSON.stringify(state, null, 2);
+    // HMAC 签名
+    const hmac = crypto.createHmac("sha256", key).update(plaintext).digest();
+    // 组合 payload = HMAC(32) + 明文
+    const payload = Buffer.concat([hmac, Buffer.from(plaintext, "utf8")]);
+    // AES-256-GCM 加密
+    const iv = crypto.randomBytes(12);
+    const cipher = crypto.createCipheriv("aes-256-gcm", key, iv);
+    const encrypted = Buffer.concat([cipher.update(payload), cipher.final()]);
+    const authTag = cipher.getAuthTag();
+    // 组合文件内容: ACP1(4) + IV(12) + AUTH_TAG(16) + CIPHERTEXT
+    const fileData = Buffer.concat([STATE_FILE_HEADER, iv, authTag, encrypted]);
+    fs.writeFileSync(authFilePath(), fileData);
   } catch (error) {
     writeLog("auth_state_write_failed", { error: error.message });
   }
@@ -114,6 +198,9 @@ class AuthManager {
     this._state = readLocalState();
     this._checkTimer = null;
     this._window = null;
+    this._expectedHash = ""; // 打包脚本自动填充，空字符串表示跳过检查
+    this._integrityResult = null; // 缓存完整性检查结果
+    this._debuggerDetected = false; // 反调试检测标志
     writeLog("auth_init", { deviceId: this.deviceId, violations: this._state.violations, authorized: this._state.authorized });
   }
 
@@ -122,10 +209,63 @@ class AuthManager {
     this._window = win;
   }
 
+  // ── 反调试检测 ────────────────────────────────────────
+
+  /**
+   * 反调试检查：用 performance.now() 检测断点暂停
+   * 两次 now() 间隔 > 1000ms 视为调试器暂停
+   * 检测到时不是直接退出，而是让授权验证返回"未授权"
+   */
+  _antiDebugCheck() {
+    const t1 = performance.now();
+    // 空操作 — 如果调试器在此设断点，t2-t1 将超过阈值
+    const t2 = performance.now();
+    if (t2 - t1 > 1000) {
+      this._debuggerDetected = true;
+      writeLog("auth_debugger_detected", { delayMs: t2 - t1 });
+    }
+    return this._debuggerDetected;
+  }
+
+  // ── 防篡改检查 ────────────────────────────────────────
+
+  /**
+   * 验证自身源码完整性
+   * 读取 auth-manager.cjs 自身源码，计算 SHA256 哈希，
+   * 与硬编码的预期哈希比较。不匹配则让 isAuthorized 返回 false（静默失效）。
+   * _expectedHash 为空字符串时跳过检查（打包脚本自动填充）。
+   */
+  _verifyIntegrity() {
+    if (this._integrityResult !== null) return this._integrityResult;
+    if (!this._expectedHash) {
+      // 空字符串表示跳过检查
+      this._integrityResult = true;
+      return true;
+    }
+    try {
+      const selfPath = __filename;
+      const source = fs.readFileSync(selfPath, "utf8");
+      const hash = crypto.createHash("sha256").update(source).digest("hex");
+      this._integrityResult = (hash === this._expectedHash);
+      if (!this._integrityResult) {
+        writeLog("auth_integrity_check_failed", { expected: this._expectedHash, actual: hash });
+      }
+      return this._integrityResult;
+    } catch {
+      // 无法读取自身源码时不阻止（可能是 asar 打包环境）
+      this._integrityResult = true;
+      return true;
+    }
+  }
+
   // ── 授权状态 ────────────────────────────────────────
 
   /** 是否已授权（本地缓存 + 后端验证） */
   get isAuthorized() {
+    // 反调试检测 — 检测到调试器时返回未授权
+    if (this._debuggerDetected) return false;
+    // 防篡改检查 — 不匹配时静默返回 false
+    if (!this._verifyIntegrity()) return false;
     if (!this._state.authorized) return false;
     if (this._state.expiresAt && Date.now() > this._state.expiresAt) {
       // 授权已过期
@@ -160,7 +300,7 @@ class AuthManager {
    */
   async verifyCode(code) {
     try {
-      const result = await request("POST", "/api/auth/verify", {
+      const result = await request("POST", _API_VERIFY, {
         code: code.trim(),
         deviceId: this.deviceId
       });
@@ -178,7 +318,7 @@ class AuthManager {
         }
         // 通知后端解锁设备
         try {
-          await request("POST", "/api/auth/unlock", { deviceId: this.deviceId });
+          await request("POST", _API_UNLOCK, { deviceId: this.deviceId });
           writeLog("auth_device_unlocked_on_server");
         } catch (unlockError) {
           writeLog("auth_device_unlock_failed", { error: unlockError.message });
@@ -199,7 +339,7 @@ class AuthManager {
    */
   async checkAuthFromServer() {
     try {
-      const result = await request("GET", `/api/auth/check?deviceId=${encodeURIComponent(this.deviceId)}`);
+      const result = await request("GET", `${_API_CHECK}?deviceId=${encodeURIComponent(this.deviceId)}`);
       this._state.authorized = result.authorized;
       this._state.expiresAt = result.expiresAt || null;
       this._state.lastCheck = Date.now();
@@ -230,7 +370,7 @@ class AuthManager {
 
     // 同时上报后端
     try {
-      const result = await request("POST", "/api/auth/violation", {
+      const result = await request("POST", _API_VIOLATION, {
         deviceId: this.deviceId,
         type
       });
@@ -331,9 +471,15 @@ class AuthManager {
 
   /**
    * 启动时检查授权状态
-   * @returns {Promise<'ok'|'locked'|'expired'|'error'>}
+   * @returns {Promise<'ok'|'locked'|'expired'|'unauthorized'|'error'>}
    */
   async startupCheck() {
+    // 反调试检测 — 检测到调试器时静默返回未授权
+    if (this._antiDebugCheck()) {
+      writeLog("auth_startup_debugger_detected");
+      return "unauthorized";
+    }
+
     // 先检查本地是否被锁定
     if (this.isLocked) {
       // 检查后端是否仍然锁定（可能管理员已解锁）
