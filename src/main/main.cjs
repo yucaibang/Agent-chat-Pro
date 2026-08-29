@@ -3,24 +3,27 @@
 const { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, shell } = require("electron");
 const path = require("path");
 const { randomUUID } = require("crypto");
-const { getConnection, getSettings, getSshConnection, getCloudAiConfig, saveSettings, trustHostFingerprint } = require("./settings.cjs");
-const { downloadRemoteFile, ensureDeviceControlKey, finalizeDeviceControl, getAgentSdkBridgeStatus, installAgentSdkBridge, markDeviceControlDisabled, readRemoteFile, runClaude, uninstallAgentSdkBridge, verifyConnection } = require("./ssh.cjs");
-const { copyLocalFile, readLocalFile, runLocalClaude, verifyLocalConnection } = require("./local.cjs");
+const { getConnection, getSettings, getSshConnection, getCloudAiConfig, saveSettings, setModelAdminPassword, trustHostFingerprint, verifyModelAdminPassword } = require("./settings.cjs");
+const { downloadRemoteFile, ensureDeviceControlKey, finalizeDeviceControl, getAgentSdkBridgeStatus, getClaudeModelStatus, installAgentSdkBridge, markDeviceControlDisabled, readRemoteFile, runClaude, uninstallAgentSdkBridge, updateClaudeModel, verifyConnection } = require("./ssh.cjs");
+const { copyLocalFile, getLocalClaudeModelStatus, readLocalFile, runLocalClaude, updateLocalClaudeModel, verifyLocalConnection } = require("./local.cjs");
 const { getDeviceControlStatus, installDeviceControl, preferredAddress, uninstallDeviceControl } = require("./device-control.cjs");
 const {
   addAssistantMessage,
   addUserMessage,
+  clearConversationSession,
   createConversation,
   deleteConversation,
   ensureConversationArchives,
   getConversation,
+  getConversationRecoveryNotice,
   listConversations,
   archiveDirectory,
   prepareConversationDirectory,
   renameConversation,
   saveAssistantDraft,
   searchConversations,
-  sessionForMode
+  sessionForMode,
+  conversationStats
 } = require("./conversations.cjs");
 const { logPath, writeLog } = require("./logger.cjs");
 const { renderMarkdown } = require("./markdown.cjs");
@@ -31,9 +34,30 @@ const { NetworkManager, STATES } = require("./network/network-manager.cjs");
 const { LatencyMonitor } = require("./network/latency-monitor.cjs");
 const { sendCloudChat, buildMessages, verifyCloudConnection } = require("./cloud-chat.cjs");
 const { AuthManager } = require("./auth/auth-manager.cjs");
+const { AUDIT_FILE_FORMATS, AUDIT_TOOL_ACTIONS, auditToolDetails, createStatusSignalObserver, normalizeStatusEvent } = require("./status-event-normalizer.cjs");
 
 let window;
 const activeRequests = new Map();
+const statusSignalObserver = createStatusSignalObserver({ enabled: true, onGap: (entry) => writeLog("status_signal_gap", entry) });
+
+function normalizeAndObserveStatusEvent(event, config) {
+  const normalized = normalizeStatusEvent(event, { connection: config });
+  if (config?.statusSignalCapture) statusSignalObserver.observe(normalized);
+  return normalized;
+}
+
+function statusJournalEntry(input = {}) {
+  const states = new Set(["idle", "connected", "working", "proxy", "danger", "error"]);
+  const outcomes = new Set(["applied", "suppressed"]);
+  return {
+    requestId: /^[0-9a-f-]{36}$/i.test(String(input.requestId || "")) ? input.requestId : "",
+    outcome: outcomes.has(input.outcome) ? input.outcome : "applied",
+    state: states.has(input.state) ? input.state : "idle",
+    previousState: states.has(input.previousState) ? input.previousState : "idle",
+    source: String(input.source || "direct").replace(/[^a-z-]/gi, "").slice(0, 40) || "direct",
+    label: String(input.label || "其他活动").slice(0, 80)
+  };
+}
 const networkManager = new NetworkManager();
 const authManager = new AuthManager();
 let latencyMonitor = null;
@@ -150,7 +174,7 @@ app.whenReady().then(async () => {
     return result;
   });
   ipcMain.handle("auth:check", () => authManager.checkAuthFromServer());
-  ipcMain.handle("settings:load", () => getSettings());
+  ipcMain.handle("settings:load", () => ({ ...getSettings(), conversationRecoveryNotice: getConversationRecoveryNotice() }));
   ipcMain.handle("settings:save", async (_event, input) => {
     const previous = getSettings();
     const requestedDirectory = input.dataDirectory || previous.defaultDataDirectory;
@@ -408,6 +432,8 @@ app.whenReady().then(async () => {
   });
   ipcMain.handle("conversations:rename", (_event, id, title) => renameConversation(id, title));
   ipcMain.handle("conversations:delete", (_event, id) => deleteConversation(id));
+  ipcMain.handle("conversations:clear-session", (_event, id) => clearConversationSession(id));
+  ipcMain.handle("conversations:set-pinned", (_event, id, pinned) => setConversationPinned(id, pinned));
   ipcMain.handle("conversations:search", (_event, query, limit) => searchConversations(query, limit));
   ipcMain.handle("file:preview", async (_event, file) => {
     const mimeType = previewMime(file?.name);
@@ -567,6 +593,9 @@ app.whenReady().then(async () => {
     const conversation = getConversation(input.conversationId);
     const activeSessionId = sessionForMode(conversation, config.connectionMode);
     let streamedText = "";
+    let streamedTurnText = "";
+    let completedTurnCount = 0;
+    let latestSessionId = activeSessionId;
     let draftTimer;
     const persistDraft = () => {
       draftTimer = undefined;
@@ -574,17 +603,83 @@ app.whenReady().then(async () => {
       try { saveAssistantDraft(input.conversationId, id, streamedText); }
       catch (error) { writeLog("conversation_draft_save_failed", { requestId: id, conversationId: input.conversationId, error }); }
     };
+    function sendWorkStatusSignal(sender, channel, payload) {
+      const event = payload || {};
+      const tool = event.tool || {};
+      writeLog("work_status_signal", {
+        requestId: event.id,
+        direction: "main-sent",
+        signal: channel === "chat:delta" ? "chat-delta" : "chat-event",
+        disposition: "accepted",
+        eventType: event.type,
+        eventStatus: event.status,
+        toolId: tool.id,
+        toolName: tool.name,
+        ...(event.audit || (event.type === "tool" ? auditToolDetails(tool) : {})),
+        textLength: channel === "chat:delta" ? String(event.text || "").length : 0,
+        uploadPercent: event.type === "upload" ? Math.round(Number(event.overall || 0) * 100) : 0
+      });
+      sender.send(channel, payload);
+    }
     const callbacks = {
       conversationId: input.conversationId,
       onDelta: (text) => {
+        if (completedTurnCount > 0 && !streamedTurnText) {
+          event.sender.send("chat:turn-start", { id });
+        }
         streamedText += text;
-        event.sender.send("chat:delta", { id, text });
+        streamedTurnText += text;
+        const normalized = normalizeAndObserveStatusEvent({ id, type: "delta", text }, config);
+        writeLog("work_status_signal", { requestId: id, direction: "executor-emitted", signal: "runner-event", disposition: "emitted", eventType: "delta", textLength: String(text || "").length });
+        sendWorkStatusSignal(event.sender, "chat:delta", normalized);
         if (!draftTimer) draftTimer = setTimeout(persistDraft, 1000);
       },
-      onUploadProgress: (progress) => event.sender.send("chat:event", { id, type: "upload", ...progress }),
-      onToolEvent: (tool) => event.sender.send("chat:event", { id, type: "tool", tool }),
-      onStatus: (status) => event.sender.send("chat:event", { id, type: "connection", status }),
+      onUploadProgress: (progress) => {
+        const normalized = normalizeAndObserveStatusEvent({ id, type: "upload", ...progress }, config);
+        writeLog("work_status_signal", { requestId: id, direction: "executor-emitted", signal: "runner-event", disposition: "emitted", eventType: "upload", uploadPercent: Math.round(Number(progress?.overall || 0) * 100) });
+        sendWorkStatusSignal(event.sender, "chat:event", normalized);
+      },
+      onToolEvent: (tool) => {
+        const normalized = normalizeAndObserveStatusEvent({ id, type: "tool", tool }, config);
+        const audit = normalized.audit;
+        writeLog("work_status_signal", { requestId: id, direction: "executor-emitted", signal: "runner-event", disposition: "emitted", eventType: "tool", ...audit });
+        sendWorkStatusSignal(event.sender, "chat:event", normalized);
+      },
+      onUsage: (usage) => {
+        const normalized = normalizeAndObserveStatusEvent({ id, type: "usage", usage }, config);
+        writeLog("work_status_signal", { requestId: id, direction: "executor-emitted", signal: "runner-event", disposition: "emitted", eventType: "usage" });
+        sendWorkStatusSignal(event.sender, "chat:event", normalized);
+      },
+      onStatus: (status) => {
+        const normalized = normalizeAndObserveStatusEvent({ id, type: "connection", status }, config);
+        writeLog("work_status_signal", { requestId: id, direction: "executor-emitted", signal: "runner-event", disposition: "emitted", eventType: "connection", eventStatus: status });
+        sendWorkStatusSignal(event.sender, "chat:event", normalized);
+      },
+      onSessionId: (sessionId) => {
+        latestSessionId = sessionId || latestSessionId;
+        try {
+          saveConversationSession(input.conversationId, sessionId, config.connectionMode);
+          writeLog("chat_session_checkpointed", { requestId: id, conversationId: input.conversationId, sessionId, connectionMode: config.connectionMode });
+        } catch (error) {
+          writeLog("chat_session_checkpoint_failed", { requestId: id, conversationId: input.conversationId, error });
+        }
+      },
+      onTurnComplete: ({ text, sessionId: turnSessionId, usage: turnUsage }) => {
+        if (draftTimer) clearTimeout(draftTimer);
+        draftTimer = undefined;
+        const completedText = String(text || streamedTurnText || "");
+        if (completedText) {
+          saveAssistantDraft(input.conversationId, id, completedText);
+          addAssistantMessage(input.conversationId, completedText, turnSessionId || latestSessionId, [], [], id, config.connectionMode, turnUsage, Date.now() - startedAt);
+          completedTurnCount += 1;
+        }
+        streamedTurnText = "";
+        event.sender.send("chat:turn-complete", { id });
+      },
       onPermissionRequest: async (request) => {
+        const waiting = normalizeAndObserveStatusEvent({ id, type: "permission", status: "waiting", toolName: request.toolName || "" }, config);
+        writeLog("work_status_signal", { requestId: id, direction: "executor-emitted", signal: "runner-event", disposition: "emitted", eventType: "permission", eventStatus: "waiting", toolName: request.toolName });
+        sendWorkStatusSignal(event.sender, "chat:event", waiting);
         const detail = JSON.stringify(request.input || {}, null, 2);
         const answer = await dialog.showMessageBox(window, {
           type: "question",
@@ -596,31 +691,46 @@ app.whenReady().then(async () => {
           cancelId: 0,
           noLink: true
         });
-        return answer.response === 1;
+        const allowed = answer.response === 1;
+        sendWorkStatusSignal(event.sender, "chat:event", normalizeAndObserveStatusEvent({ id, type: "permission", status: allowed ? "allowed" : "denied", toolName: request.toolName || "" }, config));
+        return allowed;
       },
       onUnknownHost: (fingerprint) => trustHost(config, fingerprint),
+      onAudit: (entry) => writeLog("work_status_signal", { requestId: id, direction: "executor-emitted", signal: "transport-event", disposition: "emitted", eventType: "transport", ...entry }),
       onLog: writeLog
     };
+    const startedAt = Date.now();
     config.localUploadDirectory = path.join(app.getPath("userData"), "local-uploads");
     config.workModeId = input.workModeId || config.workModeId || "regular";
     const operation = config.connectionMode === "local"
       ? runLocalClaude(config, agentMessage, activeSessionId, attachments, callbacks)
       : runClaude(config, agentMessage, activeSessionId, attachments, callbacks);
-    activeRequests.set(id, operation);
+    writeLog("work_status_signal", { requestId: id, direction: "main-received", signal: "request-outcome", disposition: "started", eventType: "lifecycle", eventStatus: "started", transport: config.connectionMode === "local" ? "local-stdio" : "ssh" });
+    activeRequests.set(id, { operation, conversationId: input.conversationId });
+    sendWorkStatusSignal(event.sender, "chat:event", normalizeAndObserveStatusEvent({ id, type: "lifecycle", status: "started" }, config));
     try {
       const result = await operation.promise;
       if (draftTimer) clearTimeout(draftTimer);
-      addAssistantMessage(input.conversationId, result.text, result.sessionId, result.files, result.tools, id, config.connectionMode);
+      if (!completedTurnCount) {
+        addAssistantMessage(input.conversationId, result.text, result.sessionId, result.files, result.tools, id, config.connectionMode, result.usage, Date.now() - startedAt);
+      }
+      const stats = conversationStats(getConversation(input.conversationId));
       writeLog("chat_send_success", { requestId: id, conversationId: input.conversationId, sessionId: result.sessionId, textLength: result.text.length });
-      return { id, ...result };
+      writeLog("work_status_signal", { requestId: id, direction: "main-received", signal: "request-outcome", disposition: "completed", eventType: "lifecycle", eventStatus: "finished" });
+      sendWorkStatusSignal(event.sender, "chat:event", normalizeAndObserveStatusEvent({ id, type: "lifecycle", status: "finished" }, config));
+      return { id, ...result, stats };
     } catch (error) {
       if (draftTimer) clearTimeout(draftTimer);
       persistDraft();
       if (error?.cancelled || /^已停止/.test(String(error?.message || ""))) {
         writeLog("chat_send_cancelled", { requestId: id, conversationId: input.conversationId, textLength: streamedText.length });
+        writeLog("work_status_signal", { requestId: id, direction: "main-received", signal: "request-outcome", disposition: "cancelled", eventType: "lifecycle", eventStatus: "cancelled" });
+        sendWorkStatusSignal(event.sender, "chat:event", normalizeAndObserveStatusEvent({ id, type: "lifecycle", status: "cancelled" }, config));
         return { id, cancelled: true, text: streamedText, sessionId: activeSessionId, files: [], tools: [] };
       }
       writeLog("chat_send_failed", { requestId: id, conversationId: input.conversationId, error });
+      writeLog("work_status_signal", { requestId: id, direction: "main-received", signal: "request-outcome", disposition: "failed", eventType: "lifecycle", eventStatus: "failed" });
+      sendWorkStatusSignal(event.sender, "chat:event", normalizeAndObserveStatusEvent({ id, type: "lifecycle", status: "failed" }, config));
       throw error;
     } finally {
       if (draftTimer) clearTimeout(draftTimer);
@@ -628,8 +738,68 @@ app.whenReady().then(async () => {
     }
   });
   ipcMain.handle("chat:cancel", (_event, id) => activeRequests.get(id)?.cancel());
+  ipcMain.handle("chat:push-follow-up", async (_event, input) => {
+    const id = String(input?.id || "");
+    const message = String(input?.message || "").trim();
+    const request = activeRequests.get(id);
+    if (!request || !message || typeof request.operation?.pushFollowUp !== "function") return { accepted: false };
+    const config = getConnection();
+    const agentMessage = `${message}\n\n[来源电脑：${config.clientLabel}]`;
+    if (!(await request.operation.pushFollowUp(agentMessage))) return { accepted: false };
+    addUserMessage(request.conversationId, message);
+    writeLog("chat_follow_up_accepted", { requestId: id, conversationId: request.conversationId, textLength: message.length });
+    return { accepted: true };
+  });
+  // ── 模型管理 IPC ──
+  ipcMain.handle("model:status", async () => {
+    const config = getConnection();
+    return config.connectionMode === "local"
+      ? getLocalClaudeModelStatus()
+      : getClaudeModelStatus(config, (fingerprint) => trustHost(config, fingerprint), writeLog);
+  });
+  ipcMain.handle("model:initialize-password", (_event, input) => {
+    const state = getSettings().modelAdminPasswordState;
+    if (state === "ready") throw new Error("模型管理员密码已初始化；如需更换请联系管理员。");
+    if (state === "unavailable") throw new Error("Windows 系统加密不可用，无法安全保存模型管理员密码。");
+    const password = String(input?.password || "");
+    const confirmation = String(input?.confirmation || "");
+    if (password !== confirmation) throw new Error("两次输入的管理员密码不一致。");
+    setModelAdminPassword(password);
+    writeLog("model_admin_password_initialized");
+    return getSettings();
+  });
+  ipcMain.handle("model:update", async (_event, input) => {
+    if (activeRequests.size) throw new Error("Agent 正在回复，暂时不能切换模型。请等待当前回复结束后再操作。");
+    assertModelAdminPassword(input?.adminPassword);
+    const model = input?.model;
+    const config = getConnection();
+    const local = config.connectionMode === "local";
+    const answer = await dialog.showMessageBox(window, {
+      type: "warning",
+      title: "切换 Claude 模型",
+      message: `将${local ? "本机 Windows" : "目标 NAS"}上的 Claude 模型统一切换为：${String(model || "").trim()}`,
+      detail: "软件会只修改 ~/.claude/settings.json 的 OPUS、SONNET、HAIKU、SUBAGENT 和 SMALL_FAST 五个模型项，保留 Base URL、认证、权限和其他配置。正在进行的回复不受影响；下一次发送消息将使用新模型。",
+      buttons: ["取消", "切换模型"],
+      defaultId: 0,
+      cancelId: 0
+    });
+    if (answer.response !== 1) return { cancelled: true };
+    writeLog("claude_model_change_requested", { connectionMode: config.connectionMode, host: config.host || "", model: String(model || "").trim() });
+    return local
+      ? updateLocalClaudeModel(model, writeLog)
+      : updateClaudeModel(config, model, (fingerprint) => trustHost(config, fingerprint), writeLog);
+  });
   ipcMain.handle("window:is-maximized", () => Boolean(window?.isMaximized()));
   ipcMain.handle("window:action", (_event, action) => handleWindowAction(action));
+  ipcMain.handle("window:restore-native-dialog-focus", async (event) => {
+    if (event.sender !== window?.webContents || !window || window.isDestroyed()) return false;
+    window.blur();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    if (window.isDestroyed()) return false;
+    window.focus();
+    window.webContents.focus();
+    return true;
+  });
   createWindow();
   app.on("activate", () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
 
@@ -675,11 +845,15 @@ function handleWindowAction(action) {
     type: "info",
     title: "关于 Agent Chat Pro",
     message: "Agent Chat Pro",
-    detail: `版本 ${app.getVersion()}\n支持内网直连/外网穿透双模式 SSH 远程 AI 聊天；当前内置 Claude Code 适配器。`,
+    detail: `版本 ${app.getVersion()}\n支持本机或 SSH 运行 Agent CLI；当前内置 Claude Code 适配器。`,
     buttons: ["确定"]
   });
   else return false;
   return true;
+}
+
+function assertModelAdminPassword(value) {
+  if (!verifyModelAdminPassword(value)) throw new Error("模型管理员密码不正确。");
 }
 
 function trustHost(config, fingerprint) {
