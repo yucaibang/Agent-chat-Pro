@@ -44,8 +44,10 @@ const {
   normalizeStatusEvent
 } = require("./status-event-normalizer.cjs");
 const { readModelSettings, replaceModelSettings } = require("./model-config.cjs");
+const { CloudBrandManager } = require("./cloud-brand.cjs");
 
 let window;
+const brandManager = new CloudBrandManager();
 const activeRequests = new Map();
 const networkManager = new NetworkManager();
 let latencyMonitor = null;
@@ -220,11 +222,19 @@ function createWindow() {
   });
   Menu.setApplicationMenu(null);
   window.loadFile(path.join(__dirname, "../renderer/index.html"));
+  brandManager.setWindow(window);
+  brandManager.setAppVersion(app.getVersion());
+  brandManager.initialize();
+  brandManager.fetchBrandConfig().catch(() => {});
+  brandManager.verifyBrand().catch(() => {});
+  brandManager.startPeriodicCheck();
   // 发送初始主题给渲染进程
   try {
     const theme = getSettings().theme || "dark";
     window.webContents.on("did-finish-load", () => {
       window.webContents.send("theme:init", theme);
+      brandManager._pushBrandConfig();
+      brandManager._pushVerificationStatus();
     });
   } catch {}
   const publishState = () => window?.webContents.send("window:maximized", window.isMaximized());
@@ -506,6 +516,15 @@ app.whenReady().then(async () => {
   ipcMain.handle("modes:delete", (_event, id) => deleteMode(id));
   ipcMain.handle("modes:export", () => exportModes());
   ipcMain.handle("modes:import", (_event, json) => importModes(json));
+  // ── 品牌验证 IPC ──
+  ipcMain.handle("brand:get-config", () => brandManager.getBrandConfig());
+  ipcMain.handle("brand:get-status", () => ({
+    verified: brandManager.isVerified,
+    brandConfig: brandManager.getBrandConfig()
+  }));
+  ipcMain.handle("brand:admin-override", async (_event, adminPassword) => {
+    return await brandManager.adminOverride(adminPassword);
+  });
   // ── 网络状态 IPC ──
   ipcMain.handle("network:status", () => networkManager.getStatus());
   ipcMain.handle("network:connect", async (_event, config) => {
@@ -936,7 +955,7 @@ app.whenReady().then(async () => {
   }
 
   // 关闭时保存网络状态和停止授权定期检查
-  app.on("before-quit", () => { persistNetworkState(); });
+  app.on("before-quit", () => { persistNetworkState(); brandManager.stopPeriodicCheck(); });
 });
 
 function handleWindowAction(action) {

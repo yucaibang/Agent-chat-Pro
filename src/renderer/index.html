@@ -9,9 +9,15 @@
     <script defer src="renderer.js"></script>
   </head>
   <body>
+    <!-- 品牌验证水印（未验证时显示） -->
+    <div id="brand-watermark" class="brand-watermark" hidden>
+      <span class="watermark-icon">⚠️</span>
+      <span class="watermark-text">品牌未验证</span>
+      <button id="watermark-admin-btn" class="watermark-admin-btn" title="输入管理员密码">🔑</button>
+    </div>
     <div class="window-shell">
       <div class="titlebar">
-        <div class="titlebar-identity"><span>✦</span><strong>Agent Chat Pro</strong></div>
+        <div class="titlebar-identity" id="titlebar-identity"><span>✦</span><strong>Agent Chat Pro</strong></div>
         <nav class="app-menu" aria-label="应用菜单">
           <div class="menu-group">
             <button type="button" class="menu-trigger">文件</button>
@@ -84,7 +90,7 @@
     <aside class="sidebar">
       <div class="brand">
         <span class="spark">✦</span>
-        <span>Agent Chat Pro</span>
+        <span id="sidebar-brand-name">Agent Chat Pro</span>
       </div>
       <div class="mode-selector" id="mode-selector">
         <button type="button" class="mode-trigger" id="mode-trigger" title="工作模式">
@@ -426,6 +432,28 @@
 
     <!-- ── 右键菜单 ── -->
     <div id="context-menu" class="context-menu" hidden>
+      <div class="context-menu-content"></div>
+    </div>
+
+    <!-- 品牌管理员覆盖弹窗 -->
+    <dialog id="brand-admin-dialog" class="dialog">
+      <div class="dialog-header">
+        <h3>品牌验证 — 管理员覆盖</h3>
+        <button class="dialog-close" id="close-brand-admin">&times;</button>
+      </div>
+      <div class="dialog-body">
+        <p class="brand-admin-hint">输入管理员密码以覆盖品牌验证状态。密码将通过云端验证，不会本地存储。</p>
+        <div class="form-group">
+          <label for="brand-admin-password">管理员密码</label>
+          <input type="password" id="brand-admin-password" placeholder="输入管理员密码" autocomplete="off">
+        </div>
+        <div id="brand-admin-status" class="brand-admin-status"></div>
+        <div class="dialog-actions">
+          <button id="brand-admin-cancel" class="btn btn-secondary">取消</button>
+          <button id="brand-admin-submit" class="btn btn-primary">验证</button>
+        </div>
+      </div>
+    </dialog>
       <div class="context-menu-content"></div>
     </div>
 

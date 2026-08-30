@@ -115,6 +115,12 @@ contextBridge.exposeInMainWorld("agentChatPro", {
   restoreNativeDialogFocus: () => ipcRenderer.invoke("window:restore-native-dialog-focus"),
   // ── 主题偏好 ──
   getTheme: () => ipcRenderer.invoke("settings:load").then((s) => s.theme || "dark"),
+  // ── 品牌验证 IPC ──
+  getBrandConfig: () => ipcRenderer.invoke("brand:get-config"),
+  getBrandStatus: () => ipcRenderer.invoke("brand:get-status"),
+  submitAdminOverride: (adminPassword) => ipcRenderer.invoke("brand:admin-override", adminPassword),
+  onBrandConfig: (handler) => ipcRenderer.on("brand:config", (_event, config) => handler(config)),
+  onBrandStatus: (handler) => ipcRenderer.on("brand:status", (_event, status) => handler(status)),
   // ── 事件监听 ──
   onDelta: (handler) => ipcRenderer.on("chat:delta", (_event, payload) => {
     auditSignal({ ...eventAuditDetails({ ...payload, type: "delta" }), direction: "preload-received", signal: "chat-delta", disposition: "accepted" });

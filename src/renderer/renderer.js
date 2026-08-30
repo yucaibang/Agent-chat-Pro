@@ -27,6 +27,8 @@ let conversationCache = [];
 let automaticTools = false;
 let currentConnectionMode = "ssh";
 let hasCloudApiKey = false;
+let brandConfig = null;     // 云端品牌配置
+let brandVerified = false;  // 是否通过云端验证
 const messages = new Map();
 
 // ── 外观设置状态 ──
@@ -1631,6 +1633,74 @@ window.agentChatPro.onNetworkLatency((summary) => {
     latencyLabel.className = `quality-${Object.entries({ excellent: 90, good: 70, fair: 50 }).find(([, v]) => summary.quality >= v)?.[0] || "poor"}`;
   }
 });
+
+// ── 品牌验证 ──
+
+function updateBrandDisplay() {
+  const config = brandConfig || { appName: "Agent Chat Pro", appSubtitle: "三模式 AI 聊天客户端", appIcon: "🤖" };
+
+  // 更新侧边栏品牌名
+  const brandName = document.querySelector("#sidebar-brand-name");
+  if (brandName) brandName.textContent = config.appName;
+
+  // 更新标题栏
+  const titleIdentity = document.querySelector("#titlebar-identity");
+  if (titleIdentity) titleIdentity.querySelector("strong").textContent = config.appName;
+
+  // 更新水印
+  const watermark = document.querySelector("#brand-watermark");
+  if (watermark) watermark.hidden = brandVerified;
+}
+
+window.agentChatPro.onBrandConfig((config) => {
+  brandConfig = config;
+  updateBrandDisplay();
+});
+window.agentChatPro.onBrandStatus((status) => {
+  brandVerified = status.verified;
+  updateBrandDisplay();
+});
+
+// 品牌验证水印按钮
+document.querySelector("#watermark-admin-btn")?.addEventListener("click", () => {
+  const dialog = document.querySelector("#brand-admin-dialog");
+  if (dialog) dialog.showModal();
+});
+
+// 品牌管理员覆盖弹窗
+document.querySelector("#close-brand-admin")?.addEventListener("click", () => {
+  document.querySelector("#brand-admin-dialog")?.close();
+});
+document.querySelector("#brand-admin-cancel")?.addEventListener("click", () => {
+  document.querySelector("#brand-admin-dialog")?.close();
+});
+document.querySelector("#brand-admin-submit")?.addEventListener("click", async () => {
+  const password = document.querySelector("#brand-admin-password")?.value;
+  const status = document.querySelector("#brand-admin-status");
+  if (!password) { if (status) status.textContent = "请输入管理员密码"; return; }
+  try {
+    const result = await window.agentChatPro.submitAdminOverride(password);
+    if (result.success) {
+      if (status) { status.textContent = "验证成功！"; status.className = "brand-admin-status success"; }
+      setTimeout(() => { document.querySelector("#brand-admin-dialog")?.close(); updateBrandDisplay(); }, 1000);
+    } else {
+      if (status) { status.textContent = result.message || "验证失败"; status.className = "brand-admin-status error"; }
+    }
+  } catch (e) {
+    if (status) { status.textContent = "连接失败: " + e.message; status.className = "brand-admin-status error"; }
+  }
+});
+
+// 初始化品牌验证
+window.agentChatPro.getBrandStatus().then(status => {
+  brandVerified = status.verified;
+  brandConfig = status.brandConfig;
+  updateBrandDisplay();
+}).catch(() => {});
+window.agentChatPro.getBrandConfig().then(config => {
+  brandConfig = config;
+  updateBrandDisplay();
+}).catch(() => {});
 
 (async () => {
   setMaximized(await window.agentChatPro.isWindowMaximized());
