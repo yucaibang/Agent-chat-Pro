@@ -717,6 +717,8 @@ app.whenReady().then(async () => {
         model: cloudConfig.model || "glm-4-flash",
         maxTokens: modeConfig?.maxTokens || cloudConfig.maxTokens || 4096,
         temperature: modeConfig?.hallucinationControl === "strict" ? 0.3 : modeConfig?.hallucinationControl === "creative" ? 0.9 : undefined,
+        provider: cloudConfig.provider,
+        proxy: cloudConfig.proxy,
       }, cloudMessages, cloudCallbacks);
       activeRequests.set(id, { promise: cloudPromise, cancel: () => { cloudPromise.cancel?.(); }, conversationId: input.conversationId });
       try {

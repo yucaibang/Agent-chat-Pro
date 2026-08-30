@@ -2,16 +2,101 @@
 
 const https = require("https");
 const http = require("http");
+const { HttpsProxyAgent } = require("https-proxy-agent");
+const { SocksProxyAgent } = require("socks-proxy-agent");
 
 /**
- * 云端 AI 聊天模块 — OpenAI 兼容 API（智谱 AI GLM-4-Flash 等）
+ * 云端 AI 聊天模块 — OpenAI 兼容 API + Anthropic Messages API
  *
- * 支持所有 OpenAI chat/completions 兼容接口：
- * - 智谱 AI (open.bigmodel.cn) — 推荐，GLM-4-Flash 永久免费
- * - 硅基流动 (siliconflow.cn)
- * - OpenRouter (openrouter.ai)
- * - 任何 OpenAI 兼容 API
+ * 支持服务商：
+ * - 智谱 AI / DeepSeek / Kimi / 豆包 / OpenAI / Gemini / Groq / 硅基流动 — OpenAI 兼容
+ * - Anthropic Claude — Messages API 适配
+ * - 任何 OpenAI 兼容 API（自定义）
+ *
+ * 支持代理：HTTP/HTTPS 代理、SOCKS5 代理
  */
+
+/** 构建代理 Agent，返回 undefined 表示不使用代理 */
+function buildProxyAgent(proxyConfig) {
+  if (!proxyConfig || !proxyConfig.enabled || !proxyConfig.host || !proxyConfig.port) return undefined;
+  const auth = proxyConfig.username ? `${encodeURIComponent(proxyConfig.username)}:${encodeURIComponent(proxyConfig.password || "")}@` : "";
+  if (proxyConfig.type === "socks5") {
+    return new SocksProxyAgent(`socks5://${auth}${proxyConfig.host}:${proxyConfig.port}`);
+  }
+  return new HttpsProxyAgent(`http://${auth}${proxyConfig.host}:${proxyConfig.port}`);
+}
+
+// ────────────────────────────────────────────
+//  Anthropic Messages API 适配层
+// ────────────────────────────────────────────
+
+/** 判断是否为 Anthropic（Claude）服务商 */
+function isAnthropicProvider(provider) {
+  return provider === "anthropic";
+}
+
+/** 将 OpenAI 格式消息转为 Anthropic Messages 格式 */
+function toAnthropicMessages(messages) {
+  const result = [];
+  for (const msg of messages) {
+    if (msg.role === "system") continue; // 系统提示单独传
+    result.push({ role: msg.role, content: msg.content || "" });
+  }
+  return result;
+}
+
+/** 提取系统提示（Anthropic 需要单独传 system 字段） */
+function extractSystemPrompt(messages) {
+  const systemMsg = messages.find(m => m.role === "system");
+  return systemMsg ? systemMsg.content : "";
+}
+
+/** 构建 Anthropic Messages API 请求体 */
+function buildAnthropicBody(messages, options = {}) {
+  const systemPrompt = extractSystemPrompt(messages);
+  const anthropicMessages = toAnthropicMessages(messages);
+  const body = {
+    model: options.model || "claude-sonnet-4-20250514",
+    messages: anthropicMessages,
+    max_tokens: options.maxTokens || 4096,
+    stream: true
+  };
+  if (systemPrompt) body.system = systemPrompt;
+  return body;
+}
+
+/** 解析 Anthropic SSE 流式事件 */
+function parseAnthropicSSE(line, callbacks) {
+  if (!line.startsWith("event:") && !line.startsWith("data:")) return null;
+
+  // 我们只关心 data: 行，event: 行用于上下文但解析不需要
+  if (!line.startsWith("data:")) return null;
+
+  const data = line.slice(5).trim();
+  if (!data) return null;
+
+  try {
+    const parsed = JSON.parse(data);
+    const eventType = parsed.type;
+
+    if (eventType === "content_block_delta") {
+      const text = parsed.delta?.text || "";
+      if (text) return { delta: text };
+    }
+
+    if (eventType === "message_delta" && parsed.usage) {
+      return { usage: { prompt_tokens: parsed.usage.input_tokens || 0, completion_tokens: parsed.usage.output_tokens || 0, total_tokens: (parsed.usage.input_tokens || 0) + (parsed.usage.output_tokens || 0) } };
+    }
+
+    return { parsed };
+  } catch {
+    return null;
+  }
+}
+
+// ────────────────────────────────────────────
+//  OpenAI 兼容 API（原有逻辑）
+// ────────────────────────────────────────────
 
 /** 构建聊天请求体 */
 function buildChatBody(messages, options = {}) {
@@ -43,45 +128,68 @@ function buildMessages(conversation, systemPrompt) {
   return messages;
 }
 
+// ────────────────────────────────────────────
+//  通用发送逻辑
+// ────────────────────────────────────────────
+
 /**
  * 发送云端 AI 聊天请求（流式）
- * @param {object} config - { apiKey, baseURL, model, maxTokens }
+ * @param {object} config - { apiKey, baseURL, model, maxTokens, provider, proxy }
  * @param {Array} messages - OpenAI 格式消息数组
  * @param {object} callbacks - { onDelta, onStatus, onUsage, onLog }
- * @returns {Promise<{text, sessionId, usage}>}
+ * @returns {Promise<{text, usage}>}
  */
 function sendCloudChat(config, messages, callbacks = {}) {
   let cancelled = false;
+  let req = null;
+
   const promise = new Promise((resolve, reject) => {
+    const anthropic = isAnthropicProvider(config.provider);
     const baseURL = (config.baseURL || "https://open.bigmodel.cn/api/paas/v4/").replace(/\/+$/, "");
-    const url = new URL(`${baseURL}/chat/completions`);
+
+    // 根据服务商选择端点和请求体格式
+    let url, body, headers;
+    if (anthropic) {
+      url = new URL(`${baseURL}/messages`);
+      body = buildAnthropicBody(messages, { model: config.model, maxTokens: config.maxTokens });
+      headers = {
+        "Content-Type": "application/json",
+        "x-api-key": config.apiKey,
+        "anthropic-version": "2023-06-01",
+        "Accept": "text/event-stream"
+      };
+    } else {
+      url = new URL(`${baseURL}/chat/completions`);
+      body = buildChatBody(messages, { model: config.model, maxTokens: config.maxTokens });
+      headers = {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${config.apiKey}`,
+        "Accept": "text/event-stream"
+      };
+    }
+
     const isHttps = url.protocol === "https:";
     const client = isHttps ? https : http;
 
-    const body = buildChatBody(messages, {
-      model: config.model || "glm-4-flash",
-      maxTokens: config.maxTokens || 4096
-    });
+    if (callbacks.onLog) callbacks.onLog("cloud_chat_request", { provider: config.provider, model: body.model, messageCount: messages.length, anthropic });
 
-    if (callbacks.onLog) callbacks.onLog("cloud_chat_request", { model: body.model, messageCount: messages.length });
+    // 构建代理 Agent
+    const proxyAgent = buildProxyAgent(config.proxy);
 
     const requestOptions = {
       hostname: url.hostname,
       port: url.port || (isHttps ? 443 : 80),
       path: url.pathname + url.search,
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${config.apiKey}`,
-        "Accept": "text/event-stream"
-      }
+      headers,
+      ...(proxyAgent ? { agent: proxyAgent } : {})
     };
 
     if (callbacks.onStatus) callbacks.onStatus("connecting");
 
-    const req = client.request(requestOptions, (res) => {
+    req = client.request(requestOptions, (res) => {
       if (res.statusCode === 401) {
-        const error = new Error("API 密钥无效或已过期。请检查设置中的云端 AI 密钥。");
+        const error = new Error(anthropic ? "Anthropic API 密钥无效或已过期。请检查设置中的 API 密钥。" : "API 密钥无效或已过期。请检查设置中的云端 AI 密钥。");
         error.code = "CLOUD_AUTH";
         reject(error);
         return;
@@ -121,22 +229,39 @@ function sendCloudChat(config, messages, callbacks = {}) {
 
         for (const line of lines) {
           const trimmed = line.trim();
-          if (!trimmed || !trimmed.startsWith("data:")) continue;
-          const data = trimmed.slice(5).trim();
-          if (data === "[DONE]") continue;
-          try {
-            const parsed = JSON.parse(data);
-            const delta = parsed.choices?.[0]?.delta?.content || "";
-            if (delta) {
-              fullText += delta;
-              if (callbacks.onDelta) callbacks.onDelta(delta);
+          if (!trimmed) continue;
+
+          if (anthropic) {
+            // Anthropic Messages API SSE 格式
+            const result = parseAnthropicSSE(trimmed, callbacks);
+            if (result) {
+              if (result.delta) {
+                fullText += result.delta;
+                if (callbacks.onDelta) callbacks.onDelta(result.delta);
+              }
+              if (result.usage) {
+                lastUsage = result.usage;
+                if (callbacks.onUsage) callbacks.onUsage(result.usage);
+              }
             }
-            // 解析 usage 数据（OpenAI 兼容 API 在流式响应中可能包含 usage）
-            if (parsed.usage && (parsed.usage.prompt_tokens || parsed.usage.completion_tokens || parsed.usage.total_tokens)) {
-              lastUsage = parsed.usage;
-              if (callbacks.onUsage) callbacks.onUsage(parsed.usage);
-            }
-          } catch {}
+          } else {
+            // OpenAI 兼容 SSE 格式
+            if (!trimmed.startsWith("data:")) continue;
+            const data = trimmed.slice(5).trim();
+            if (data === "[DONE]") continue;
+            try {
+              const parsed = JSON.parse(data);
+              const delta = parsed.choices?.[0]?.delta?.content || "";
+              if (delta) {
+                fullText += delta;
+                if (callbacks.onDelta) callbacks.onDelta(delta);
+              }
+              if (parsed.usage && (parsed.usage.prompt_tokens || parsed.usage.completion_tokens || parsed.usage.total_tokens)) {
+                lastUsage = parsed.usage;
+                if (callbacks.onUsage) callbacks.onUsage(parsed.usage);
+              }
+            } catch {}
+          }
         }
       });
 
@@ -144,18 +269,25 @@ function sendCloudChat(config, messages, callbacks = {}) {
         // 处理剩余 buffer
         if (buffer.trim()) {
           const trimmed = buffer.trim();
-          if (trimmed.startsWith("data:")) {
-            const data = trimmed.slice(5).trim();
-            if (data !== "[DONE]") {
-              try {
-                const parsed = JSON.parse(data);
-                const delta = parsed.choices?.[0]?.delta?.content || "";
-                if (delta) fullText += delta;
-                if (parsed.usage && (parsed.usage.prompt_tokens || parsed.usage.completion_tokens || parsed.usage.total_tokens)) {
-                  lastUsage = parsed.usage;
-                  if (callbacks.onUsage) callbacks.onUsage(parsed.usage);
-                }
-              } catch {}
+          if (anthropic) {
+            const result = parseAnthropicSSE(trimmed, callbacks);
+            if (result) {
+              if (result.delta) fullText += result.delta;
+              if (result.usage) lastUsage = result.usage;
+            }
+          } else {
+            if (trimmed.startsWith("data:")) {
+              const data = trimmed.slice(5).trim();
+              if (data !== "[DONE]") {
+                try {
+                  const parsed = JSON.parse(data);
+                  const delta = parsed.choices?.[0]?.delta?.content || "";
+                  if (delta) fullText += delta;
+                  if (parsed.usage && (parsed.usage.prompt_tokens || parsed.usage.completion_tokens || parsed.usage.total_tokens)) {
+                    lastUsage = parsed.usage;
+                  }
+                } catch {}
+              }
             }
           }
         }
@@ -182,7 +314,8 @@ function sendCloudChat(config, messages, callbacks = {}) {
     req.write(JSON.stringify(body));
     req.end();
   });
-  promise.cancel = () => { cancelled = true; req.destroy(); };
+
+  promise.cancel = () => { cancelled = true; if (req) req.destroy(); };
   return promise;
 }
 
@@ -193,6 +326,9 @@ function friendlyError(error) {
   if (error.code === "ECONNREFUSED") return Object.assign(new Error("云端 AI 服务器拒绝连接。"), { code: "CLOUD_REFUSED" });
   if (error.code === "ETIMEDOUT" || /timeout/i.test(msg)) return Object.assign(new Error("云端 AI 连接超时，请检查网络。"), { code: "CLOUD_TIMEOUT" });
   if (error.code === "CLOUD_AUTH" || error.code === "CLOUD_RATE" || error.code === "CLOUD_ERROR") return error;
+  // 代理相关错误
+  if (error.code === "ECONNRESET" || /proxy/i.test(msg) || /tunnel/i.test(msg)) return Object.assign(new Error("代理连接失败，请检查代理设置。"), { code: "CLOUD_PROXY" });
+  if (error.code === "EHOSTUNREACH") return Object.assign(new Error("无法连接到代理服务器，请检查代理地址和端口。"), { code: "CLOUD_PROXY" });
   return Object.assign(new Error(`云端 AI 连接失败：${msg}`), { code: "CLOUD_ERROR" });
 }
 

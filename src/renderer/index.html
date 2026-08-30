@@ -183,6 +183,8 @@
               <option value="doubao">豆包（字节跳动）</option>
               <option value="openai">OpenAI（ChatGPT）</option>
               <option value="gemini">Google Gemini</option>
+              <option value="anthropic">Anthropic（Claude）</option>
+              <option value="groq">Groq</option>
               <option value="siliconflow">硅基流动</option>
               <option value="custom">自定义 OpenAI 兼容 API</option>
             </select>
@@ -207,6 +209,30 @@
             <label>API 地址<input id="cloud-base-url" placeholder="https://open.bigmodel.cn/api/paas/v4/" /></label>
             <span class="field-hint">OpenAI 兼容的 chat/completions 端点地址。</span>
           </div>
+          <details id="proxy-settings" class="proxy-settings">
+            <summary>🔧 代理设置（可选）</summary>
+            <label class="checkbox"><input id="proxy-enabled" type="checkbox" /><span>启用代理</span></label>
+            <p class="field-hint proxy-hint">通过 HTTP/SOCKS5 代理访问云端 AI，适用于网络受限环境。</p>
+            <div id="proxy-fields" hidden>
+              <label>代理类型
+                <select id="proxy-type">
+                  <option value="http">HTTP / HTTPS</option>
+                  <option value="socks5">SOCKS5</option>
+                </select>
+              </label>
+              <div class="two-columns">
+                <label>代理地址<input id="proxy-host" placeholder="例如：127.0.0.1" /></label>
+                <label>端口<input id="proxy-port" type="number" min="1" max="65535" placeholder="7890" /></label>
+              </div>
+              <label>用户名（可选）<input id="proxy-username" placeholder="留空则不认证" /></label>
+              <label>代理密码（可选）
+                <div class="password-row">
+                  <input id="proxy-password" type="password" placeholder="留空则不认证" autocomplete="new-password" />
+                  <button type="button" id="toggle-proxy-password" class="password-toggle">显示</button>
+                </div>
+              </label>
+            </div>
+          </details>
         </div>
         <div id="ssh-fields" class="settings-group">
           <label>NAS 地址<input name="host" required placeholder="例如：10.66.1.111" /></label>

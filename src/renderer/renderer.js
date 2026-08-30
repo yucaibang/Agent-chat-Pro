@@ -35,6 +35,7 @@ const messages = new Map();
 let conversationTokens = 0;  // 当前对话累计 token 数
 let streamingTokens = 0;    // 当前流式响应估算的 token 数
 let confirmedTokens = 0;    // 当前流式响应已确认的 token 数（来自 usage 事件）
+let hasProxyPassword = false;  // 是否已保存代理密码
 
 // ── 外观设置状态 ──
 let appearanceSettings = {
@@ -70,6 +71,14 @@ function settingsFromForm() {
     cloudAiBaseUrl: document.querySelector("#cloud-base-url")?.value || (config?.baseUrl || ""),
     cloudAiApiKey: document.querySelector("#cloud-api-key")?.value || "",
     clearCloudAiApiKey: !document.querySelector("#cloud-api-key")?.value && hasCloudApiKey,
+    // 代理设置
+    proxyEnabled: document.querySelector("#proxy-enabled")?.checked || false,
+    proxyType: document.querySelector("#proxy-type")?.value || "http",
+    proxyHost: document.querySelector("#proxy-host")?.value || "",
+    proxyPort: Number(document.querySelector("#proxy-port")?.value) || 0,
+    proxyUsername: document.querySelector("#proxy-username")?.value || "",
+    proxyPassword: document.querySelector("#proxy-password")?.value || "",
+    clearProxyPassword: !document.querySelector("#proxy-password")?.value && hasProxyPassword,
     ...network
   };
 }
@@ -116,6 +125,26 @@ function populateSettings(settings) {
   if (cloudBaseURL) cloudBaseURL.value = baseURL || (CLOUD_PROVIDERS[provider]?.baseUrl || "");
   if (cloudModel) cloudModel.value = model;
   if (cloudProvider) cloudProvider.dispatchEvent(new Event("change"));
+  // 代理设置回填
+  hasProxyPassword = Boolean(settings.hasProxyPassword);
+  const proxyEnabled = document.querySelector("#proxy-enabled");
+  const proxyType = document.querySelector("#proxy-type");
+  const proxyHost = document.querySelector("#proxy-host");
+  const proxyPort = document.querySelector("#proxy-port");
+  const proxyUsername = document.querySelector("#proxy-username");
+  const proxyPassword = document.querySelector("#proxy-password");
+  if (proxyEnabled) proxyEnabled.checked = Boolean(settings.proxyEnabled);
+  if (proxyType) proxyType.value = settings.proxyType === "socks5" ? "socks5" : "http";
+  if (proxyHost) proxyHost.value = settings.proxyHost || "";
+  if (proxyPort) proxyPort.value = settings.proxyPort || "";
+  if (proxyUsername) proxyUsername.value = settings.proxyUsername || "";
+  if (proxyPassword) {
+    proxyPassword.value = "";
+    proxyPassword.type = "password";
+    proxyPassword.placeholder = hasProxyPassword ? "已安全保存；留空不会修改" : "留空则不认证";
+  }
+  // 代理开关联动
+  updateProxyFieldsVisibility();
 }
 
 function updateConnectionModeUI() {
@@ -1034,8 +1063,9 @@ const CLOUD_PROVIDERS = {
     models: [
       { value: "gpt-4o", label: "GPT-4o" },
       { value: "gpt-4o-mini", label: "GPT-4o Mini" },
-      { value: "gpt-4-turbo", label: "GPT-4 Turbo" },
-      { value: "o1-preview", label: "o1 Preview" }
+      { value: "o3-mini", label: "o3-mini" },
+      { value: "gpt-4.1", label: "GPT-4.1" },
+      { value: "gpt-4.1-mini", label: "GPT-4.1 Mini" }
     ],
     registerUrl: "https://platform.openai.com/api-keys",
     hint: '需要 OpenAI API Key。<a href="https://platform.openai.com/api-keys" id="cloud-register-link">点击管理密钥</a>。'
@@ -1044,12 +1074,35 @@ const CLOUD_PROVIDERS = {
     name: "Google Gemini",
     baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai/",
     models: [
-      { value: "gemini-2.0-flash", label: "Gemini 2.0 Flash" },
-      { value: "gemini-1.5-pro", label: "Gemini 1.5 Pro" },
-      { value: "gemini-1.5-flash", label: "Gemini 1.5 Flash" }
+      { value: "gemini-2.5-flash", label: "Gemini 2.5 Flash" },
+      { value: "gemini-2.5-pro", label: "Gemini 2.5 Pro" },
+      { value: "gemini-2.0-flash", label: "Gemini 2.0 Flash" }
     ],
     registerUrl: "https://aistudio.google.com/apikey",
     hint: '需要 Google AI API Key。<a href="https://aistudio.google.com/apikey" id="cloud-register-link">点击获取密钥</a>。'
+  },
+  anthropic: {
+    name: "Anthropic（Claude）",
+    baseUrl: "https://api.anthropic.com/v1/",
+    models: [
+      { value: "claude-sonnet-4-20250514", label: "Claude Sonnet 4" },
+      { value: "claude-3.7-sonnet-20250219", label: "Claude 3.7 Sonnet" },
+      { value: "claude-3.5-haiku-20241022", label: "Claude 3.5 Haiku" }
+    ],
+    registerUrl: "https://console.anthropic.com/settings/keys",
+    hint: '需要 Anthropic API Key。<a href="https://console.anthropic.com/settings/keys" id="cloud-register-link">点击管理密钥</a>。'
+  },
+  groq: {
+    name: "Groq",
+    baseUrl: "https://api.groq.com/openai/v1/",
+    models: [
+      { value: "llama-3.3-70b-versatile", label: "Llama 3.3 70B" },
+      { value: "llama-3.1-8b-instant", label: "Llama 3.1 8B（极速）" },
+      { value: "mixtral-8x7b-32768", label: "Mixtral 8x7B" },
+      { value: "gemma2-9b-it", label: "Gemma 2 9B" }
+    ],
+    registerUrl: "https://console.groq.com/keys",
+    hint: '还没有密钥？<a href="https://console.groq.com/keys" id="cloud-register-link">点击注册 Groq</a>，极速推理，免费额度。'
   },
   siliconflow: {
     name: "硅基流动",
@@ -1068,7 +1121,7 @@ const CLOUD_PROVIDERS = {
     baseUrl: "",
     models: [{ value: "custom", label: "自定义模型（请在下方填写）" }],
     registerUrl: "",
-    hint: '填写任意 OpenAI 兼容的 API 地址和密钥。'
+    hint: '填写任意 OpenAI 兼容的 API 地址和密钥。支持 one-api、new-api 等中转站。'
   }
 };
 
@@ -1097,6 +1150,21 @@ document.querySelector("#toggle-cloud-key")?.addEventListener("click", () => {
   const visible = input.type === "text";
   input.type = visible ? "password" : "text";
   document.querySelector("#toggle-cloud-key").textContent = visible ? "显示" : "隐藏";
+  input.focus();
+});
+
+// ── 代理设置交互 ──
+function updateProxyFieldsVisibility() {
+  const enabled = document.querySelector("#proxy-enabled")?.checked || false;
+  const fields = document.querySelector("#proxy-fields");
+  if (fields) fields.hidden = !enabled;
+}
+document.querySelector("#proxy-enabled")?.addEventListener("change", updateProxyFieldsVisibility);
+document.querySelector("#toggle-proxy-password")?.addEventListener("click", () => {
+  const input = document.querySelector("#proxy-password");
+  const visible = input.type === "text";
+  input.type = visible ? "password" : "text";
+  document.querySelector("#toggle-proxy-password").textContent = visible ? "显示" : "隐藏";
   input.focus();
 });
 passwordInput.addEventListener("input", () => {

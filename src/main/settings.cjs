@@ -116,6 +116,14 @@ function getSettings() {
     cloudAiApiKey: "",
     cloudAiModel: raw.cloudAiModel || "glm-4-flash",
     cloudAiBaseUrl: raw.cloudAiBaseUrl || "",
+    // 代理设置
+    proxyEnabled: Boolean(raw.proxyEnabled),
+    proxyType: raw.proxyType === "socks5" ? "socks5" : "http",
+    proxyHost: raw.proxyHost || "",
+    proxyPort: raw.proxyPort || 0,
+    proxyUsername: raw.proxyUsername || "",
+    hasProxyPassword: Boolean(raw.proxyPasswordEncrypted || raw.proxyPassword),
+    // 主题
     // 主题
     theme: raw.theme || "dark",
     // 背景设置
@@ -166,8 +174,12 @@ function getCloudAiConfig() {
     zhipu: { baseURL: "https://open.bigmodel.cn/api/paas/v4", defaultModel: "glm-4-flash" },
     deepseek: { baseURL: "https://api.deepseek.com/v1", defaultModel: "deepseek-chat" },
     kimi: { baseURL: "https://api.moonshot.cn/v1", defaultModel: "moonshot-v1-8k" },
+    doubao: { baseURL: "https://ark.cn-beijing.volces.com/api/v3", defaultModel: "doubao-pro-4k" },
     openai: { baseURL: "https://api.openai.com/v1", defaultModel: "gpt-4o-mini" },
     gemini: { baseURL: "https://generativelanguage.googleapis.com/v1beta/openai", defaultModel: "gemini-2.0-flash" },
+    anthropic: { baseURL: "https://api.anthropic.com/v1", defaultModel: "claude-sonnet-4-20250514" },
+    groq: { baseURL: "https://api.groq.com/openai/v1", defaultModel: "llama-3.3-70b-versatile" },
+    siliconflow: { baseURL: "https://api.siliconflow.cn/v1", defaultModel: "deepseek-ai/DeepSeek-V3" },
     custom: { baseURL: "", defaultModel: "" }
   };
   const provider = raw.cloudAiProvider || "zhipu";
@@ -175,12 +187,24 @@ function getCloudAiConfig() {
   const apiKey = raw.cloudAiApiKeyEncrypted
     ? decryptStoredString(raw.cloudAiApiKeyEncrypted, "云端 AI 密钥")
     : (raw.cloudAiApiKey || "");
+  // 代理配置
+  const proxyPassword = raw.proxyPasswordEncrypted
+    ? decryptStoredString(raw.proxyPasswordEncrypted, "代理密码")
+    : "";
   return {
     provider,
     apiKey,
     baseURL: raw.cloudAiBaseUrl || config.baseURL,
     model: raw.cloudAiModel || config.defaultModel,
-    maxTokens: raw.cloudAiMaxTokens || 4096
+    maxTokens: raw.cloudAiMaxTokens || 4096,
+    proxy: {
+      enabled: Boolean(raw.proxyEnabled),
+      type: raw.proxyType === "socks5" ? "socks5" : "http",
+      host: raw.proxyHost || "",
+      port: raw.proxyPort || 0,
+      username: raw.proxyUsername || "",
+      password: proxyPassword
+    }
   };
 }
 
@@ -229,6 +253,14 @@ function saveSettings(input) {
     cloudAiMaxTokens: input.cloudAiMaxTokens || previous.cloudAiMaxTokens || 4096,
     cloudAiApiKeyEncrypted: previous.cloudAiApiKeyEncrypted || "",
     cloudAiApiKey: "",
+    // 代理设置
+    proxyEnabled: Boolean(input.proxyEnabled),
+    proxyType: input.proxyType === "socks5" ? "socks5" : "http",
+    proxyHost: String(input.proxyHost || "").trim(),
+    proxyPort: Number(input.proxyPort) || 0,
+    proxyUsername: String(input.proxyUsername || "").trim(),
+    proxyPasswordEncrypted: previous.proxyPasswordEncrypted || "",
+    proxyPassword: "",
     // 主题
     theme: input.theme || previous.theme || "dark",
     // 背景
@@ -250,6 +282,14 @@ function saveSettings(input) {
     if (!safeStorage.isEncryptionAvailable()) throw new Error("Windows 系统加密不可用，无法安全保存云端 AI 密钥。");
     next.cloudAiApiKeyEncrypted = safeStorage.encryptString(input.cloudAiApiKey).toString("base64");
     next.cloudAiApiKey = "";
+  }
+  // 代理密码加密存储
+  if (input.clearProxyPassword) {
+    next.proxyPasswordEncrypted = "";
+  } else if (typeof input.proxyPassword === "string" && input.proxyPassword.length > 0) {
+    if (!safeStorage.isEncryptionAvailable()) throw new Error("Windows 系统加密不可用，无法安全保存代理密码。");
+    next.proxyPasswordEncrypted = safeStorage.encryptString(input.proxyPassword).toString("base64");
+    next.proxyPassword = "";
   }
   if (!next.wakeName) throw new Error("Claude 唤醒命令不能为空。");
   if (!next.clientLabel || next.clientLabel.length > 32 || !/^[\p{L}\p{N}._-]+$/u.test(next.clientLabel)) {
