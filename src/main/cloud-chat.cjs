@@ -47,8 +47,8 @@ function buildMessages(conversation, systemPrompt) {
  * 发送云端 AI 聊天请求（流式）
  * @param {object} config - { apiKey, baseURL, model, maxTokens }
  * @param {Array} messages - OpenAI 格式消息数组
- * @param {object} callbacks - { onDelta, onStatus, onLog }
- * @returns {Promise<{text, sessionId}>}
+ * @param {object} callbacks - { onDelta, onStatus, onUsage, onLog }
+ * @returns {Promise<{text, sessionId, usage}>}
  */
 function sendCloudChat(config, messages, callbacks = {}) {
   let cancelled = false;
@@ -111,6 +111,7 @@ function sendCloudChat(config, messages, callbacks = {}) {
       }
 
       let fullText = "";
+      let lastUsage = null;
       let buffer = "";
 
       res.on("data", (chunk) => {
@@ -130,6 +131,11 @@ function sendCloudChat(config, messages, callbacks = {}) {
               fullText += delta;
               if (callbacks.onDelta) callbacks.onDelta(delta);
             }
+            // 解析 usage 数据（OpenAI 兼容 API 在流式响应中可能包含 usage）
+            if (parsed.usage && (parsed.usage.prompt_tokens || parsed.usage.completion_tokens || parsed.usage.total_tokens)) {
+              lastUsage = parsed.usage;
+              if (callbacks.onUsage) callbacks.onUsage(parsed.usage);
+            }
           } catch {}
         }
       });
@@ -145,12 +151,16 @@ function sendCloudChat(config, messages, callbacks = {}) {
                 const parsed = JSON.parse(data);
                 const delta = parsed.choices?.[0]?.delta?.content || "";
                 if (delta) fullText += delta;
+                if (parsed.usage && (parsed.usage.prompt_tokens || parsed.usage.completion_tokens || parsed.usage.total_tokens)) {
+                  lastUsage = parsed.usage;
+                  if (callbacks.onUsage) callbacks.onUsage(parsed.usage);
+                }
               } catch {}
             }
           }
         }
-        if (callbacks.onLog) callbacks.onLog("cloud_chat_success", { textLength: fullText.length });
-        resolve({ text: fullText });
+        if (callbacks.onLog) callbacks.onLog("cloud_chat_success", { textLength: fullText.length, usage: lastUsage });
+        resolve({ text: fullText, usage: lastUsage });
       });
 
       res.on("error", (error) => {

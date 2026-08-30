@@ -707,6 +707,7 @@ app.whenReady().then(async () => {
           if (!draftTimer) draftTimer = setTimeout(persistDraft, 1000);
         },
         onStatus: (status) => sendWorkStatusSignal(event.sender, "chat:event", { id, type: "connection", status }),
+        onUsage: (usage) => sendWorkStatusSignal(event.sender, "chat:event", { id, type: "usage", usage }),
         onLog: writeLog
       };
       sendWorkStatusSignal(event.sender, "chat:event", normalizeAndObserveStatusEvent({ id, type: "lifecycle", status: "connecting" }, { connectionMode: "cloud" }));

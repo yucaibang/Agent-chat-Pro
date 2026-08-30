@@ -31,6 +31,11 @@ let brandConfig = null;     // 云端品牌配置
 let brandVerified = false;  // 是否通过云端验证
 const messages = new Map();
 
+// ── Token 计数器 ──
+let conversationTokens = 0;  // 当前对话累计 token 数
+let streamingTokens = 0;    // 当前流式响应估算的 token 数
+let confirmedTokens = 0;    // 当前流式响应已确认的 token 数（来自 usage 事件）
+
 // ── 外观设置状态 ──
 let appearanceSettings = {
   frostedGlass: false,
@@ -255,6 +260,38 @@ async function changeToolMode(enabled) {
 function setStatus(text, isError = false) {
   elements.status.textContent = text;
   elements.status.classList.toggle("error", isError);
+}
+
+// ── Token 计数器更新 ──
+function estimateTokens(text) {
+  // 粗略估算：英文约 4 字符/token，中文约 1.5 字符/token，混合取约 2.5
+  if (!text) return 0;
+  let cjk = 0, latin = 0;
+  for (const ch of text) {
+    if (/[一-鿿㐀-䶿　-〿＀-￯]/.test(ch)) cjk++;
+    else if (/\S/.test(ch)) latin++;
+  }
+  return Math.ceil(cjk / 1.5 + latin / 4 + 1);
+}
+
+function updateTokenDisplay() {
+  const counter = document.querySelector("#token-counter");
+  const countEl = document.querySelector("#token-count");
+  if (!counter || !countEl) return;
+  const total = conversationTokens + streamingTokens + confirmedTokens;
+  countEl.textContent = total.toLocaleString();
+  counter.hidden = total === 0;
+  counter.classList.toggle("streaming", Boolean(activeId));
+}
+
+function addConversationTokens(count) {
+  conversationTokens += count;
+  updateTokenDisplay();
+}
+
+function resetStreamingTokens() {
+  streamingTokens = 0;
+  confirmedTokens = 0;
 }
 
 function addMessage(kind, text = "") {
@@ -623,6 +660,13 @@ async function loadConversation(id) {
   });
   elements.empty.hidden = conversation.messages.length > 0;
   setConnection(sessionId ? `已恢复${currentConnectionMode === "cloud" ? "云端 AI" : currentConnectionMode === "local" ? "本机" : " SSH"} 会话` : "新对话，等待发送", "connected");
+  // 从历史消息估算累计 token
+  conversationTokens = 0;
+  for (const msg of conversation.messages) {
+    conversationTokens += estimateTokens(msg.text || "");
+  }
+  resetStreamingTokens();
+  updateTokenDisplay();
   refreshConversationList();
 }
 
@@ -630,6 +674,10 @@ async function createNewConversation() {
   if (activeId) return;
   const conversation = await window.agentChatPro.createConversation();
   await loadConversation(conversation.id);
+  // 新对话重置 token 计数
+  conversationTokens = 0;
+  resetStreamingTokens();
+  updateTokenDisplay();
   elements.prompt.focus();
 }
 
@@ -736,6 +784,9 @@ async function sendMessage() {
   adjustTextarea();
   setBusy(true);
   setConnection(currentConnectionMode === "cloud" ? "正在连接云端 AI…" : currentConnectionMode === "local" ? "正在启动本机 Claude…" : "正在连接 NAS…", "");
+  // 重置流式 token 计数，估算用户消息 token
+  resetStreamingTokens();
+  addConversationTokens(estimateTokens(message));
 
   try {
     const preparedAttachments = await Promise.all(attachments.map(async (file) => ({
@@ -760,6 +811,9 @@ async function sendMessage() {
       answer.querySelector(".message-content").textContent = partial
         ? `${partial}\n\n（已停止）`
         : "已停止。";
+      // 停止时合并已产生的流式 token
+      addConversationTokens(streamingTokens + confirmedTokens);
+      resetStreamingTokens();
       setConnection(`${currentConnectionMode === "cloud" ? "云端 AI" : currentConnectionMode === "local" ? "本机 Agent" : "NAS"}已停止当前任务 · 连接正常`, "connected");
       return;
     }
@@ -771,6 +825,14 @@ async function sendMessage() {
     finalizeToolList(answer, result.tools || []);
     renderReturnedFiles(answer, result.files || []);
     answer.classList.remove("generating");
+    // 合并流式 token 到对话累计
+    addConversationTokens(streamingTokens + confirmedTokens);
+    resetStreamingTokens();
+    // 如果 result.stats 包含对话统计，更新 token 显示
+    if (result.stats && result.stats.totalTokens) {
+      conversationTokens = result.stats.totalTokens;
+      updateTokenDisplay();
+    }
     setConnection(`${currentConnectionMode === "cloud" ? "云端 AI" : currentConnectionMode === "local" ? "本机 Claude" : "NAS"}已连接 · 会话已保存`, "connected");
     refreshConversationList();
   } catch (error) {
@@ -778,6 +840,9 @@ async function sendMessage() {
     answer.classList.add("error");
     answer.querySelector(".message-content").textContent = "连接或 Claude 执行失败：\n" + error.message;
     setConnection("连接失败", "error");
+    // 失败时也合并已估算的 token
+    addConversationTokens(streamingTokens + confirmedTokens);
+    resetStreamingTokens();
   } finally {
     messages.delete(activeId);
     activeId = "";
@@ -1096,6 +1161,9 @@ window.agentChatPro.onDelta(({ id, text }) => {
   if (!answer) return;
   answer.querySelector(".message-content").textContent += text;
   elements.messages.scrollTop = elements.messages.scrollHeight;
+  // 实时估算流式 token
+  streamingTokens += estimateTokens(text);
+  updateTokenDisplay();
 });
 window.agentChatPro.onChatEvent((event) => {
   const answer = messages.get(event.id);
@@ -1111,6 +1179,21 @@ window.agentChatPro.onChatEvent((event) => {
   } else if (event.type === "tool" && answer) {
     renderTool(answer, event.tool);
     elements.messages.scrollTop = elements.messages.scrollHeight;
+  } else if (event.type === "usage") {
+    // 处理 usage 事件：用实际 token 数据替换估算值
+    if (event.usage) {
+      const usage = event.usage;
+      // 兼容不同 API 的字段名：OpenAI 用 prompt_tokens/completion_tokens，Claude 用 input_tokens/output_tokens
+      const inputTokens = usage.input_tokens || usage.prompt_tokens || 0;
+      const outputTokens = usage.output_tokens || usage.completion_tokens || 0;
+      if (inputTokens || outputTokens) {
+        // usage 事件包含当前回合的完整 token 数据
+        // 把之前估算的流式 token 清零，用实际数据
+        streamingTokens = 0;
+        confirmedTokens = inputTokens + outputTokens;
+        updateTokenDisplay();
+      }
+    }
   }
 });
 

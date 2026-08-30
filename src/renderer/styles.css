@@ -259,6 +259,29 @@ header p { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .logo-circle { width: 58px; height: 58px; margin: auto; border: 1px solid #574735; border-radius: 18px; display: grid; place-items: center; color: #e9b36f; background: #282218; font-size: 27px; }
 .messages { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; gap: 12px; width: 100%; padding: 20px 0 8px; overflow-y: auto; overscroll-behavior: contain; }
 .messages:empty { display: none; }
+
+/* ── Token 计数器 ── */
+.token-counter {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 5px;
+  padding: 4px 12px;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.4;
+  user-select: none;
+  transition: color .15s;
+}
+.token-counter.streaming { color: var(--accent-bright); }
+.token-counter-icon { font-size: 13px; }
+#token-count {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  min-width: 1.5em;
+  text-align: right;
+}
 .message { max-width: 86%; white-space: normal; line-height: 1.45; border-radius: 14px; padding: 10px 14px; }
 .message-content { min-width: 0; overflow-wrap: anywhere; white-space: pre-wrap; }
 .message-content.rendered { white-space: normal; }
@@ -520,6 +543,7 @@ textarea { resize: vertical; min-height: 60px; }
 [data-theme="light"] .background-preview-card.background-preview-active { background: #d4f0e0; }
 [data-theme="light"] .context-menu { background: #fff; }
 [data-theme="light"] .context-menu-item.danger:hover { background: #fde8e8; }
+[data-theme="light"] .token-counter.streaming { color: var(--accent); }
 
 /* ── 品牌验证水印 ── */
 .brand-watermark {
