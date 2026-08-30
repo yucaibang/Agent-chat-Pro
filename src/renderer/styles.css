@@ -3,6 +3,7 @@
   --bg-sidebar: #171c20;
   --bg-input: #11171b;
   --bg-card: #1b2227;
+  --main-bg-rgb: 27, 34, 39;
   --bg-hover: #2a3338;
   --bg-active: #344047;
   --bg-deep: #151c20;
@@ -92,6 +93,7 @@
   --bg-sidebar: #eef0f3;
   --bg-input: #ffffff;
   --bg-card: #ffffff;
+  --main-bg-rgb: 245, 246, 248;
   --bg-hover: #e4e7eb;
   --bg-active: #d8dce2;
   --bg-deep: #f0f2f5;
@@ -503,9 +505,22 @@ textarea { resize: vertical; min-height: 60px; }
 
 /* ── 毛玻璃效果 ── */
 .main.frosted {
+  position: relative;
+}
+.main.frosted::after {
+  content: "";
+  position: absolute;
+  inset: 0;
   background: rgba(var(--main-bg-rgb, 27, 34, 39), var(--frosted-opacity, 0.85));
   backdrop-filter: blur(var(--frosted-blur, 20px));
   -webkit-backdrop-filter: blur(var(--frosted-blur, 20px));
+  z-index: 0;
+  pointer-events: none;
+  border-radius: inherit;
+}
+.main.frosted > * {
+  position: relative;
+  z-index: 1;
 }
 .main.background-image {
   background-size: cover;
@@ -519,7 +534,21 @@ textarea { resize: vertical; min-height: 60px; }
   inset: 0;
   background: inherit;
   filter: blur(var(--bg-image-blur, 0px));
+  opacity: var(--bg-image-opacity, 1);
   z-index: 0;
+  pointer-events: none;
+}
+/* 毛玻璃 + 背景图组合：::before 为背景模糊层，::after 为毛玻璃叠加层 */
+.main.frosted.background-image::before {
+  z-index: 0;
+  opacity: 1;
+}
+.main.frosted.background-image::after {
+  z-index: 1;
+}
+.main.frosted.background-image > * {
+  position: relative;
+  z-index: 2;
 }
 .main.background-image > * {
   position: relative;
