@@ -36,7 +36,6 @@ const { buildCommandWithMode, buildBridgeStartWithMode, buildLocalArgsWithMode }
 const { NetworkManager, STATES } = require("./network/network-manager.cjs");
 const { LatencyMonitor } = require("./network/latency-monitor.cjs");
 const { sendCloudChat, buildMessages, verifyCloudConnection } = require("./cloud-chat.cjs");
-const { AuthManager } = require("./auth/auth-manager.cjs");
 const {
   AUDIT_FILE_FORMATS,
   AUDIT_TOOL_ACTIONS,
@@ -49,7 +48,6 @@ const { readModelSettings, replaceModelSettings } = require("./model-config.cjs"
 let window;
 const activeRequests = new Map();
 const networkManager = new NetworkManager();
-const authManager = new AuthManager();
 let latencyMonitor = null;
 
 const statusSignalObserver = createStatusSignalObserver({
@@ -202,8 +200,6 @@ function persistNetworkState() {
 
 function createWindow() {
   window = new BrowserWindow({
-    // ── 授权检查 ──
-    // 主窗口创建前不做授权弹窗，授权弹窗由 startupAuthCheck 处理
     width: 1120,
     height: 760,
     minWidth: 780,
@@ -223,7 +219,6 @@ function createWindow() {
     }
   });
   Menu.setApplicationMenu(null);
-  authManager.setWindow(window);
   window.loadFile(path.join(__dirname, "../renderer/index.html"));
   // 发送初始主题给渲染进程
   try {
@@ -250,39 +245,6 @@ app.whenReady().then(async () => {
   nativeTheme.themeSource = "dark";
   writeLog("app_start", { version: app.getVersion(), platform: process.platform, arch: process.arch });
 
-  // ── 启动时授权检查 ──
-  writeLog("auth_startup_check_begin", { deviceId: authManager.deviceId, violations: authManager.violationCount });
-  const authResult = await authManager.startupCheck();
-  writeLog("auth_startup_check_result", { authResult });
-
-  if (authResult === "locked") {
-    // 设备被锁定，只弹授权码输入弹窗
-    createWindow();
-    window.webContents.on("did-finish-load", () => {
-      window.webContents.send("auth:show-lock-screen");
-    });
-    ipcMain.handle("auth:status", () => authManager.getStatus());
-    ipcMain.handle("auth:verify", async (_event, code) => {
-      const result = await authManager.verifyCode(code);
-      if (result.valid) {
-        // 授权成功，重新加载页面以初始化所有功能
-        authManager.startPeriodicCheck();
-        // 先通知前端关闭弹窗，再重新加载
-        window.webContents.send("auth:unlock-success");
-        // 延迟重新加载，让前端有时间处理事件
-        setTimeout(() => {
-          window.reload();
-        }, 500);
-      }
-      return result;
-    });
-    ipcMain.handle("auth:check", () => authManager.checkAuthFromServer());
-    return; // 不加载主界面功能
-  }
-
-  // 授权通过或未授权（未授权时可使用云端AI）
-  authManager.startPeriodicCheck();
-
   cleanupOpenFileCache();
   try {
     const archived = ensureConversationArchives();
@@ -290,12 +252,6 @@ app.whenReady().then(async () => {
   } catch (error) {
     writeLog("conversation_archives_failed", { error });
   }
-  ipcMain.handle("auth:status", () => authManager.getStatus());
-  ipcMain.handle("auth:verify", async (_event, code) => {
-    const result = await authManager.verifyCode(code);
-    return result;
-  });
-  ipcMain.handle("auth:check", () => authManager.checkAuthFromServer());
   ipcMain.handle("settings:load", () => ({ ...getSettings(), conversationRecoveryNotice: getConversationRecoveryNotice() }));
   ipcMain.handle("settings:save", async (_event, input) => {
     const previous = getSettings();
@@ -553,17 +509,6 @@ app.whenReady().then(async () => {
   // ── 网络状态 IPC ──
   ipcMain.handle("network:status", () => networkManager.getStatus());
   ipcMain.handle("network:connect", async (_event, config) => {
-    // ── 授权门控：外网连接需要授权 ──
-    if (!authManager.canUseAdvancedFeatures) {
-      authManager.enforceViolationPolicyAsync("force_external");
-      throw new Error("未解锁高级网络功能。请输入授权码以使用 SSH 和外网转发功能。");
-    }
-    // 后端二次验证
-    const serverCheck = await authManager.checkAuthFromServer();
-    if (!serverCheck.authorized) {
-      authManager.enforceViolationPolicyAsync("force_external_bypass");
-      throw new Error("授权验证失败，无法使用外网功能。");
-    }
     try {
       const settings = getSshConnection();
       const mergedConfig = { ...settings, ...config };
@@ -641,11 +586,6 @@ app.whenReady().then(async () => {
   });
   ipcMain.handle("connection:test", async (_event, input) => {
     const mode = input?.connectionMode === "local" ? "local" : input?.connectionMode === "cloud" ? "cloud" : "ssh";
-    // ── 授权门控：SSH 和本机模式需要授权 ──
-    if (mode !== "cloud" && !authManager.canUseAdvancedFeatures) {
-      authManager.enforceViolationPolicyAsync("force_ssh");
-      throw new Error("未解锁高级功能。SSH 和本机模式需要授权码，云端 AI 模式可免费使用。");
-    }
     if (mode === "cloud") {
       const savedConfig = getCloudAiConfig();
       const inputOverrides = {};
@@ -696,11 +636,6 @@ app.whenReady().then(async () => {
     const id = input.id || randomUUID();
     const settings = getSettings();
     const connectionMode = settings.connectionMode;
-    // ── 授权门控：SSH/本机模式需要授权 ──
-    if (connectionMode !== "cloud" && !authManager.canUseAdvancedFeatures) {
-      authManager.enforceViolationPolicyAsync("force_ssh_chat");
-      throw new Error("未解锁高级功能。SSH 和本机模式需要授权码，云端 AI 模式可免费使用。");
-    }
     const message = String(input.message || "").trim();
     const attachments = Array.isArray(input.attachments) ? input.attachments : [];
     if (attachments.length > 10) throw new Error("一次最多添加 10 个附件。");
@@ -1001,7 +936,7 @@ app.whenReady().then(async () => {
   }
 
   // 关闭时保存网络状态和停止授权定期检查
-  app.on("before-quit", () => { persistNetworkState(); authManager.stopPeriodicCheck(); });
+  app.on("before-quit", () => { persistNetworkState(); });
 });
 
 function handleWindowAction(action) {

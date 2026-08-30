@@ -12,7 +12,6 @@
     <div class="window-shell">
       <div class="titlebar">
         <div class="titlebar-identity"><span>✦</span><strong>Agent Chat Pro</strong></div>
-        <div id="auth-badge" class="auth-badge auth-unauthorized" title="点击管理授权">🔒 未授权</div>
         <nav class="app-menu" aria-label="应用菜单">
           <div class="menu-group">
             <button type="button" class="menu-trigger">文件</button>
@@ -49,7 +48,6 @@
             <div class="menu-dropdown">
               <button type="button" data-app-action="settings">连接设置</button>
               <button type="button" data-app-action="appearance">外观设置</button>
-              <button type="button" data-app-action="auth">授权管理</button>
               <button type="button" data-app-action="archive">打开会话存档</button>
               <button type="button" data-app-action="diagnostics">打开诊断日志</button>
             </div>
@@ -492,26 +490,6 @@
         </div>
       </form>
     </dialog>
-    </div>
-
-    <!-- ── 授权码输入弹窗 ── -->
-    <div id="auth-overlay" class="auth-overlay">
-      <div class="auth-dialog">
-        <div class="auth-dialog-header">
-          <span>🔐</span>
-          <strong>授权验证</strong>
-        </div>
-        <p id="auth-reason" class="auth-reason">请输入授权码以解锁全部功能</p>
-        <div class="auth-dialog-body">
-          <label for="auth-code-input">授权码</label>
-          <input type="text" id="auth-code-input" placeholder="例如 42Redyf5" maxlength="8" autocomplete="off" spellcheck="false" />
-          <p id="auth-error" class="auth-error"></p>
-        </div>
-        <div class="auth-dialog-footer">
-          <button type="button" id="auth-submit-btn" class="primary">验证授权码</button>
-        </div>
-        <p class="auth-hint">云端 AI 聊天功能无需授权即可使用<br/>SSH 远程连接和外网转发需要授权码</p>
-      </div>
     </div>
 
   </body>

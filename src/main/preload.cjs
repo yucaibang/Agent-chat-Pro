@@ -72,10 +72,6 @@ contextBridge.exposeInMainWorld("agentChatPro", {
   renderMarkdown: (source) => ipcRenderer.invoke("markdown:render", source),
   // ── 链接打开 IPC ──
   openLink: (url) => ipcRenderer.invoke("link:open", url),
-  // ── 授权管理 IPC ──
-  getAuthStatus: () => ipcRenderer.invoke("auth:status"),
-  verifyAuthCode: (code) => ipcRenderer.invoke("auth:verify", code),
-  checkAuthFromServer: () => ipcRenderer.invoke("auth:check"),
   // ── 网络状态 IPC ──
   getNetworkStatus: () => ipcRenderer.invoke("network:status"),
   networkConnect: (config) => ipcRenderer.invoke("network:connect", config),
@@ -135,7 +131,4 @@ contextBridge.exposeInMainWorld("agentChatPro", {
   onNetworkStatusChange: (handler) => ipcRenderer.on("network:status-change", (_event, event) => handler(event)),
   onNetworkLatency: (handler) => ipcRenderer.on("network:latency", (_event, summary) => handler(summary)),
   onThemeInit: (handler) => ipcRenderer.once("theme:init", (_event, theme) => handler(theme)),
-  // ── 授权事件监听 ──
-  onAuthShowLockScreen: (handler) => ipcRenderer.on("auth:show-lock-screen", (_event) => handler()),
-  onAuthUnlockSuccess: (handler) => ipcRenderer.on("auth:unlock-success", (_event) => handler())
 });
