@@ -25,7 +25,7 @@ class MessageQueue {
   close() {
     if (this.#closed) return;
     this.#closed = true;
-    while (this.#waiters.length) this.#waiters.shift()({ value: undefined, done: true });
+    while (this.#waiters.length) this.#waiters.shift({ value: undefined, done: true });
   }
 
   async next() {
@@ -138,6 +138,18 @@ async function waitForStart() {
   });
 }
 
+/**
+ * 清理模型名 — 移除上下文窗口标记等非标准后缀。
+ * 例如: "glm-5.1:cloud[1m]" → "glm-5.1:cloud"
+ *       "deepseek-chat[128k]" → "deepseek-chat"
+ *       "claude-sonnet-4-20250514" → "claude-sonnet-4-20250514"（不变）
+ */
+function sanitizeModelName(model) {
+  if (typeof model !== "string") return model;
+  // 移除 [xxx] 后缀（上下文窗口标记）
+  return model.replace(/\[[^\]]*\]$/g, "").trim() || model;
+}
+
 async function main() {
   const start = await waitForStart();
   const automatic = Boolean(start.automatic);
@@ -157,32 +169,6 @@ async function main() {
   if (start.maxTokens && Number.isFinite(Number(start.maxTokens))) {
     options.maxTokens = Number(start.maxTokens);
   }
-
-  // ── 模型名兼容降级 ──
-  // 非 Claude 模型名（如 glm-4-flash、gpt-4o、deepseek-chat）会导致
-  // Claude Code 以 unrecognized_model 退出码 1 崩溃。
-  // 此处检测非 Claude 模型名，静默移除 model 参数让 Claude Code 使用默认模型，
-  // 同时发出 bridge_model_fallback 事件通知客户端。
-  if (start.modelConfig && typeof start.modelConfig === "object") {
-    const model = start.modelConfig.model;
-    if (model && typeof model === "string") {
-      const modelStr = model.trim();
-      const isClaudeModel = /^claude-/i.test(modelStr) ||
-        /^anthropic-/i.test(modelStr) ||
-        /^claude_\d/i.test(modelStr);
-      if (!isClaudeModel) {
-        // 非 Claude 模型名：移除 model 参数，降级为 Claude 默认模型
-        emit({ type: "bridge_model_fallback", protocolVersion: PROTOCOL_VERSION, originalModel: model, fallbackModel: "claude-sonnet-4-20250514", reason: "unrecognized_model_compatibility" });
-        const safeConfig = { ...start.modelConfig };
-        delete safeConfig.model;
-        Object.assign(options, safeConfig);
-      } else {
-        Object.assign(options, start.modelConfig);
-      }
-    } else {
-      Object.assign(options, start.modelConfig);
-    }
-  }
   if (start.thinkingLevel && ["none", "low", "medium", "high"].includes(start.thinkingLevel)) {
     options.thinkingLevel = start.thinkingLevel;
   }
@@ -196,6 +182,22 @@ async function main() {
   }
   if (start.systemPrompt && String(start.systemPrompt).trim()) {
     options.systemPrompt = String(start.systemPrompt).trim();
+  }
+
+  // ── 模型名全兼容处理 ──
+  // 所有模型名都直接传给 Claude Code CLI，不做白名单限制。
+  // 清理模型名中的非标准后缀（如 [1m]、[128k] 上下文窗口标记），
+  // 这些后缀会导致 Claude Code 报 unrecognized_model 错误。
+  if (start.modelConfig && typeof start.modelConfig === "object") {
+    const modelConfig = { ...start.modelConfig };
+    if (modelConfig.model && typeof modelConfig.model === "string") {
+      const originalModel = modelConfig.model;
+      modelConfig.model = sanitizeModelName(modelConfig.model);
+      if (originalModel !== modelConfig.model) {
+        emit({ type: "bridge_model_sanitized", protocolVersion: PROTOCOL_VERSION, originalModel, sanitizedModel: modelConfig.model });
+      }
+    }
+    Object.assign(options, modelConfig);
   }
 
   emit({ type: "bridge_ready", protocolVersion: PROTOCOL_VERSION, mode: "streaming-input" });

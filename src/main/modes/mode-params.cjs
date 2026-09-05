@@ -12,6 +12,17 @@ const { getMode } = require("./mode-manager.cjs");
 const { shellQuote } = require("../protocol.cjs");
 
 /**
+ * 清理模型名 — 移除上下文窗口标记等非标准后缀。
+ * 例如: "glm-5.1:cloud[1m]" → "glm-5.1:cloud"
+ *       "deepseek-chat[128k]" → "deepseek-chat"
+ *       "claude-sonnet-4-20250514" → "claude-sonnet-4-20250514"（不变）
+ */
+function sanitizeModelName(model) {
+  if (typeof model !== "string") return model;
+  return model.replace(/\[[^\]]*\]$/g, "").trim() || model;
+}
+
+/**
  * 根据模式 ID 构建完整的 CLI 参数列表。
  * @param {string} modeId - 模式 ID（内置或自定义）
  * @param {string} prompt - 用户消息
@@ -22,6 +33,12 @@ const { shellQuote } = require("../protocol.cjs");
 function buildCommandWithMode(modeId, prompt, sessionId, config) {
   const mode = resolveMode(modeId, config);
   const args = ["-p", prompt, "--output-format", "stream-json", "--include-partial-messages", "--verbose"];
+
+  // model：清理模型名后缀（如 [1m]），传给 --model 参数
+  if (mode.modelConfig?.model) {
+    const cleanModel = sanitizeModelName(mode.modelConfig.model);
+    if (cleanModel) args.push("--model", cleanModel);
+  }
 
   // maxTokens
   if (mode.maxTokens) args.push("--max-tokens", String(mode.maxTokens));
@@ -55,6 +72,12 @@ function buildCommandWithMode(modeId, prompt, sessionId, config) {
  */
 function buildBridgeStartWithMode(modeId, prompt, sessionId, config) {
   const mode = resolveMode(modeId, config);
+  // 清理 modelConfig 中的模型名后缀（如 [1m]、[128k]），避免 CLI 报 unrecognized_model
+  const rawModelConfig = mode.modelConfig || {};
+  const modelConfig = { ...rawModelConfig };
+  if (modelConfig.model && typeof modelConfig.model === "string") {
+    modelConfig.model = sanitizeModelName(modelConfig.model);
+  }
   return {
     type: "start",
     prompt,
@@ -68,7 +91,7 @@ function buildBridgeStartWithMode(modeId, prompt, sessionId, config) {
     hallucinationControl: mode.hallucinationControl,
     energyPriority: mode.energyPriority,
     systemPrompt: mode.systemPrompt || "",
-    modelConfig: mode.modelConfig || {}
+    modelConfig
   };
 }
 
@@ -121,6 +144,12 @@ function buildLocalArgsWithMode(modeId, sessionId, config) {
   const mode = resolveMode(modeId, config);
   const args = ["-p", "--output-format", "stream-json", "--include-partial-messages", "--verbose"];
 
+  // model：清理模型名后缀（如 [1m]），传给 --model 参数
+  if (mode.modelConfig?.model) {
+    const cleanModel = sanitizeModelName(mode.modelConfig.model);
+    if (cleanModel) args.push("--model", cleanModel);
+  }
+
   // maxTokens
   if (mode.maxTokens) args.push("--max-tokens", String(mode.maxTokens));
 
@@ -137,4 +166,4 @@ function buildLocalArgsWithMode(modeId, sessionId, config) {
   return args;
 }
 
-module.exports = { buildCommandWithMode, buildBridgeStartWithMode, buildLocalArgsWithMode, resolveMode, getHallucinationParams, getEnergyParams };
+module.exports = { buildCommandWithMode, buildBridgeStartWithMode, buildLocalArgsWithMode, resolveMode, getHallucinationParams, getEnergyParams, sanitizeModelName };
