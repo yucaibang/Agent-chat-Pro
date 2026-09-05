@@ -54,6 +54,20 @@ const activeRequests = new Map();
 const networkManager = new NetworkManager();
 let latencyMonitor = null;
 
+/** 脱敏 URL：移除嵌入的用户名密码（user:pass@host → [REDACTED]@host） */
+function sanitizeUrl(url) {
+  if (!url || typeof url !== "string") return url;
+  try {
+    const parsed = new URL(url);
+    if (parsed.username || parsed.password) {
+      parsed.username = "[REDACTED]";
+      parsed.password = "";
+      return parsed.toString();
+    }
+  } catch {}
+  return url;
+}
+
 const statusSignalObserver = createStatusSignalObserver({
   enabled: true,
   onGap: (entry) => writeLog("status_signal_gap", entry)
@@ -509,7 +523,7 @@ app.whenReady().then(async () => {
       cancelId: 0
     });
     if (answer.response !== 1) return { cancelled: true };
-    writeLog("agent_sdk_bridge_install_requested", { host: config.host, username: config.username });
+    writeLog("agent_sdk_bridge_install_requested", { host: config.host, username: config.username ? config.username[0] + "***" : "" });
     return installAgentSdkBridge(config, bundledBridgeFiles(), (fingerprint) => trustHost(config, fingerprint), writeLog);
   });
   ipcMain.handle("bridge:uninstall", async () => {
@@ -651,7 +665,7 @@ app.whenReady().then(async () => {
       if (input?.cloudAiProvider) inputOverrides.provider = input.cloudAiProvider;
       const config = { ...savedConfig, ...inputOverrides };
       if (!config.apiKey) throw new Error("请输入云端 AI 密钥。");
-      writeLog("connection_test_start", { connectionMode: "cloud", baseURL: config.baseURL, model: config.model });
+      writeLog("connection_test_start", { connectionMode: "cloud", baseURL: sanitizeUrl(config.baseURL), model: config.model });
       try {
         await verifyCloudConnection(config, writeLog);
         writeLog("connection_test_success", { connectionMode: "cloud" });
@@ -668,7 +682,7 @@ app.whenReady().then(async () => {
       saved = getSettings();
     }
     const config = { ...saved, ...input, connectionMode: mode === "local" ? "local" : "ssh", password: input.password || saved.password };
-    writeLog("connection_test_start", { connectionMode: mode, host: config.host, port: config.port, username: config.username, wakeName: config.wakeName });
+    writeLog("connection_test_start", { connectionMode: mode, host: config.host, port: config.port, username: config.username ? config.username[0] + "***" : "", wakeName: config.wakeName });
     try {
       const result = mode === "local"
         ? await verifyLocalConnection(config, writeLog)

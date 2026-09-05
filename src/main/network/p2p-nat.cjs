@@ -54,7 +54,7 @@ class P2pNatTransport extends Transport {
     try {
       // Step 1: STUN 发现本机公网端点（用于诊断）
       this._publicEndpoint = await this._stunDiscover(stunAddr, stunPort, onLog);
-      onLog?.("p2p_nat_stun_resolved", this._publicEndpoint);
+      onLog?.("p2p_nat_stun_resolved", { ip: "[REDACTED]", port: this._publicEndpoint?.port, family: this._publicEndpoint?.family });
 
       // Step 2: 直接尝试连接 NAS 的公网端点
       // 如果 NAS 的 NAT 类型允许，可以直接连接

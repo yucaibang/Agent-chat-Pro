@@ -4,7 +4,8 @@ const fs = require("fs");
 const path = require("path");
 
 const MAX_BYTES = 2 * 1024 * 1024;
-const PRIVATE_KEYS = /password|secret|token|prompt|message|content|data/i;
+const PRIVATE_KEYS = /password|secret|token|prompt|message|content|data|apiKey|authKey|key|community|credential/i;
+const CREDENTIAL_IN_URL = /\/\/[^/:]+:[^/@]+@/;
 
 function logPath() {
   const { app } = require("electron");
@@ -38,12 +39,18 @@ function rotateIfNeeded(target) {
 
 function sanitize(value, key = "") {
   if (PRIVATE_KEYS.test(key)) return "[REDACTED]";
-  if (value instanceof Error) return { name: value.name, message: value.message, stack: value.stack };
+  if (value instanceof Error) return { name: value.name, message: sanitize(value.message), stack: value.stack ? sanitize(value.stack) : undefined };
   if (Array.isArray(value)) return value.map((item) => sanitize(item));
   if (value && typeof value === "object") {
     return Object.fromEntries(Object.entries(value).map(([childKey, childValue]) => [childKey, sanitize(childValue, childKey)]));
   }
-  if (typeof value === "string" && value.length > 500) return value.slice(0, 500) + "…";
+  if (typeof value === "string") {
+    // 脱敏 URL 中嵌入的凭据 (user:pass@host → [REDACTED]@host)
+    if (CREDENTIAL_IN_URL.test(value)) {
+      return value.replace(/\/\/([^/:]+):([^/@]+)@/, "//$1:[REDACTED]@");
+    }
+    if (value.length > 500) return value.slice(0, 500) + "…";
+  }
   return value;
 }
 

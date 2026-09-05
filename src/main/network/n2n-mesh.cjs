@@ -56,7 +56,7 @@ class N2nMeshTransport extends Transport {
     }
 
     this._setState("connecting", `N2N 虚拟网络连接中…`);
-    onLog?.("n2n_mesh_connect_start", { supernodeAddr, supernodePort, community });
+    onLog?.("n2n_mesh_connect_start", { supernodeAddr, supernodePort, community: "[REDACTED]" });
 
     try {
       // Step 1: 启动 n2n edge 进程

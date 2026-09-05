@@ -39,7 +39,7 @@ function auditTransportItem(onAudit, item, transport) {
 function connect(config, onUnknownHost, onLog = () => {}) {
   return new Promise((resolve, reject) => {
     const client = new Client();
-    onLog("ssh_connect_start", { host: config.host, port: config.port, username: config.username });
+    onLog("ssh_connect_start", { host: config.host, port: config.port, username: config.username ? config.username[0] + "***" : "" });
     const timeout = setTimeout(() => {
       client.end();
       onLog("ssh_connect_timeout", { host: config.host, port: config.port });
