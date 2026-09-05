@@ -136,7 +136,9 @@ function getSettings() {
     // 恢复通知
     recoveryNotice,
     // 授权
-    hasCloudAiConfig: Boolean(raw.cloudAiApiKeyEncrypted || raw.cloudAiApiKey)
+    hasCloudAiConfig: Boolean(raw.cloudAiApiKeyEncrypted || raw.cloudAiApiKey),
+    // 品牌验证服务器（留空则禁用品牌验证）
+    brandServerUrl: raw.brandServerUrl || ""
   };
 }
 
@@ -240,7 +242,7 @@ function saveSettings(input) {
     externalMethod: input.externalMethod || previous.externalMethod || "auto",
     frp: input.frp || previous.frp || {},
     derp: input.derp || previous.derp || {},
-    p2n: input.p2p || previous.p2p || {},
+    p2p: input.p2p || previous.p2p || {},
     n2n: input.n2n || previous.n2n || {},
     keepalive: input.keepalive || previous.keepalive || {},
     reconnect: input.reconnect || previous.reconnect || {},
@@ -269,7 +271,9 @@ function saveSettings(input) {
     backgroundOpacity: input.backgroundOpacity !== undefined ? input.backgroundOpacity : previous.backgroundOpacity || 0.15,
     frostedGlass: input.frostedGlass || previous.frostedGlass || false,
     // 模式
-    workModeId: input.workModeId || previous.workModeId || "regular"
+    workModeId: input.workModeId || previous.workModeId || "regular",
+    // 品牌验证服务器（留空则禁用）
+    brandServerUrl: input.brandServerUrl !== undefined ? input.brandServerUrl : previous.brandServerUrl || ""
   };
 
   if (input.clearPassword) next.password = "";

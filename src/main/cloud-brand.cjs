@@ -6,8 +6,8 @@ const http = require("http");
 const os = require("os");
 const { writeLog } = require("./logger.cjs");
 
-// 云端品牌服务器地址
-const BRAND_SERVER_URL = "http://10.66.1.99:9090";
+// 云端品牌服务器地址（可通过 settings 配置，默认为空即禁用品牌验证）
+const DEFAULT_BRAND_SERVER_URL = "";
 const BRAND_CHECK_INTERVAL_MS = 5 * 60 * 1000; // 5分钟
 const REQUEST_TIMEOUT_MS = 10 * 1000; // 10秒超时
 
@@ -22,6 +22,12 @@ class CloudBrandManager {
     this._window = null;
     this._appVersion = "";
     this._brandHash = "";         // 本地品牌哈希
+    this._brandServerUrl = "";    // 品牌服务器地址（从 settings 读取）
+  }
+
+  /** 设置品牌服务器地址（由 main.cjs 从 settings 注入） */
+  setBrandServerUrl(url) {
+    this._brandServerUrl = String(url || "").trim();
   }
 
   // ─── 初始化 ───
@@ -79,7 +85,13 @@ class CloudBrandManager {
   _request(method, urlPath, body = null) {
     return new Promise((resolve, reject) => {
       try {
-        const fullUrl = BRAND_SERVER_URL.replace(/\/+$/, "") + urlPath;
+        const serverUrl = this._brandServerUrl || DEFAULT_BRAND_SERVER_URL;
+        if (!serverUrl) {
+          // 品牌服务器未配置，直接标记为离线降级
+          reject(new Error("品牌服务器未配置，使用本地默认品牌。"));
+          return;
+        }
+        const fullUrl = serverUrl.replace(/\/+$/, "") + urlPath;
         const parsed = new URL(fullUrl);
         const isHttps = parsed.protocol === "https:";
         const client = isHttps ? https : http;
@@ -352,4 +364,4 @@ class CloudBrandManager {
   }
 }
 
-module.exports = { CloudBrandManager, BRAND_SERVER_URL };
+module.exports = { CloudBrandManager, DEFAULT_BRAND_SERVER_URL };

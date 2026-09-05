@@ -226,6 +226,7 @@ function createWindow() {
   window.loadFile(path.join(__dirname, "../renderer/index.html"));
   brandManager.setWindow(window);
   brandManager.setAppVersion(app.getVersion());
+  brandManager.setBrandServerUrl(getSettings().brandServerUrl || "");
   brandManager.initialize();
   brandManager.fetchBrandConfig().catch(() => {});
   brandManager.verifyBrand().catch(() => {});

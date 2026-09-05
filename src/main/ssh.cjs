@@ -174,7 +174,7 @@ async function ensureDeviceControlKey(config, deviceId, metadata, onUnknownHost,
       hostname: String(metadata?.hostname || ""),
       targetAddress: String(metadata?.targetAddress || ""),
       targetPort: Number(metadata?.targetPort || 22),
-      account: "ClaudeAgentControl",
+      account: "AgentChatProControl",
       port: Number(metadata?.targetPort || 22),
       status: "pairing",
       updatedAt: new Date().toISOString()
@@ -203,7 +203,7 @@ async function finalizeDeviceControl(config, key, metadata, onUnknownHost, onLog
       `chmod 600 ${shellQuote(knownHosts)}`
     ].join(" && "));
     if (scan.code !== 0) throw new Error("NAS 无法读取这台 Windows 的 SSH 主机指纹，请检查本机地址和防火墙。");
-    const destination = `ClaudeAgentControl@${target}`;
+    const destination = `AgentChatProControl@${target}`;
     const sshArguments = `-p ${targetPort} -i ${shellQuote(key.privateKeyPath)} -o BatchMode=yes -o IdentitiesOnly=yes -o PasswordAuthentication=no -o StrictHostKeyChecking=yes -o UserKnownHostsFile=${shellQuote(knownHosts)} ${shellQuote(destination)}`;
     const probe = await exec(client, `ssh ${sshArguments} ${shellQuote("echo AGENT_CHAT_PRO_READY")}`);
     if (probe.code !== 0 || !probe.stdout.includes("AGENT_CHAT_PRO_READY")) {
@@ -217,7 +217,7 @@ async function finalizeDeviceControl(config, key, metadata, onUnknownHost, onLog
       deviceId: key.deviceId,
       hostname: String(metadata?.hostname || ""),
       targetAddress: target,
-      account: "ClaudeAgentControl",
+      account: "AgentChatProControl",
       port: targetPort,
       status: "ready",
       keyPath: key.privateKeyPath,
@@ -239,7 +239,7 @@ async function markDeviceControlDisabled(config, status, onUnknownHost, onLog) {
       deviceId: String(status.deviceId || ""),
       hostname: String(status.hostname || ""),
       targetAddress: String(status.targetAddress || ""),
-      account: "ClaudeAgentControl",
+      account: "AgentChatProControl",
       port: Number(status.targetPort || 22),
       status: "disabled",
       keyPath: privateKeyPath,

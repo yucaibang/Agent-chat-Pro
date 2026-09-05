@@ -121,7 +121,7 @@ function runLocalClaude(config, message, sessionId, attachments = [], callbacks 
           }
           const foundSession = sessionFromEvent(item.value);
           if (foundSession && foundSession !== nextSessionId) {
-            nextSessionId = foundSessionId;
+            nextSessionId = foundSession;
             callbacks.onSessionId?.(foundSession);
           }
           const foundUsage = usageFromEvent(item.value);

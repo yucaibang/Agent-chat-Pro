@@ -5,13 +5,13 @@ param(
 
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
-$agentRoot = Join-Path $env:ProgramData "ClaudeNasAgent"
+$agentRoot = Join-Path $env:ProgramData "AgentChatProAgent"
 $statePath = Join-Path $agentRoot "install-state.json"
 $sshdConfig = Join-Path $env:ProgramData "ssh\sshd_config"
-$markerStart = "# BEGIN CLAUDE NAS AGENT CONTROL"
-$markerEnd = "# END CLAUDE NAS AGENT CONTROL"
-$accountName = "ClaudeAgentControl"
-$firewallRule = "ClaudeNAS-Agent-Control"
+$markerStart = "# BEGIN AGENT CHAT PRO CONTROL"
+$markerEnd = "# END AGENT CHAT PRO CONTROL"
+$accountName = "AgentChatProControl"
+$firewallRule = "AgentChatPro-Agent-Control"
 
 function Assert-Administrator {
   $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
@@ -48,7 +48,7 @@ function Assert-OpenSshRuntime {
 function Assert-SshdConfig {
   param([Parameter(Mandatory = $true)][string]$ExpectedAuthorizedKeysFile)
   $sshdExe = Get-OpenSshExecutable
-  $errorPath = Join-Path $env:TEMP ("claude-nas-sshd-" + [Guid]::NewGuid().ToString("N") + ".log")
+  $errorPath = Join-Path $env:TEMP ("agent-chat-pro-sshd-" + [Guid]::NewGuid().ToString("N") + ".log")
   try {
     $check = Start-Process -FilePath $sshdExe -ArgumentList @("-t", "-f", $sshdConfig) -WindowStyle Hidden -Wait -PassThru -RedirectStandardError $errorPath
     if ($check.ExitCode -ne 0) {
@@ -58,7 +58,7 @@ function Assert-SshdConfig {
     }
     $configured = (Get-Content -Raw -LiteralPath $sshdConfig).Replace("\", "/")
     $expected = $ExpectedAuthorizedKeysFile.Replace("\", "/")
-    $blockPattern = "(?ims)^" + [regex]::Escape($markerStart) + "\s*$.*?^Match\s+User\s+claudeagentcontrol\s*$.*?^\s*PasswordAuthentication\s+no\s*$.*?^\s*AuthorizedKeysFile\s+" + [regex]::Escape($expected) + "\s*$.*?^" + [regex]::Escape($markerEnd) + "\s*$"
+    $blockPattern = "(?ims)^" + [regex]::Escape($markerStart) + "\s*$.*?^Match\s+User\s+agentchatprocontrol\s*$.*?^\s*PasswordAuthentication\s+no\s*$.*?^\s*AuthorizedKeysFile\s+" + [regex]::Escape($expected) + "\s*$.*?^" + [regex]::Escape($markerEnd) + "\s*$"
     if ($configured -notmatch $blockPattern) {
       throw "The dedicated OpenSSH Match block is missing or does not reference the expected authorized_keys file."
     }
@@ -78,7 +78,7 @@ function Set-AgentBlock([string]$authorizedKeysFile) {
   $keyPath = $authorizedKeysFile.Replace("\", "/")
   $block = @"
 $markerStart
-Match User claudeagentcontrol
+Match User agentchatprocontrol
     PasswordAuthentication no
     AuthorizedKeysFile $keyPath
 $markerEnd
@@ -103,11 +103,11 @@ function New-RandomSecurePassword {
 function Test-PasswordlessLocalLogon([string]$userName) {
   $user = Get-LocalUser -Name $userName -ErrorAction SilentlyContinue
   if (-not $user -or -not $user.Enabled) { return $false }
-  if (-not ("ClaudeNasNativeLogon" -as [type])) {
+  if (-not ("AgentChatProNativeLogon" -as [type])) {
     Add-Type -TypeDefinition @"
 using System;
 using System.Runtime.InteropServices;
-public static class ClaudeNasNativeLogon {
+public static class AgentChatProNativeLogon {
   [DllImport("advapi32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
   public static extern bool LogonUser(string userName, string domain, string password, int logonType, int logonProvider, out IntPtr token);
   [DllImport("kernel32.dll", SetLastError = true)]
@@ -117,9 +117,9 @@ public static class ClaudeNasNativeLogon {
   }
   $token = [IntPtr]::Zero
   try {
-    return [ClaudeNasNativeLogon]::LogonUser($userName, $env:COMPUTERNAME, "", 2, 0, [ref]$token)
+    return [AgentChatProNativeLogon]::LogonUser($userName, $env:COMPUTERNAME, "", 2, 0, [ref]$token)
   } finally {
-    if ($token -ne [IntPtr]::Zero) { [ClaudeNasNativeLogon]::CloseHandle($token) | Out-Null }
+    if ($token -ne [IntPtr]::Zero) { [AgentChatProNativeLogon]::CloseHandle($token) | Out-Null }
   }
 }
 
@@ -282,16 +282,33 @@ function Install-Control($config) {
 
 function Uninstall-Control {
   $state = if (Test-Path $statePath) { Get-Content -Raw -LiteralPath $statePath | ConvertFrom-Json } else { $null }
+  # Legacy compatibility: also remove old-named firewall rule and Match block from prior versions
+  $legacyMarkerStart = "# BEGIN CLAUDE NAS AGENT CONTROL"
+  $legacyMarkerEnd = "# END CLAUDE NAS AGENT CONTROL"
+  $legacyFirewallRule = "ClaudeNAS-Agent-Control"
+  $legacyAccountName = "ClaudeAgentControl"
+  $legacyAgentRoot = Join-Path $env:ProgramData "ClaudeNasAgent"
+  $legacyStatePath = Join-Path $legacyAgentRoot "install-state.json"
+  $legacyState = if (Test-Path $legacyStatePath) { Get-Content -Raw -LiteralPath $legacyStatePath | ConvertFrom-Json } else { $null }
   if (Test-Path $sshdConfig) {
     $content = Remove-AgentBlock (Get-Content -Raw -LiteralPath $sshdConfig)
+    # Also remove legacy marker block if present
+    $legacyPattern = "(?ms)^" + [regex]::Escape($legacyMarkerStart) + ".*?^" + [regex]::Escape($legacyMarkerEnd) + "\s*"
+    $content = [regex]::Replace($content, $legacyPattern, "")
     [IO.File]::WriteAllText($sshdConfig, $content, (New-Object Text.UTF8Encoding($false)))
   }
   Remove-NetFirewallRule -Name $firewallRule -ErrorAction SilentlyContinue
+  Remove-NetFirewallRule -Name $legacyFirewallRule -ErrorAction SilentlyContinue
   $managedUser = Get-LocalUser -Name $accountName -ErrorAction SilentlyContinue
+  $legacyUser = Get-LocalUser -Name $legacyAccountName -ErrorAction SilentlyContinue
   if ($managedUser -and (($state -and $state.accountCreated) -or $managedUser.Description -in @("Agent CLI Control; SSH key only", "Claude NAS Agent; SSH key only"))) {
     Remove-LocalUser -Name $accountName
   } else {
     Disable-LocalUser -Name $accountName -ErrorAction SilentlyContinue
+  }
+  # Clean up legacy account if it exists from prior version
+  if ($legacyUser -and $legacyUser.Description -in @("Agent CLI Control; SSH key only", "Claude NAS Agent; SSH key only")) {
+    Remove-LocalUser -Name $legacyAccountName -ErrorAction SilentlyContinue
   }
   if (Get-Service -Name sshd -ErrorAction SilentlyContinue) {
     if ($state -and -not $state.serviceWasRunning) { Stop-Service sshd -Force -ErrorAction SilentlyContinue }
@@ -304,6 +321,8 @@ function Uninstall-Control {
   }
   Remove-Item -LiteralPath $statePath -Force -ErrorAction SilentlyContinue
   Remove-Item -LiteralPath (Join-Path $agentRoot "authorized_keys") -Force -ErrorAction SilentlyContinue
+  # Clean up legacy state directory if it exists from prior version
+  if (Test-Path $legacyAgentRoot) { Remove-Item -LiteralPath $legacyAgentRoot -Recurse -Force -ErrorAction SilentlyContinue }
 }
 
 $config = $null
