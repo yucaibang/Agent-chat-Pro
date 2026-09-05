@@ -43,7 +43,7 @@ const {
   createStatusSignalObserver,
   normalizeStatusEvent
 } = require("./status-event-normalizer.cjs");
-const { readModelSettings, replaceModelSettings } = require("./model-config.cjs");
+const { readModelSettings, replaceModelSettings, validateClaudeModel } = require("./model-config.cjs");
 const { CloudBrandManager } = require("./cloud-brand.cjs");
 const { IntegrityGuard } = require("./integrity-guard.cjs");
 
@@ -353,6 +353,12 @@ app.whenReady().then(async () => {
     if (activeRequests.size) throw new Error("Agent 正在回复，暂时不能切换模型。请等待当前回复结束后再操作。");
     assertModelAdminPassword(input?.adminPassword);
     const model = input?.model;
+    // 验证模型名必须为 Claude 系列（防止误输入 glm/gpt 等云端 AI 模型导致 Bridge 崩溃）
+    try {
+      validateClaudeModel(model);
+    } catch (validationError) {
+      throw new Error(validationError.message);
+    }
     const config = getConnection();
     const local = config.connectionMode === "local";
     const answer = await dialog.showMessageBox(window, {

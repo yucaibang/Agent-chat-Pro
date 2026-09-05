@@ -157,6 +157,24 @@ async function main() {
   if (start.maxTokens && Number.isFinite(Number(start.maxTokens))) {
     options.maxTokens = Number(start.maxTokens);
   }
+
+  // ── 模型名安全过滤 ──
+  // 非 Claude 模型名（如 glm-4-flash、gpt-4o）会导致 Claude Code 以
+  // unrecognized_model 退出码 1 崩溃。此处拦截并降级为默认模型。
+  if (start.modelConfig && typeof start.modelConfig === "object") {
+    const model = start.modelConfig.model;
+    if (model && typeof model === "string") {
+      const modelStr = model.trim().toLowerCase();
+      const isClaudeModel = /^claude-/i.test(modelStr) ||
+        /^anthropic-/i.test(modelStr) ||
+        /^claude_\d/i.test(modelStr);
+      if (!isClaudeModel) {
+        emit({ type: "bridge_model_fallback", protocolVersion: PROTOCOL_VERSION, originalModel: model, fallbackModel: "default" });
+        delete start.modelConfig.model;
+      }
+    }
+    Object.assign(options, start.modelConfig);
+  }
   if (start.thinkingLevel && ["none", "low", "medium", "high"].includes(start.thinkingLevel)) {
     options.thinkingLevel = start.thinkingLevel;
   }
@@ -170,9 +188,6 @@ async function main() {
   }
   if (start.systemPrompt && String(start.systemPrompt).trim()) {
     options.systemPrompt = String(start.systemPrompt).trim();
-  }
-  if (start.modelConfig && typeof start.modelConfig === "object") {
-    Object.assign(options, start.modelConfig);
   }
 
   emit({ type: "bridge_ready", protocolVersion: PROTOCOL_VERSION, mode: "streaming-input" });
