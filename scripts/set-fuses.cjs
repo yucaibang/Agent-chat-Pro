@@ -42,7 +42,7 @@ async function findAndFlipFuses() {
     // ⚠️ 全部 8 项必须显式指定，不能遗漏（遗漏=使用 Electron 默认值=不安全）
     [FuseV1Options.RunAsNode]: false,                              // OFF — 禁止 Node REPL
     [FuseV1Options.EnableCookieEncryption]: true,                  // ON  — Cookie 加密
-    [FuseV1Options.EnableNodeOptionsEnvironment]: false,           // OFF — 禁止 NODE_OPTIONS 注入
+    [FuseV1Options.EnableNodeOptionsEnvironmentVariable]: false,   // OFF — 禁止 NODE_OPTIONS 注入
     [FuseV1Options.EnableNodeCliInspectArguments]: false,          // OFF — 禁止 --inspect 调试
     [FuseV1Options.EnableEmbeddedAsarIntegrityValidation]: true,   // ON  — ASAR 完整性校验
     [FuseV1Options.OnlyLoadAppFromAsar]: true,                     // ON  — 仅从 ASAR 加载
@@ -55,7 +55,7 @@ async function findAndFlipFuses() {
     console.log("✅ Fuses 烧录完成！");
     console.log("   - RunAsNode:                           ❌ 关闭（禁止 Node REPL）");
     console.log("   - EnableCookieEncryption:               ✅ 开启");
-    console.log("   - EnableNodeOptionsEnvironment:        ❌ 关闭（防代码注入）");
+    console.log("   - EnableNodeOptionsEnvironmentVariable: ❌ 关闭（防代码注入）");
     console.log("   - EnableNodeCliInspectArguments:        ❌ 关闭（防调试附加）");
     console.log("   - EnableEmbeddedAsarIntegrityValidation: ✅ 开启（ASAR 完整性）");
     console.log("   - OnlyLoadAppFromAsar:                 ✅ 开启（防目录注入）");
@@ -88,7 +88,7 @@ async function findAndFlipFuses() {
   const fuseNames = [
     "RunAsNode",
     "EnableCookieEncryption",
-    "EnableNodeOptionsEnvironment",
+    "EnableNodeOptionsEnvironmentVariable",
     "EnableNodeCliInspectArguments",
     "EnableEmbeddedAsarIntegrityValidation",
     "OnlyLoadAppFromAsar",
