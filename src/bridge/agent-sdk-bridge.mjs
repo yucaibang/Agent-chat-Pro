@@ -158,22 +158,30 @@ async function main() {
     options.maxTokens = Number(start.maxTokens);
   }
 
-  // ── 模型名安全过滤 ──
-  // 非 Claude 模型名（如 glm-4-flash、gpt-4o）会导致 Claude Code 以
-  // unrecognized_model 退出码 1 崩溃。此处拦截并降级为默认模型。
+  // ── 模型名兼容降级 ──
+  // 非 Claude 模型名（如 glm-4-flash、gpt-4o、deepseek-chat）会导致
+  // Claude Code 以 unrecognized_model 退出码 1 崩溃。
+  // 此处检测非 Claude 模型名，静默移除 model 参数让 Claude Code 使用默认模型，
+  // 同时发出 bridge_model_fallback 事件通知客户端。
   if (start.modelConfig && typeof start.modelConfig === "object") {
     const model = start.modelConfig.model;
     if (model && typeof model === "string") {
-      const modelStr = model.trim().toLowerCase();
+      const modelStr = model.trim();
       const isClaudeModel = /^claude-/i.test(modelStr) ||
         /^anthropic-/i.test(modelStr) ||
         /^claude_\d/i.test(modelStr);
       if (!isClaudeModel) {
-        emit({ type: "bridge_model_fallback", protocolVersion: PROTOCOL_VERSION, originalModel: model, fallbackModel: "default" });
-        delete start.modelConfig.model;
+        // 非 Claude 模型名：移除 model 参数，降级为 Claude 默认模型
+        emit({ type: "bridge_model_fallback", protocolVersion: PROTOCOL_VERSION, originalModel: model, fallbackModel: "claude-sonnet-4-20250514", reason: "unrecognized_model_compatibility" });
+        const safeConfig = { ...start.modelConfig };
+        delete safeConfig.model;
+        Object.assign(options, safeConfig);
+      } else {
+        Object.assign(options, start.modelConfig);
       }
+    } else {
+      Object.assign(options, start.modelConfig);
     }
-    Object.assign(options, start.modelConfig);
   }
   if (start.thinkingLevel && ["none", "low", "medium", "high"].includes(start.thinkingLevel)) {
     options.thinkingLevel = start.thinkingLevel;

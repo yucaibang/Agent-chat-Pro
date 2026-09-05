@@ -55,18 +55,6 @@ function buildCommandWithMode(modeId, prompt, sessionId, config) {
  */
 function buildBridgeStartWithMode(modeId, prompt, sessionId, config) {
   const mode = resolveMode(modeId, config);
-  // 过滤非 Claude 模型名：Bridge 模式只能使用 Claude 模型
-  const rawModelConfig = mode.modelConfig || {};
-  const filteredModelConfig = { ...rawModelConfig };
-  if (filteredModelConfig.model && typeof filteredModelConfig.model === "string") {
-    const modelStr = filteredModelConfig.model.trim().toLowerCase();
-    const isClaudeModel = /^claude-/i.test(modelStr) ||
-      /^anthropic-/i.test(modelStr) ||
-      /^claude_\d/i.test(modelStr);
-    if (!isClaudeModel) {
-      delete filteredModelConfig.model;
-    }
-  }
   return {
     type: "start",
     prompt,
@@ -80,7 +68,7 @@ function buildBridgeStartWithMode(modeId, prompt, sessionId, config) {
     hallucinationControl: mode.hallucinationControl,
     energyPriority: mode.energyPriority,
     systemPrompt: mode.systemPrompt || "",
-    modelConfig: filteredModelConfig
+    modelConfig: mode.modelConfig || {}
   };
 }
 
