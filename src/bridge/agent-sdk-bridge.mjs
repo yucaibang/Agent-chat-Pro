@@ -150,6 +150,63 @@ function sanitizeModelName(model) {
   return model.replace(/\[[^\]]*\]$/g, "").trim() || model;
 }
 
+/**
+ * 已知 Claude 模型 ID 前缀。
+ * 用于判断用户指定的模型是否是 Claude 原生模型。
+ * 如果不是，则需要注入 modelOverrides 确保 Claude Code 内部路径正常工作。
+ */
+const CLAUDE_MODEL_PREFIXES = ["claude-", "anthropic-"];
+
+/**
+ * Claude Code 内部可能使用的模型 ID。
+ * 当用户使用非 Claude 模型时，这些 ID 需要通过 modelOverrides 映射到用户的模型，
+ * 以确保标题生成（Haiku 路径）、子代理调用等内部操作使用正确的模型名。
+ *
+ * 覆盖范围：
+ * - 当前代（2025）：claude-haiku-4-5, claude-sonnet-4-*, claude-opus-4-*
+ * - 上一代（2024）：claude-3-5-haiku, claude-3-5-sonnet, claude-3-opus, claude-3-haiku
+ */
+const CLAUDE_INTERNAL_MODEL_IDS = [
+  // 当前代（2025）
+  "claude-haiku-4-5",
+  "claude-sonnet-4-20250514",
+  "claude-sonnet-4-5",
+  "claude-opus-4-20250514",
+  "claude-opus-4-5",
+  // 上一代（2024）
+  "claude-3-5-haiku-20241022",
+  "claude-3-5-sonnet-20241022",
+  "claude-3-opus-20240229",
+  "claude-3-haiku-20240307",
+  "claude-3-5-sonnet-20240620",
+];
+
+/**
+ * 判断模型名是否为 Claude 原生模型。
+ * 如果是，则不需要 modelOverrides；如果不是，则需要映射。
+ */
+function isClaudeModel(model) {
+  if (typeof model !== "string" || !model.trim()) return true; // 空或非字符串视为 Claude（不覆盖）
+  const lower = model.toLowerCase().trim();
+  return CLAUDE_MODEL_PREFIXES.some(prefix => lower.startsWith(prefix));
+}
+
+/**
+ * 构建模型覆盖映射。
+ * 将所有 Claude 内部模型 ID 映射到用户指定的模型，确保 Claude Code 的
+ * 标题生成、子代理等内部路径使用正确的模型名。
+ *
+ * @param {string} userModel - 用户指定的模型名（已清理后缀）
+ * @returns {Object} modelOverrides 映射对象
+ */
+function buildModelOverrides(userModel) {
+  const overrides = {};
+  for (const claudeId of CLAUDE_INTERNAL_MODEL_IDS) {
+    overrides[claudeId] = userModel;
+  }
+  return overrides;
+}
+
 async function main() {
   const start = await waitForStart();
   const automatic = Boolean(start.automatic);
@@ -188,6 +245,8 @@ async function main() {
   // 所有模型名都直接传给 Claude Code CLI，不做白名单限制。
   // 清理模型名中的非标准后缀（如 [1m]、[128k] 上下文窗口标记），
   // 这些后缀会导致 Claude Code 报 unrecognized_model 错误。
+  // 非Claude模型自动注入 modelOverrides，确保内部路径（标题生成/子代理等）
+  // 使用正确的模型名，无需手动修改 settings.json。
   if (start.modelConfig && typeof start.modelConfig === "object") {
     const modelConfig = { ...start.modelConfig };
     if (modelConfig.model && typeof modelConfig.model === "string") {
@@ -195,6 +254,17 @@ async function main() {
       modelConfig.model = sanitizeModelName(modelConfig.model);
       if (originalModel !== modelConfig.model) {
         emit({ type: "bridge_model_sanitized", protocolVersion: PROTOCOL_VERSION, originalModel, sanitizedModel: modelConfig.model });
+      }
+      // 非Claude模型：自动注入 modelOverrides
+      // 将所有 Claude 内部模型 ID 映射到用户模型，
+      // 解决标题生成（Haiku路径）等内部操作的 unrecognized_model 错误。
+      if (!isClaudeModel(modelConfig.model)) {
+        const overrides = buildModelOverrides(modelConfig.model);
+        options.settings = {
+          ...(options.settings && typeof options.settings === "object" ? options.settings : {}),
+          modelOverrides: overrides,
+        };
+        emit({ type: "bridge_model_overrides_applied", protocolVersion: PROTOCOL_VERSION, model: modelConfig.model, overrideTargets: Object.keys(overrides) });
       }
     }
     Object.assign(options, modelConfig);
