@@ -14,7 +14,9 @@ const elements = {
   historyCount: document.querySelector("#history-count"),
   composer: document.querySelector("#composer"),
   send: document.querySelector("#send"),
-  toolMode: document.querySelector("#tool-mode"),
+  composerModeTrigger: document.querySelector("#composer-mode-trigger"),
+  composerModePopup: document.querySelector("#composer-mode-popup"),
+  composerModeList: document.querySelector("#composer-mode-list"),
   stateText: document.querySelector("#state-text"),
   stateDot: document.querySelector("#state-dot")
 };
@@ -265,9 +267,12 @@ async function refreshBridgeStatus() {
 
 function setToolModeAppearance(enabled) {
   automaticTools = enabled;
-  elements.toolMode.className = `tool-mode ${enabled ? "automatic" : "safe"}`;
-  elements.toolMode.textContent = enabled ? "⚡" : "🛡";
-  elements.toolMode.title = enabled ? "工具权限：自动执行（点击切换为安全模式）" : "工具权限：安全模式（点击允许自动执行）";
+  // 更新输入栏模式触发按钮的图标和样式
+  if (elements.composerModeTrigger) {
+    elements.composerModeTrigger.textContent = enabled ? "⚡" : "🛡";
+    elements.composerModeTrigger.title = enabled ? "自动化模式" : "常规模式（安全）";
+    elements.composerModeTrigger.className = `composer-mode-trigger ${enabled ? "automatic" : "safe"}`;
+  }
   refreshDeniedToolActions();
 }
 
@@ -277,10 +282,16 @@ async function changeToolMode(enabled) {
     if (settings.cancelled) return false;
     setToolModeAppearance(settings.skipPermissions);
     elements.form.elements.namedItem("skipPermissions").checked = settings.skipPermissions;
+    // 同步侧边栏模式选择器
+    currentModeId = enabled ? "automatic" : "regular";
+    const mode = await window.agentChatPro.getMode(currentModeId);
+    if (mode) updateModeDisplay(mode);
+    await refreshModeSelector();
+    await window.agentChatPro.saveSettings({ ...(await window.agentChatPro.loadSettings()), workModeId: currentModeId }).then(populateSettings);
     setConnection(settings.skipPermissions ? `已允许 Claude 在${currentConnectionMode === "local" ? "本机" : " NAS"}自动执行工具` : "安全模式：需授权的工具会被拒绝", settings.skipPermissions ? "connected" : "");
     return true;
   } finally {
-    elements.toolMode.blur();
+    elements.composerModeTrigger?.blur();
     requestAnimationFrame(() => focusPrompt(true));
     setTimeout(() => focusPrompt(true), 80);
   }
@@ -1207,12 +1218,55 @@ elements.composer.addEventListener("click", (event) => {
 });
 elements.prompt.addEventListener("input", adjustTextarea);
 document.querySelector("#attach").addEventListener("click", () => elements.filePicker.click());
-elements.toolMode.addEventListener("click", async () => {
-  try { await changeToolMode(!automaticTools); }
-  catch (error) {
-    setConnection("工具权限切换失败：" + error.message, "error");
-    focusPrompt(true);
-  }
+// ── 输入栏模式弹出菜单 ──────────────────────────────────
+
+let composerModePopupOpen = false;
+
+function closeComposerModePopup() {
+  composerModePopupOpen = false;
+  if (elements.composerModePopup) elements.composerModePopup.hidden = true;
+}
+
+async function refreshComposerModePopup() {
+  try {
+    const modes = await window.agentChatPro.listModes();
+    const list = elements.composerModeList;
+    if (!list) return;
+    list.replaceChildren();
+    for (const mode of modes) {
+      const item = document.createElement("div");
+      item.className = `composer-mode-item${mode.id === currentModeId ? " active" : ""}`;
+      item.innerHTML = `<span class="composer-mode-item-icon">${mode.icon}</span><div class="composer-mode-item-info"><span class="composer-mode-item-name">${mode.name}</span><span class="composer-mode-item-desc">${mode.description}</span></div>`;
+      item.addEventListener("click", async () => {
+        currentModeId = mode.id;
+        updateModeDisplay(mode);
+        // 同步侧边栏模式选择器
+        await refreshModeSelector();
+        // 保存到设置
+        try {
+          const settings = await window.agentChatPro.saveSettings({ ...(await window.agentChatPro.loadSettings()), workModeId: mode.id });
+          populateSettings(settings);
+        } catch (error) { setConnection("模式切换失败：" + error.message, "error"); }
+        closeComposerModePopup();
+      });
+      list.append(item);
+    }
+  } catch (error) { console.error("Failed to load modes for composer popup:", error); }
+}
+
+if (elements.composerModeTrigger) {
+  elements.composerModeTrigger.addEventListener("click", async (event) => {
+    event.stopPropagation();
+    composerModePopupOpen = !composerModePopupOpen;
+    if (composerModePopupOpen) {
+      await refreshComposerModePopup();
+    }
+    if (elements.composerModePopup) elements.composerModePopup.hidden = !composerModePopupOpen;
+  });
+}
+
+document.addEventListener("click", (event) => {
+  if (!event.target.closest(".composer-mode-selector")) closeComposerModePopup();
 });
 elements.filePicker.addEventListener("change", () => { addFiles(elements.filePicker.files); elements.filePicker.value = ""; });
 elements.composer.addEventListener("dragover", (event) => event.preventDefault());
@@ -1347,6 +1401,8 @@ async function refreshModeSelector() {
       item.addEventListener("click", async () => {
         currentModeId = mode.id;
         updateModeDisplay(mode);
+        // 同步刷新输入栏弹出菜单高亮
+        await refreshComposerModePopup();
         // 保存到设置
         try {
           const settings = await window.agentChatPro.saveSettings({ ...(await window.agentChatPro.loadSettings()), workModeId: mode.id });
@@ -1370,6 +1426,12 @@ function updateModeDisplay(mode) {
   document.querySelector("#mode-name").textContent = mode.name;
   document.querySelector("#mode-trigger").title = `${mode.name}：${mode.description}`;
   setToolModeAppearance(mode.skipPermissions);
+  // 同步更新输入栏模式按钮
+  if (elements.composerModeTrigger) {
+    elements.composerModeTrigger.textContent = mode.icon;
+    elements.composerModeTrigger.title = `${mode.name}：${mode.description}`;
+    elements.composerModeTrigger.className = `composer-mode-trigger ${mode.skipPermissions ? "automatic" : "safe"}`;
+  }
   // 同步更新聊天区模式 badge
   const badge = document.querySelector("#chat-mode-badge");
   if (badge) {

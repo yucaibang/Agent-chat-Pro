@@ -5,10 +5,10 @@
  *
  * 三种模式覆盖常见使用场景：
  * - 自动化：跳过所有权限确认，Agent 全自动执行
- * - 常规：Agent 自动执行（Bridge 模式下弹窗确认敏感操作）
+ * - 常规：安全模式，需授权的工具会被拒绝（Bridge 模式下弹窗确认）
  * - ECO：最小能耗，适合简单问答
  *
- * 重要：SSH 直连模式下无法交互式确认权限，所有模式均使用 bypassPermissions。
+ * SSH 直连模式下无法交互式确认权限，常规模式在 SSH 下仍使用 bypassPermissions。
  * Bridge 模式下通过 onPermissionRequest 回调实现交互式权限确认。
  *
  * 自定义模式可覆盖所有参数 + systemPrompt + modelConfig。
@@ -36,12 +36,10 @@ const BUILTIN_MODES = {
     id: "regular",
     name: "常规模式",
     icon: "🛡",
-    description: "Agent 自动执行工具（Bridge 模式下弹窗确认敏感操作）",
+    description: "安全模式：需授权的工具会被拒绝（Bridge 模式下弹窗确认）",
     isBuiltIn: true,
-    // SSH 直连模式无法交互确认权限，必须 bypassPermissions 才能正常使用工具
-    // Bridge 模式下由 onPermissionRequest 回调处理交互式确认
-    skipPermissions: true,
-    permissionMode: "bypassPermissions",
+    skipPermissions: false,
+    permissionMode: "default",
     maxTokens: 16384,
     thinkingLevel: "medium",
     hallucinationControl: "standard",

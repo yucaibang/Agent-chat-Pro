@@ -360,10 +360,20 @@ header p { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .attachment-chip button { color: var(--text-secondary); background: transparent; border: 0; font-size: 16px; line-height: 1; padding: 0; }
 textarea { flex: 1; max-height: 180px; resize: none; border: 0; outline: 0; background: transparent; color: var(--text-primary); line-height: 1.5; padding: 8px 0; }
 textarea::placeholder { color: var(--text-muted); }
-.send-button, .attach-button, .tool-mode { border: 0; border-radius: 10px; height: 34px; min-width: 34px; }
-.tool-mode { color: var(--text-tertiary); background: var(--bg-active); }
-.tool-mode.automatic { color: #efb86f; background: #413322; }
-.tool-mode.safe { color: #6db3f2; background: #1a2a3a; }
+.send-button, .attach-button, .composer-mode-trigger { border: 0; border-radius: 10px; height: 34px; min-width: 34px; }
+.composer-mode-trigger { color: var(--text-tertiary); background: var(--bg-active); font-size: 16px; line-height: 1; cursor: pointer; transition: background .15s, color .15s; }
+.composer-mode-trigger.automatic { color: #efb86f; background: #413322; }
+.composer-mode-trigger.safe { color: #6db3f2; background: #1a2a3a; }
+.composer-mode-selector { position: relative; }
+.composer-mode-popup { position: absolute; bottom: 100%; right: 0; margin-bottom: 6px; border: 1px solid var(--border-popover); border-radius: 10px; background: var(--bg-mode-dropdown); box-shadow: var(--shadow-dropdown); z-index: 70; padding: 6px; min-width: 220px; }
+.composer-mode-list { display: flex; flex-direction: column; gap: 2px; max-height: 280px; overflow-y: auto; }
+.composer-mode-item { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: 7px; cursor: pointer; color: var(--text-secondary); font-size: 13px; transition: background .12s; }
+.composer-mode-item:hover { background: var(--bg-active); }
+.composer-mode-item.active { background: var(--bg-mode-item-active); color: #9eeaaa; }
+.composer-mode-item .composer-mode-item-icon { font-size: 16px; }
+.composer-mode-item .composer-mode-item-info { display: flex; flex-direction: column; gap: 1px; }
+.composer-mode-item .composer-mode-item-name { font-weight: 600; }
+.composer-mode-item .composer-mode-item-desc { font-size: 11px; color: var(--text-muted); }
 .attach-button { background: var(--bg-hover); color: var(--text-secondary); font-size: 21px; line-height: 1; }
 .send-button { display: grid; place-items: center; width: 36px; min-width: 36px; height: 36px; border-radius: 50%; background: #f1f2ef; color: #151918; transition: background .15s ease, transform .15s ease, opacity .15s ease; }
 .send-button:hover:not(:disabled) { background: #fff; transform: translateY(-1px); }

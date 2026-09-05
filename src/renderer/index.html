@@ -149,7 +149,12 @@
         <div id="attachment-list" class="attachment-list" hidden></div>
         <textarea id="prompt" rows="1" placeholder="给 Agent 发消息…（Enter 发送，Shift + Enter 换行）"></textarea>
         <button id="attach" type="button" class="attach-button" title="添加图片或文件">＋</button>
-        <button id="tool-mode" type="button" class="tool-mode safe" title="工具权限：安全模式">🛡</button>
+        <div class="composer-mode-selector" id="composer-mode-selector">
+          <button id="composer-mode-trigger" type="button" class="composer-mode-trigger" title="工作模式">🛡</button>
+          <div class="composer-mode-popup" id="composer-mode-popup" hidden>
+            <div class="composer-mode-list" id="composer-mode-list"></div>
+          </div>
+        </div>
         <button id="send" type="submit" class="send-button" title="发送" aria-label="发送消息">
           <svg class="send-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5M6 11l6-6 6 6" /></svg>
           <svg class="stop-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="7" width="10" height="10" rx="1.5" /></svg>
