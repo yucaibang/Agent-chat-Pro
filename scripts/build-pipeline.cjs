@@ -122,7 +122,7 @@ function step2_bytenode() {
     // 创建加载器：.cjs 文件加载对应的 .jsc（如果存在）
     for (const file of BYTECODE_FILES) {
       const srcPath = path.join(PROJECT_ROOT, file);
-      const jscPath = srcPath.replace(/\.cjs$, ".jsc");
+      const jscPath = srcPath.replace(/\.cjs$/, ".jsc");
       const jscFile = path.basename(file).replace(/\.cjs$/, ".jsc");
 
       if (fs.existsSync(jscPath)) {
