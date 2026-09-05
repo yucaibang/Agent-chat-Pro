@@ -45,9 +45,11 @@ const {
 } = require("./status-event-normalizer.cjs");
 const { readModelSettings, replaceModelSettings } = require("./model-config.cjs");
 const { CloudBrandManager } = require("./cloud-brand.cjs");
+const { IntegrityGuard } = require("./integrity-guard.cjs");
 
 let window;
 const brandManager = new CloudBrandManager();
+const integrityGuard = new IntegrityGuard();
 const activeRequests = new Map();
 const networkManager = new NetworkManager();
 let latencyMonitor = null;
@@ -228,6 +230,10 @@ function createWindow() {
   brandManager.fetchBrandConfig().catch(() => {});
   brandManager.verifyBrand().catch(() => {});
   brandManager.startPeriodicCheck();
+  // 完整性自检：检测到篡改时，品牌验证将返回虚假数据
+  if (integrityGuard.isTampered) {
+    writeLog("brand_tampered_mode", { message: "完整性异常，品牌验证启用虚假数据模式" });
+  }
   // 发送初始主题给渲染进程
   try {
     const theme = getSettings().theme || "dark";
@@ -254,6 +260,18 @@ app.whenReady().then(async () => {
   app.setAppUserModelId("com.jiang.agentChatPro");
   nativeTheme.themeSource = "dark";
   writeLog("app_start", { version: app.getVersion(), platform: process.platform, arch: process.arch });
+
+  // 运行时完整性自检 — 检测 Fuse/ASAR/调试/注入
+  try {
+    const integrityResults = await integrityGuard.performFullCheck();
+    writeLog("integrity_check", integrityResults);
+    if (integrityGuard.isTampered) {
+      writeLog("integrity_tampered", { reason: "tampering_detected", fakeDataActive: true });
+      // 不崩溃，而是静默启用虚假数据模式，迷惑攻击者
+    }
+  } catch (error) {
+    writeLog("integrity_check_error", { error: error.message });
+  }
 
   cleanupOpenFileCache();
   try {
@@ -516,13 +534,31 @@ app.whenReady().then(async () => {
   ipcMain.handle("modes:delete", (_event, id) => deleteMode(id));
   ipcMain.handle("modes:export", () => exportModes());
   ipcMain.handle("modes:import", (_event, json) => importModes(json));
-  // ── 品牌验证 IPC ──
-  ipcMain.handle("brand:get-config", () => brandManager.getBrandConfig());
-  ipcMain.handle("brand:get-status", () => ({
-    verified: brandManager.isVerified,
-    brandConfig: brandManager.getBrandConfig()
-  }));
+  // ── 品牌验证 IPC ──（篡改时返回虚假数据）
+  ipcMain.handle("brand:get-config", () => {
+    if (integrityGuard.isTampered) {
+      return integrityGuard.fakeData?.brandConfig || brandManager.getBrandConfig();
+    }
+    return brandManager.getBrandConfig();
+  });
+  ipcMain.handle("brand:get-status", () => {
+    if (integrityGuard.isTampered) {
+      // 篡改模式下返回虚假状态：看起来未验证，实际数据是假的
+      return {
+        verified: false,
+        brandConfig: integrityGuard.fakeData?.brandConfig || brandManager.getBrandConfig()
+      };
+    }
+    return {
+      verified: brandManager.isVerified,
+      brandConfig: brandManager.getBrandConfig()
+    };
+  });
   ipcMain.handle("brand:admin-override", async (_event, adminPassword) => {
+    if (integrityGuard.isTampered) {
+      // 篡改模式下管理员覆盖永远失败，但返回看起来正常的响应
+      return { success: false, message: "验证失败，请重试" };
+    }
     return await brandManager.adminOverride(adminPassword);
   });
   // ── 网络状态 IPC ──
