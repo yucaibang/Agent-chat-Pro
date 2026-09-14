@@ -571,6 +571,11 @@ function runClaude(config, message, sessionId, attachments = [], callbacks = {})
           });
           continue;
         }
+        if (item.value.type === "bridge_query_force_closed") {
+          callbacks.onLog?.("claude_query_force_closed", { reason: item.value.reason || "interrupt-timeout" });
+          callbacks.onStatus?.("stopped");
+          continue;
+        }
         const text = textFromEvent(item.value);
         if (text) {
           responseText += text;

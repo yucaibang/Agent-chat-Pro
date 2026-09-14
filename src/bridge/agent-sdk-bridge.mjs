@@ -8,6 +8,9 @@ const permissions = new Map();
 let startConfig;
 let activeQuery;
 let interruptPending = false;
+let forceCloseTimer;
+
+const FORCE_CLOSE_AFTER_INTERRUPT_MS = 1_500;
 
 class MessageQueue {
   #items = [];
@@ -41,6 +44,21 @@ const messages = new MessageQueue();
 
 function emit(value) {
   process.stdout.write(JSON.stringify(value) + "\n");
+}
+
+function scheduleForceClose(reason, delayMs = FORCE_CLOSE_AFTER_INTERRUPT_MS) {
+  if (!activeQuery) return;
+  if (forceCloseTimer) clearTimeout(forceCloseTimer);
+  forceCloseTimer = setTimeout(() => {
+    forceCloseTimer = undefined;
+    try {
+      activeQuery?.close();
+      emit({ type: "bridge_query_force_closed", protocolVersion: PROTOCOL_VERSION, reason });
+    } catch (error) {
+      emit({ type: "bridge_control_error", message: String(error?.message || error) });
+    }
+  }, delayMs);
+  forceCloseTimer.unref?.();
 }
 
 function userMessage(text, priority) {
@@ -97,6 +115,7 @@ async function handleControl(value) {
   }
   if (value.type === "close_input") {
     messages.close();
+    if (interruptPending) scheduleForceClose("interrupt-input-closed");
     return;
   }
   if (value.type === "permission_result") {
@@ -106,7 +125,10 @@ async function handleControl(value) {
   if (value.type === "interrupt") {
     interruptPending = true;
     emit({ type: "bridge_interrupt_received", protocolVersion: PROTOCOL_VERSION });
-    if (activeQuery) await activeQuery.interrupt();
+    if (activeQuery) {
+      scheduleForceClose("interrupt-timeout");
+      await activeQuery.interrupt();
+    }
   }
 }
 
@@ -281,9 +303,11 @@ async function main() {
       if (message?.type === "result") emit({ type: "bridge_turn_complete", protocolVersion: PROTOCOL_VERSION });
     }
   } finally {
+    if (forceCloseTimer) clearTimeout(forceCloseTimer);
     messages.close();
     for (const id of [...permissions.keys()]) settlePermission(id, "deny");
-    activeQuery?.close();
+    // 仅在 interrupt pending 时 force close，正常结束不需要
+    if (interruptPending) activeQuery?.close();
     input.close();
   }
 }

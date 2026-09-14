@@ -10,6 +10,50 @@ const SETTINGS_FILE = "connection.json";
 const USER_AVATARS = new Set(["user-male-1", "user-female-1", "user-male-2", "user-female-2"]);
 let recoveryNotice = "";
 
+/**
+ * 网络配置脱敏：移除敏感字段，替换为 hasXxx 布尔标记。
+ * frp: token → hasToken
+ * derp: authKey → hasAuthKey
+ * n2n: key → hasKey, community → hasCommunity
+ * p2p: 无敏感字段，原样返回
+ */
+const NETWORK_SENSITIVE_FIELDS = {
+  frp: { token: "hasToken" },
+  derp: { authKey: "hasAuthKey" },
+  n2n: { community: "hasCommunity", key: "hasKey" }
+};
+
+function sanitizeNetworkConfig(config, type) {
+  const fields = NETWORK_SENSITIVE_FIELDS[type];
+  if (!fields) return { ...(config || {}) };
+  const result = { ...(config || {}) };
+  for (const [secretField, hasField] of Object.entries(fields)) {
+    result[hasField] = Boolean(result[secretField]);
+    delete result[secretField];
+  }
+  return result;
+}
+
+/**
+ * 保存时合并网络配置：前端脱敏后不含敏感字段，需要从 previous 继承。
+ * 如果前端传了新的敏感字段值（用户修改了），则使用新值；
+ * 如果前端传了空字符串（用户留空=不修改），则保留 previous 中的值。
+ */
+function mergeNetworkConfig(input, previous, type) {
+  const fields = NETWORK_SENSITIVE_FIELDS[type];
+  const merged = { ...(previous || {}), ...(input || {}) };
+  if (!fields) return merged;
+  for (const [secretField, hasField] of Object.entries(fields)) {
+    // 前端留空=不修改，保留 previous 中的值
+    if (merged[secretField] === "" && (previous || {})[secretField]) {
+      merged[secretField] = previous[secretField];
+    }
+    // 清除 hasXxx 标记（这是前端脱敏标记，不应存入磁盘）
+    delete merged[hasField];
+  }
+  return merged;
+}
+
 function normalizeUserAvatar(value) {
   const avatar = String(value || "");
   return USER_AVATARS.has(avatar) ? avatar : "user-male-1";
@@ -103,13 +147,13 @@ function getSettings() {
     // 网络设置
     networkType: raw.networkType || "internal",
     externalMethod: raw.externalMethod || "auto",
-    frp: raw.frp || {},
-    derp: raw.derp || {},
-    p2p: raw.p2p || {},
-    n2n: raw.n2n || {},
+    frp: sanitizeNetworkConfig(raw.frp || {}, "frp"),
+    derp: sanitizeNetworkConfig(raw.derp || {}, "derp"),
+    p2p: sanitizeNetworkConfig(raw.p2p || {}, "p2p"),
+    n2n: sanitizeNetworkConfig(raw.n2n || {}, "n2n"),
     keepalive: raw.keepalive || {},
     reconnect: raw.reconnect || {},
-    accessPassword: raw.accessPassword || "",
+    hasAccessPassword: Boolean(raw.accessPassword),
     networkLastState: raw.networkLastState || "",
     // 云端 AI 设置
     cloudAiProvider: raw.cloudAiProvider || "zhipu",
@@ -166,6 +210,10 @@ function getSshConnection() {
 
   return {
     ...settings,
+    // 覆盖脱敏后的网络配置为完整配置（包含 token/authKey/key/community）
+    frp: raw.frp || settings.frp,
+    derp: raw.derp || settings.derp,
+    n2n: raw.n2n || settings.n2n,
     password: decryptStoredString(raw.password, "SSH 密码")
   };
 }
@@ -237,16 +285,17 @@ function saveSettings(input) {
       : "",
     password: sameSshTarget(previous, input) ? previous.password : "",
     modelAdminPassword: previous.modelAdminPassword,
-    // 网络
+    // 网络（合并脱敏后前端传来的配置，敏感字段从 previous 继承）
     networkType: input.networkType || previous.networkType || "internal",
     externalMethod: input.externalMethod || previous.externalMethod || "auto",
-    frp: input.frp || previous.frp || {},
-    derp: input.derp || previous.derp || {},
-    p2p: input.p2p || previous.p2p || {},
-    n2n: input.n2n || previous.n2n || {},
+    frp: mergeNetworkConfig(input.frp, previous.frp, "frp"),
+    derp: mergeNetworkConfig(input.derp, previous.derp, "derp"),
+    p2p: mergeNetworkConfig(input.p2p, previous.p2p, "p2p"),
+    n2n: mergeNetworkConfig(input.n2n, previous.n2n, "n2n"),
     keepalive: input.keepalive || previous.keepalive || {},
     reconnect: input.reconnect || previous.reconnect || {},
-    accessPassword: input.accessPassword || previous.accessPassword || "",
+    // accessPassword: 从 input 取（用户可能修改），留空则保留 previous
+    accessPassword: String(input.accessPassword || "").length > 0 ? input.accessPassword : (previous.accessPassword || ""),
     networkLastState: input.networkLastState !== undefined ? input.networkLastState : previous.networkLastState || "",
     // 云端 AI
     cloudAiProvider: input.cloudAiProvider || previous.cloudAiProvider || "zhipu",

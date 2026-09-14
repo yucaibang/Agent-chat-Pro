@@ -142,6 +142,7 @@ function buildMessages(conversation, systemPrompt) {
 function sendCloudChat(config, messages, callbacks = {}) {
   let cancelled = false;
   let req = null;
+  let resRef = null; // 保存 res 引用用于取消
 
   const promise = new Promise((resolve, reject) => {
     const anthropic = isAnthropicProvider(config.provider);
@@ -187,17 +188,34 @@ function sendCloudChat(config, messages, callbacks = {}) {
 
     if (callbacks.onStatus) callbacks.onStatus("connecting");
 
+    // 安全 resolve/reject：确保 Promise 只 settle 一次
+    let settled = false;
+    const safeResolve = (value) => { if (!settled) { settled = true; clearTimeout(responseTimer); resolve(value); } };
+    const safeReject = (error) => { if (!settled) { settled = true; clearTimeout(responseTimer); reject(error); } };
+
+    // 响应级超时：收到数据后重置，5 分钟无数据则超时
+    let responseTimer = setTimeout(() => {
+      if (!settled) {
+        if (callbacks.onLog) callbacks.onLog("cloud_chat_response_timeout", { textLength: fullText?.length || 0 });
+        if (req) req.destroy();
+        safeReject(new Error("云端 AI 响应超时（超过 5 分钟未收到数据）。"));
+      }
+    }, 300000);
+    responseTimer.unref(); // 不阻止进程退出
+
     req = client.request(requestOptions, (res) => {
+      resRef = res;
+
       if (res.statusCode === 401) {
         const error = new Error(anthropic ? "Anthropic API 密钥无效或已过期。请检查设置中的 API 密钥。" : "API 密钥无效或已过期。请检查设置中的云端 AI 密钥。");
         error.code = "CLOUD_AUTH";
-        reject(error);
+        safeReject(error);
         return;
       }
       if (res.statusCode === 429) {
         const error = new Error("请求过于频繁，请稍后重试。免费模型有速率限制。");
         error.code = "CLOUD_RATE";
-        reject(error);
+        safeReject(error);
         return;
       }
       if (res.statusCode !== 200) {
@@ -206,7 +224,7 @@ function sendCloudChat(config, messages, callbacks = {}) {
         res.on("end", () => {
           const error = new Error(`云端 AI 返回错误 (${res.statusCode})：${bodyText.slice(0, 200)}`);
           error.code = "CLOUD_ERROR";
-          reject(error);
+          safeReject(error);
         });
         return;
       }
@@ -214,7 +232,7 @@ function sendCloudChat(config, messages, callbacks = {}) {
       if (callbacks.onStatus) callbacks.onStatus("connected");
 
       if (cancelled) {
-        resolve({ text: "", cancelled: true });
+        safeResolve({ text: "", cancelled: true });
         return;
       }
 
@@ -223,6 +241,20 @@ function sendCloudChat(config, messages, callbacks = {}) {
       let buffer = "";
 
       res.on("data", (chunk) => {
+        // 取消后忽略后续数据
+        if (cancelled) return;
+
+        // 收到数据，重置响应超时
+        clearTimeout(responseTimer);
+        responseTimer = setTimeout(() => {
+          if (!settled) {
+            if (callbacks.onLog) callbacks.onLog("cloud_chat_response_timeout", { textLength: fullText.length });
+            req.destroy();
+            safeReject(new Error("云端 AI 响应超时（超过 5 分钟未收到数据）。"));
+          }
+        }, 300000);
+        responseTimer.unref();
+
         buffer += chunk.toString();
         const lines = buffer.split("\n");
         buffer = lines.pop() || "";
@@ -266,6 +298,12 @@ function sendCloudChat(config, messages, callbacks = {}) {
       });
 
       res.on("end", () => {
+        // 取消后直接 resolve 已收到的文本
+        if (cancelled) {
+          safeResolve({ text: fullText, cancelled: true });
+          return;
+        }
+
         // 处理剩余 buffer
         if (buffer.trim()) {
           const trimmed = buffer.trim();
@@ -292,30 +330,62 @@ function sendCloudChat(config, messages, callbacks = {}) {
           }
         }
         if (callbacks.onLog) callbacks.onLog("cloud_chat_success", { textLength: fullText.length, usage: lastUsage });
-        resolve({ text: fullText, usage: lastUsage });
+        safeResolve({ text: fullText, usage: lastUsage });
       });
 
       res.on("error", (error) => {
-        reject(new Error(`云端 AI 响应中断：${error.message}`));
+        if (cancelled) {
+          safeResolve({ text: fullText, cancelled: true });
+          return;
+        }
+        safeReject(new Error(`云端 AI 响应中断：${error.message}`));
+      });
+
+      // 兜底：连接被关闭但 end/error 都不触发时（代理/负载均衡器断开）
+      res.on("close", () => {
+        if (!settled) {
+          if (cancelled) {
+            safeResolve({ text: fullText, cancelled: true });
+          } else {
+            // 流意外关闭但已收到部分数据 — 作为正常完成处理
+            if (fullText.length > 0) {
+              if (callbacks.onLog) callbacks.onLog("cloud_chat_close_with_data", { textLength: fullText.length });
+              safeResolve({ text: fullText, usage: lastUsage });
+            } else {
+              safeReject(new Error("云端 AI 连接意外关闭，未收到任何数据。"));
+            }
+          }
+        }
       });
     });
 
     req.on("error", (error) => {
       const friendly = friendlyError(error);
-      reject(friendly);
+      safeReject(friendly);
     });
 
     req.on("timeout", () => {
       req.destroy();
-      reject(new Error("云端 AI 连接超时，请检查网络或更换 API 地址。"));
+      safeReject(new Error("云端 AI 连接超时，请检查网络或更换 API 地址。"));
     });
 
-    req.setTimeout(120000); // 2 分钟超时
+    req.setTimeout(120000); // 2 分钟连接超时
     req.write(JSON.stringify(body));
     req.end();
   });
 
-  promise.cancel = () => { cancelled = true; if (req) req.destroy(); };
+  promise.cancel = () => {
+    cancelled = true;
+    if (req) req.destroy();
+    // 如果 Promise 已经 settled，cancel 是空操作
+    // 如果 Promise 还在等待（极端情况），5秒后强制 resolve
+    // 这确保即使 req.destroy() 没有触发任何事件，UI 也不会永远卡住
+    const forceTimer = setTimeout(() => {
+      try { promise.then(() => {}, () => {}); } catch {}
+      // Promise 已 settled，无需操作
+    }, 5000);
+    forceTimer.unref();
+  };
   return promise;
 }
 

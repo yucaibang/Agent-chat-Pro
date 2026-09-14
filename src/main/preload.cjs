@@ -137,4 +137,9 @@ contextBridge.exposeInMainWorld("agentChatPro", {
   onNetworkStatusChange: (handler) => ipcRenderer.on("network:status-change", (_event, event) => handler(event)),
   onNetworkLatency: (handler) => ipcRenderer.on("network:latency", (_event, summary) => handler(summary)),
   onThemeInit: (handler) => ipcRenderer.once("theme:init", (_event, theme) => handler(theme)),
+  // ── 信号灯 IPC（UI 隐藏，后端通道预留） ──
+  onSignalLights: (handler) => ipcRenderer.on("signal:lights", (_event, lights) => handler(lights)),
+  getSignalLights: () => ipcRenderer.invoke("signal:lights:get"),
+  // ── Bridge 强制关闭通知 ──
+  onBridgeForceClosed: (handler) => ipcRenderer.on("bridge:force-closed", (_event, detail) => handler(detail)),
 });

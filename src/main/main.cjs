@@ -432,6 +432,10 @@ app.whenReady().then(async () => {
     if (event.sender !== window?.webContents) return;
     writeLog("work_status_tool_lifecycle", statusToolLifecycleEntry(input));
   });
+  // ── 信号灯 IPC（UI 隐藏，后端通道预留） ──
+  ipcMain.handle("signal:lights:get", () => []);
+  // ── Bridge 强制关闭通知 ──
+  // 由 ssh.cjs 的 handleEvents 在收到 bridge_query_force_closed 时触发
   ipcMain.handle("device-control:status", () => getDeviceControlStatus());
   ipcMain.handle("device-control:install", async (_event, input) => {
     const sourceAddress = String(input?.sourceAddress || getSettings().host || "").trim();

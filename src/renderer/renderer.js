@@ -764,11 +764,45 @@ function setBusy(busy) {
 }
 
 function stopActiveMessage() {
-  if (!activeId || elements.send.classList.contains("stopping")) return;
+  if (!activeId) return;
+  if (elements.send.classList.contains("stopping")) {
+    // 第二次按 ESC：强制清除状态（防止 Promise 永不 settle 导致界面卡死）
+    forceClearActiveState("用户再次按 ESC 强制停止");
+    return;
+  }
   elements.send.classList.add("stopping");
   elements.send.disabled = true;
   elements.send.title = "正在停止…";
   window.agentChatPro.cancelMessage(activeId);
+  // 安全网：10 秒后如果 Promise 还没 settle，强制清除状态
+  const stopId = activeId;
+  setTimeout(() => {
+    if (activeId === stopId) {
+      forceClearActiveState("取消操作超时，强制停止");
+    }
+  }, 10000);
+}
+
+/**
+ * 强制清除活跃状态 — 当 cancel Promise 永远不 settle 时的兜底
+ */
+function forceClearActiveState(reason) {
+  if (!activeId) return;
+  const answer = messages.get(activeId);
+  if (answer) {
+    answer.classList.remove("generating", "stopping");
+    answer.classList.add("interrupted");
+    const content = answer.querySelector(".message-content");
+    if (content && !content.textContent.trim()) {
+      content.textContent = "（已强制停止）";
+    }
+  }
+  messages.delete(activeId);
+  activeId = "";
+  setBusy(false);
+  elements.send.classList.remove("stopping");
+  requestAnimationFrame(() => focusPrompt());
+  setConnection(`已停止 · ${reason}`, "connected");
 }
 
 function renderAttachments() {
@@ -836,7 +870,9 @@ async function sendMessage() {
     })));
     attachments = [];
     renderAttachments();
-    const result = await window.agentChatPro.sendMessage({
+    // 客户端超时兜底：35 分钟（略大于 ssh.cjs 的 MAX_REQUEST_MS 30 分钟）
+    const SEND_TIMEOUT_MS = 35 * 60 * 1000;
+    const sendPromise = window.agentChatPro.sendMessage({
       id: activeId,
       message,
       sessionId,
@@ -887,6 +923,7 @@ async function sendMessage() {
     messages.delete(activeId);
     activeId = "";
     setBusy(false);
+    elements.send.classList.remove("stopping");
     requestAnimationFrame(() => focusPrompt());
   }
 }
@@ -1687,12 +1724,14 @@ function populateNetworkSettings(settings) {
     document.querySelector("#frp-server-port").value = settings.frp.serverPort || 7000;
     document.querySelector("#frp-local-port").value = settings.frp.localPort || 22;
     document.querySelector("#frp-remote-port").value = settings.frp.remotePort || 6000;
-    document.querySelector("#frp-token").value = settings.frp.token || "";
+    document.querySelector("#frp-token").value = "";
+    document.querySelector("#frp-token").placeholder = settings.frp.hasToken ? "已安全保存；留空不修改" : "可选";
   }
   if (settings.derp) {
     document.querySelector("#derp-relay-addr").value = settings.derp.relayAddr || "";
     document.querySelector("#derp-relay-port").value = settings.derp.relayPort || 3478;
-    document.querySelector("#derp-auth-key").value = settings.derp.authKey || "";
+    document.querySelector("#derp-auth-key").value = "";
+    document.querySelector("#derp-auth-key").placeholder = settings.derp.hasAuthKey ? "已安全保存；留空不修改" : "可选";
   }
   if (settings.p2p) {
     document.querySelector("#p2p-stun-addr").value = settings.p2p.stunAddr || "stun.l.google.com";
@@ -1701,11 +1740,13 @@ function populateNetworkSettings(settings) {
   if (settings.n2n) {
     document.querySelector("#n2n-supernode-addr").value = settings.n2n.supernodeAddr || "";
     document.querySelector("#n2n-supernode-port").value = settings.n2n.supernodePort || 7777;
-    document.querySelector("#n2n-community").value = settings.n2n.community || "";
-    document.querySelector("#n2n-key").value = settings.n2n.key || "";
+    document.querySelector("#n2n-community").value = "";
+    document.querySelector("#n2n-community").placeholder = settings.n2n.hasCommunity ? "已安全保存；留空不修改" : "社区标识";
+    document.querySelector("#n2n-key").value = "";
+    document.querySelector("#n2n-key").placeholder = settings.n2n.hasKey ? "已安全保存；留空不修改" : "可选";
   }
-  if (settings.accessPassword) {
-    document.querySelector("#access-password").placeholder = "已设置访问密码；留空不修改";
+  if (settings.hasAccessPassword) {
+    document.querySelector("#access-password").placeholder = "已安全保存；留空不修改";
   }
   updateNetworkModeUI();
 }
