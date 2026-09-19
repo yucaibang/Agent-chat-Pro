@@ -70,6 +70,11 @@ contextBridge.exposeInMainWorld("agentChatPro", {
   testConnection: (settings) => ipcRenderer.invoke("connection:test", settings),
   // ── 代理连通性测试 IPC ──
   testProxy: (proxyConfig) => ipcRenderer.invoke("chat:test-proxy", proxyConfig),
+  // ── 上下文压缩 IPC（v3.10.0）──
+  compactContext: (payload) => ipcRenderer.invoke("chat:compact", payload),
+  // ── 缓存清理 IPC（v3.10.0）──
+  scanSystemCaches: () => ipcRenderer.invoke("cache:scan"),
+  cleanSystemCaches: (targets) => ipcRenderer.invoke("cache:clean", targets),
   // ── Markdown 渲染 IPC ──
   renderMarkdown: (source) => ipcRenderer.invoke("markdown:render", source),
   // ── 链接打开 IPC ──
@@ -134,6 +139,8 @@ contextBridge.exposeInMainWorld("agentChatPro", {
   }),
   onTurnStart: (handler) => ipcRenderer.on("chat:turn-start", (_event, payload) => handler(payload)),
   onTurnComplete: (handler) => ipcRenderer.on("chat:turn-complete", (_event, payload) => handler(payload)),
+  // ── 上下文进度条事件（v3.10.0）：model / usage / compact 三类 ──
+  onContextEvent: (handler) => ipcRenderer.on("chat:context", (_event, payload) => handler(payload)),
   onWindowMaximized: (handler) => ipcRenderer.on("window:maximized", (_event, value) => handler(value)),
   onWindowFocus: (handler) => ipcRenderer.on("window:focus", () => handler()),
   onNetworkStatusChange: (handler) => ipcRenderer.on("network:status-change", (_event, event) => handler(event)),

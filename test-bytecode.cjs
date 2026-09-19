@@ -35,7 +35,9 @@ function check(name, condition) {
 
   const pkg = JSON.parse(read("package.json"));
   check("bytenode 在 dependencies（打包进 asar）", Boolean(pkg.dependencies && pkg.dependencies.bytenode));
-  check("版本号 ≥ 3.8.0", pkg.version >= "3.8.0");
+  const versionParts = pkg.version.split(".").map(Number);
+  const minParts = [3, 8, 0];
+  check("版本号 ≥ 3.8.0（语义比较）", versionParts[0] > minParts[0] || (versionParts[0] === minParts[0] && (versionParts[1] > minParts[1] || (versionParts[1] === minParts[1] && versionParts[2] >= minParts[2]))));
 
   const obfuscateList = read("scripts/obfuscate.cjs");
   check("preload 在混淆跳过列表（防白屏铁律）", /main\/preload\.cjs",\s*\/\/.*白屏/.test(obfuscateList));

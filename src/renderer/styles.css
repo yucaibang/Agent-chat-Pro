@@ -276,9 +276,9 @@ header p { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .token-counter {
   flex: 0 0 auto;
   display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 5px;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
   padding: 4px 12px;
   color: var(--text-muted);
   font-size: 11px;
@@ -294,6 +294,78 @@ header p { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
   min-width: 1.5em;
   text-align: right;
 }
+.token-counter-row { display: flex; align-items: center; justify-content: flex-end; gap: 5px; }
+
+/* ── 上下文进度条（v3.10.0）── */
+.context-bar-row { display: flex; align-items: center; gap: 8px; }
+.context-bar-info { display: flex; align-items: baseline; gap: 6px; font-variant-numeric: tabular-nums; }
+#context-percent { font-weight: 700; color: var(--text-secondary); }
+#context-percent.warn { color: #d97706; }
+#context-percent.danger { color: #dc2626; }
+.context-bar-detail { color: var(--text-muted); font-size: 10px; }
+.context-compact-button {
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 10px;
+  padding: 1px 8px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: color .15s, border-color .15s, background .15s;
+}
+.context-compact-button:hover:not(:disabled) { color: var(--text-strong); border-color: var(--accent); background: var(--hover-bg, rgba(127,127,127,.12)); }
+.context-compact-button:disabled { opacity: .55; cursor: default; }
+.context-compact-button.compacting { color: var(--accent-bright); border-color: var(--accent-bright); animation: context-compact-pulse 1.2s ease-in-out infinite; }
+@keyframes context-compact-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .45; } }
+.context-bar-track {
+  width: 100%;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--border);
+  overflow: hidden;
+}
+.context-bar-fill {
+  height: 100%;
+  width: 0%;
+  border-radius: 2px;
+  background: var(--accent-bright, #22c55e);
+  transition: width .4s ease, background .3s;
+}
+.context-bar-fill.warn { background: #d97706; }
+.context-bar-fill.danger { background: #dc2626; }
+
+/* ── 系统缓存清理（v3.10.0）── */
+.cache-scan-row { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+.cache-target-list { display: flex; flex-direction: column; gap: 6px; margin-bottom: 8px; }
+.cache-target-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: transparent;
+}
+.cache-target-item .cache-target-main { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.cache-target-item .cache-target-name { font-size: 12px; font-weight: 600; color: var(--text-strong, var(--text)); }
+.cache-target-item .cache-target-desc { font-size: 11px; color: var(--text-muted); overflow-wrap: anywhere; }
+.cache-target-item .cache-target-size { font-variant-numeric: tabular-nums; color: var(--text-muted); font-size: 11px; white-space: nowrap; }
+.cache-target-item .cache-target-size.pending { opacity: .5; }
+.cache-risk-badge {
+  font-size: 10px;
+  padding: 0 6px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  white-space: nowrap;
+  align-self: center;
+}
+.cache-risk-badge.safe { color: #16a34a; border-color: #16a34a55; }
+.cache-risk-badge.advanced { color: #d97706; border-color: #d9770655; }
+.cache-risk-badge.admin { color: #dc2626; border-color: #dc262655; }
+.cache-clean-row { display: flex; align-items: center; gap: 10px; }
+.cache-clean-result.ok { color: #16a34a; }
+.cache-clean-result.fail { color: #dc2626; }
 .message { max-width: 86%; white-space: normal; line-height: 1.45; border-radius: 14px; padding: 10px 14px; }
 .message-content { min-width: 0; overflow-wrap: anywhere; white-space: pre-wrap; }
 .message-content.rendered { white-space: normal; }
@@ -662,3 +734,15 @@ textarea { resize: vertical; min-height: 60px; }
 .proxy-test-result { font-size: 12px; color: var(--text-muted); word-break: break-all; }
 .proxy-test-result.ok { color: var(--success); }
 .proxy-test-result.fail { color: var(--error); }
+
+/* ── 亮色主题：上下文进度条 + 缓存清理（v3.10.0）── */
+[data-theme="light"] #context-percent.warn { color: #b45309; }
+[data-theme="light"] #context-percent.danger { color: #b91c1c; }
+[data-theme="light"] .context-bar-fill.warn { background: #b45309; }
+[data-theme="light"] .context-bar-fill.danger { background: #b91c1c; }
+[data-theme="light"] .context-compact-button:hover:not(:disabled) { background: rgba(0,0,0,.06); }
+[data-theme="light"] .cache-risk-badge.safe { color: #15803d; }
+[data-theme="light"] .cache-risk-badge.advanced { color: #b45309; }
+[data-theme="light"] .cache-risk-badge.admin { color: #b91c1c; }
+[data-theme="light"] .cache-clean-result.ok { color: #15803d; }
+[data-theme="light"] .cache-clean-result.fail { color: #b91c1c; }

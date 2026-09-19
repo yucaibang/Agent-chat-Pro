@@ -3,7 +3,7 @@
 const fs = require("fs");
 const path = require("path");
 const { spawn, execFile } = require("child_process");
-const { JsonLineParser, buildClaudeArgs, sessionFromEvent, textFromEvent, usageFromEvent } = require("./protocol.cjs");
+const { JsonLineParser, buildClaudeArgs, compactEventFromEvent, contextLimitFromModel, modelFromEvent, sessionFromEvent, textFromEvent, usageFromEvent } = require("./protocol.cjs");
 const { buildLocalArgsWithMode } = require("./modes/mode-params.cjs");
 const { handleToolPayload, mimeFromPath } = require("./ssh.cjs");
 const { friendlyClaudeLaunchError, describeMissingWorkingDirectory } = require("./claude-launch-diagnostics.cjs");
@@ -129,6 +129,14 @@ function runLocalClaude(config, message, sessionId, attachments = [], callbacks 
           if (foundUsage) {
             usage = foundUsage;
             callbacks.onUsage?.(usage);
+          }
+          const foundModel = modelFromEvent(item.value);
+          if (foundModel) {
+            callbacks.onModelChange?.({ model: foundModel, contextLimit: contextLimitFromModel(foundModel) });
+          }
+          const compactEvent = compactEventFromEvent(item.value);
+          if (compactEvent) {
+            callbacks.onCompactEvent?.(compactEvent);
           }
           const previousToolCount = tools.size;
           handleToolPayload(item.value, tools, outputPaths, callbacks.onToolEvent);

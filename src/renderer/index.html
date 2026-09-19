@@ -140,8 +140,18 @@
       <section id="messages" class="messages" aria-live="polite"></section>
 
       <div id="token-counter" class="token-counter" hidden>
-        <span class="token-counter-icon">⏱</span>
-        <span id="token-count">0</span> tokens
+        <div id="context-bar-row" class="context-bar-row" hidden>
+          <div class="context-bar-info">
+            <span id="context-percent">0%</span>
+            <span id="context-detail" class="context-bar-detail"></span>
+          </div>
+          <button id="context-compact" type="button" class="context-compact-button" title="压缩上下文（发送 /compact，长对话建议定期压缩）">✂ 压缩</button>
+        </div>
+        <div id="context-bar-track" class="context-bar-track" hidden><div id="context-bar-fill" class="context-bar-fill"></div></div>
+        <div class="token-counter-row">
+          <span class="token-counter-icon">⏱</span>
+          <span id="token-count">0</span> tokens
+        </div>
       </div>
 
       <form id="composer" class="composer">
@@ -331,6 +341,18 @@
             </details>
           </div>
         </details>
+        <details id="compact-settings">
+          <summary>上下文压缩</summary>
+          <label class="checkbox"><input id="compact-auto" type="checkbox" /><span>自动压缩（上下文占用超过阈值时，回复结束后自动发送 /compact）</span></label>
+          <label>压缩阈值（%）
+            <input id="compact-threshold" type="number" min="50" max="95" step="1" value="80" />
+            <span class="field-hint">上下文占用达到该比例时触发自动压缩；50–95，默认 80。</span>
+          </label>
+          <label>压缩指令（可选）
+            <input id="compact-instruction" maxlength="300" placeholder="留空则使用默认 /compact" />
+            <span class="field-hint">自定义压缩时保留的重点内容描述，最长 300 字符。</span>
+          </label>
+        </details>
         <details id="bridge-settings">
           <summary>增强 Bridge（可选）</summary>
           <div class="device-control-card">
@@ -378,6 +400,19 @@
               <button type="button" id="uninstall-device-control" class="secondary danger-button" hidden>卸载联动控件</button>
               <button type="button" id="install-device-control" class="primary">安装联动控件</button>
             </div>
+          </div>
+        </details>
+        <details id="cache-settings">
+          <summary>系统缓存清理（Windows）</summary>
+          <p class="hint">扫描并清理本机常见缓存。分级：安全（默认勾选）/ 进阶（手动勾选）/ 管理员（弹出 UAC 确认）。明确不清理 Prefetch、WinSxS、Windows.old。</p>
+          <div class="cache-scan-row">
+            <button type="button" id="cache-scan" class="secondary">扫描缓存</button>
+            <span id="cache-scan-result" class="field-hint" hidden></span>
+          </div>
+          <div id="cache-target-list" class="cache-target-list" hidden></div>
+          <div class="cache-clean-row" hidden id="cache-clean-row">
+            <button type="button" id="cache-clean" class="primary">清理勾选项</button>
+            <span id="cache-clean-result" class="field-hint" hidden></span>
           </div>
         </details>
         <p id="settings-status" class="status"></p>

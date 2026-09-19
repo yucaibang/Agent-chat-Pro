@@ -7,6 +7,8 @@ const { randomUUID } = require("crypto");
 const { getConnection, getSettings, getSshConnection, getCloudAiConfig, sameSshTarget, saveSettings, setModelAdminPassword, trustHostFingerprint, verifyModelAdminPassword } = require("./settings.cjs");
 const { downloadRemoteFile, ensureDeviceControlKey, finalizeDeviceControl, getAgentSdkBridgeStatus, getClaudeModelStatus, installAgentSdkBridge, markDeviceControlDisabled, readRemoteFile, runClaude, uninstallAgentSdkBridge, updateClaudeModel, verifyConnection } = require("./ssh.cjs");
 const { copyLocalFile, getLocalClaudeModelStatus, readLocalFile, runLocalClaude, updateLocalClaudeModel, verifyLocalConnection } = require("./local.cjs");
+const { contextTokensFromUsage } = require("./protocol.cjs");
+const { scanSystemCaches, cleanSystemCaches } = require("./cache-cleaner.cjs");
 const { getDeviceControlStatus, installDeviceControl, preferredAddress, uninstallDeviceControl } = require("./device-control.cjs");
 const {
   addAssistantMessage,
@@ -803,6 +805,24 @@ app.whenReady().then(async () => {
         const normalized = normalizeAndObserveStatusEvent({ id, type: "usage", usage }, config);
         writeLog("work_status_signal", statusSignalEntry({ requestId: id, direction: "executor-emitted", signal: "runner-event", disposition: "emitted", eventType: "usage" }));
         sendWorkStatusSignal(event.sender, "chat:event", normalized);
+        // 上下文进度条数据（v3.10.0）：main 侧算好 contextTokens，渲染层只消费一个通道
+        const contextTokens = contextTokensFromUsage(usage);
+        if (contextTokens) {
+          const state = lastKnownContext.get(input.conversationId) || { tokens: 0, limit: 0 };
+          lastKnownContext.set(input.conversationId, { ...state, tokens: contextTokens });
+        }
+        sendWorkStatusSignal(event.sender, "chat:context", { id, type: "usage", contextTokens });
+      },
+      onModelChange: (info) => {
+        if (info?.contextLimit) {
+          const state = lastKnownContext.get(input.conversationId) || { tokens: 0, limit: 0 };
+          lastKnownContext.set(input.conversationId, { ...state, limit: Number(info.contextLimit) || 0 });
+        }
+        sendWorkStatusSignal(event.sender, "chat:context", { id, type: "model", model: info.model, contextLimit: info.contextLimit });
+      },
+      onCompactEvent: (compactEvent) => {
+        writeLog("context_compact_event", { requestId: id, phase: compactEvent.phase, success: compactEvent.success, preTokens: compactEvent.preTokens, postTokens: compactEvent.postTokens, trigger: compactEvent.trigger, error: compactEvent.error || "" });
+        sendWorkStatusSignal(event.sender, "chat:context", { id, type: "compact", ...compactEvent });
       },
       onStatus: (status) => {
         const normalized = normalizeAndObserveStatusEvent({ id, type: "connection", status }, config);
@@ -886,6 +906,8 @@ app.whenReady().then(async () => {
       writeLog("chat_send_success", { requestId: id, conversationId: input.conversationId, sessionId: result.sessionId, textLength: result.text.length });
       writeLog("work_status_signal", statusSignalEntry({ requestId: id, direction: "main-received", signal: "request-outcome", disposition: "completed", eventType: "lifecycle", eventStatus: "finished" }));
       sendWorkStatusSignal(event.sender, "chat:event", normalizeAndObserveStatusEvent({ id, type: "lifecycle", status: "finished" }, config));
+      // 自动压缩（v3.10.0）：请求完成后检查上下文占用，超阈值异步触发（不阻塞返回值）
+      maybeAutoCompact(event.sender, result.sessionId || latestSessionId, input.conversationId);
       return { id, ...result, stats };
     } catch (error) {
       if (draftTimer) clearTimeout(draftTimer);
@@ -905,6 +927,110 @@ app.whenReady().then(async () => {
       if (draftTimer) clearTimeout(draftTimer);
       activeRequests.delete(id);
     }
+  });
+
+  // ── 上下文压缩（v3.10.0）──
+  // 同一会话防重入：手动点击与自动触发共用
+  const compactingSessions = new Set();
+  // 每个对话最近的上下文占用/模型窗口（conversationId → {tokens, limit}），自动压缩判断依据
+  const lastKnownContext = new Map();
+
+  /** 自动压缩：compactAuto 开启且上下文占用超过阈值时异步触发（不阻塞聊天返回值） */
+  const maybeAutoCompact = (sender, sessionId, conversationId) => {
+    try {
+      if (!sender || sender.isDestroyed?.()) return;
+      const autoSettings = getSettings();
+      if (!autoSettings.compactAuto) return;
+      const sid = String(sessionId || "");
+      if (!sid || !lastKnownContext.has(conversationId)) return;
+      const state = lastKnownContext.get(conversationId);
+      if (!state.tokens || !state.limit) return;
+      const percent = (state.tokens / state.limit) * 100;
+      if (percent < Number(autoSettings.compactThreshold || 80)) return;
+      writeLog("context_compact_auto_triggered", { conversationId, sessionId: sid, percent: Math.round(percent), threshold: autoSettings.compactThreshold });
+      executeCompact(sender, sid, conversationId, autoSettings.compactInstruction || "", { source: "auto" }).catch((error) => {
+        writeLog("context_compact_auto_failed", { conversationId, sessionId: sid, error: error.message });
+      });
+    } catch (error) {
+      writeLog("context_compact_auto_failed", { error: error.message });
+    }
+  };
+
+  /**
+   * 执行压缩：独立一次 CLI 调用（resume 原会话 + 输入 "/compact"）。
+   * /compact 是 CLI 本地命令（harness 拦截执行），不产生文本流，只发压缩事件。
+   */
+  const executeCompact = async (sender, sessionId, conversationId, instruction = "", options = {}) => {
+    const config = getConnection();
+    if (config.connectionMode === "cloud") throw new Error("云端模式直连 API，没有上下文压缩。");
+    const sid = String(sessionId || "");
+    if (!sid) throw new Error("当前对话还没有会话记录，无法压缩。");
+    // 会话防重入
+    if (compactingSessions.has(sid)) {
+      return { ok: false, event: null, error: "该会话的压缩已在进行中，请稍候。" };
+    }
+    // Agent 正在回复时禁止压缩（避免两个 CLI 进程同时操作同一会话）
+    if (conversationId && [...activeRequests.values()].some((req) => req.conversationId === conversationId)) {
+      throw new Error("Agent 正在回复，暂时不能压缩上下文。请等待回复结束后再试。");
+    }
+    const compactId = randomUUID();
+    const compactText = `/compact${instruction ? ` ${instruction}` : ""}`;
+    let lastEvent = null;
+    compactingSessions.add(sid);
+    writeLog("context_compact_requested", { requestId: compactId, sessionId: sid, connectionMode: config.connectionMode, source: options.source || "manual", instruction: instruction ? "custom" : "default" });
+    sendWorkStatusSignal(sender, "chat:context", { id: compactId, type: "compact", phase: "started", source: options.source || "manual" });
+    const compactCallbacks = {
+      conversationId: conversationId || "",
+      onDelta: () => {},
+      onUploadProgress: () => {},
+      onToolEvent: () => {},
+      onUsage: () => {},
+      onStatus: (status) => {
+        sendWorkStatusSignal(sender, "chat:context", { id: compactId, type: "compact-runner", status });
+      },
+      onSessionId: () => {},
+      onTurnComplete: () => {},
+      onPermissionRequest: async () => false,
+      onUnknownHost: (fingerprint) => trustHost(config, fingerprint),
+      onAudit: () => {},
+      onLog: writeLog,
+      onModelChange: (info) => {
+        sendWorkStatusSignal(sender, "chat:context", { id: compactId, type: "model", model: info.model, contextLimit: info.contextLimit });
+      },
+      onCompactEvent: (compactEvent) => {
+        lastEvent = compactEvent;
+        writeLog("context_compact_event", { requestId: compactId, sessionId: sid, phase: compactEvent.phase, success: compactEvent.success, preTokens: compactEvent.preTokens, postTokens: compactEvent.postTokens, trigger: compactEvent.trigger, error: compactEvent.error || "" });
+        // 压缩边界：用 postTokens 覆盖该对话的上下文占用（供下次自动压缩判断）
+        if (compactEvent.phase === "boundary" && Number(compactEvent.postTokens) > 0 && conversationId) {
+          const state = lastKnownContext.get(conversationId) || { tokens: 0, limit: 0 };
+          lastKnownContext.set(conversationId, { ...state, tokens: Number(compactEvent.postTokens) });
+        }
+        sendWorkStatusSignal(sender, "chat:context", { id: compactId, type: "compact", ...compactEvent });
+      }
+    };
+    const compactConfig = { ...config, workModeId: "regular" };
+    compactConfig.localUploadDirectory = path.join(app.getPath("userData"), "local-uploads");
+    const operation = config.connectionMode === "local"
+      ? runLocalClaude(compactConfig, compactText, sid, [], compactCallbacks)
+      : runClaude(compactConfig, compactText, sid, [], compactCallbacks);
+    activeRequests.set(compactId, { operation, conversationId: conversationId || "" });
+    try {
+      await operation.promise;
+      const success = Boolean(lastEvent && lastEvent.phase === "finished" && lastEvent.success);
+      writeLog("context_compact_done", { requestId: compactId, sessionId: sid, success, error: lastEvent?.error || "" });
+      return { ok: success, event: lastEvent || null, error: success ? "" : (lastEvent?.error || "压缩未完成，请稍后重试。") };
+    } catch (error) {
+      writeLog("context_compact_failed", { requestId: compactId, sessionId: sid, error: error.message });
+      sendWorkStatusSignal(sender, "chat:context", { id: compactId, type: "compact", phase: "finished", success: false, error: error.message });
+      throw error;
+    } finally {
+      activeRequests.delete(compactId);
+      compactingSessions.delete(sid);
+    }
+  };
+
+  ipcMain.handle("chat:compact", async (event, payload) => {
+    return executeCompact(event.sender, String(payload?.sessionId || ""), String(payload?.conversationId || ""), String(payload?.instruction ?? "").trim(), { source: "manual" });
   });
   ipcMain.handle("chat:push-follow-up", async (_event, input) => {
     const id = String(input?.id || "");
@@ -930,6 +1056,26 @@ app.whenReady().then(async () => {
       writeLog("chat_cancel_failed", { requestId: id, error });
       return false;
     }
+  });
+  ipcMain.handle("cache:scan", async () => {
+    try {
+      const result = await scanSystemCaches();
+      writeLog("cache_scan_done", { supported: result.supported, targets: result.targets.length });
+      return result;
+    } catch (error) {
+      writeLog("cache_scan_failed", { error: error.message });
+      throw error;
+    }
+  });
+  ipcMain.handle("cache:clean", async (event, targets) => {
+    const list = Array.isArray(targets) ? targets : [];
+    if (!list.length) throw new Error("请先勾选要清理的缓存项。");
+    writeLog("cache_clean_requested", { targets: list.join(",") });
+    const result = await cleanSystemCaches(list, (message) => writeLog("cache_clean_step", { message }));
+    const okCount = result.results.filter((r) => r.ok).length;
+    const freedTotal = result.results.reduce((sum, r) => sum + (r.freed || 0), 0);
+    writeLog("cache_clean_done", { ok: okCount, failed: result.results.length - okCount, freedTotal });
+    return result;
   });
   ipcMain.handle("window:is-maximized", () => Boolean(window?.isMaximized()));
   ipcMain.handle("window:focus", () => {

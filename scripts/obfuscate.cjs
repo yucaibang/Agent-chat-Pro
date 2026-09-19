@@ -74,6 +74,7 @@ const OBFUSCATE_FILES = {
     "main/model-config.cjs",      // 模型配置
     "main/status-event-normalizer.cjs", // 状态归一化
     "main/claude-launch-diagnostics.cjs", // Claude 启动失败诊断（v3.7.1）
+    "main/cache-cleaner.cjs",   // Windows 系统缓存清理（v3.10.0）
     // ── 模块化架构（移植自 Agent Orbit 0.9.6，v3.7.0 接线）──
     "main/modules/foundation/module-contract.cjs",
     "main/modules/foundation/module-registry.cjs",
@@ -84,6 +85,8 @@ const OBFUSCATE_FILES = {
     "main/modules/foundation/signal-contract/light-strip.cjs",
     "main/modules/foundation/signal-contract/bridge-followup-signal.cjs",
     "main/modules/status/status-center.cjs",
+    "main/modules/status/status-audit-journal.cjs",  // 状态审计日志（v3.9.0）
+    "main/modules/status/status-lifecycle.cjs",      // 生命周期终态判断（v3.9.0）
     "main/modules/agent/claude/runtime-compatibility.cjs",
   ],
 };

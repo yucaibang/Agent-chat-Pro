@@ -39,6 +39,7 @@ const BYTECODE_FILES = [
   "src/main/settings.cjs",
   "src/main/cloud-chat.cjs",
   "src/main/ssh.cjs",
+  "src/main/cache-cleaner.cjs",
 ];
 
 // ── 工具函数 ──────────────────────────────────────────

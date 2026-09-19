@@ -39,6 +39,11 @@ let streamingTokens = 0;    // 当前流式响应估算的 token 数
 let confirmedTokens = 0;    // 当前流式响应已确认的 token 数（来自 usage 事件）
 let hasProxyPassword = false;  // 是否已保存代理密码
 
+// ── 上下文进度条（v3.10.0）──
+let contextTokens = 0;      // 当前上下文占用（input + cache 写入 + cache 读取）
+let contextLimit = 0;       // 当前模型上下文窗口上限
+let compactingNow = false;  // 是否正在压缩（禁用压缩按钮）
+
 // ── 外观设置状态 ──
 let appearanceSettings = {
   frostedGlass: false,
@@ -82,6 +87,10 @@ function settingsFromForm() {
     proxyUsername: document.querySelector("#proxy-username")?.value || "",
     proxyPassword: document.querySelector("#proxy-password")?.value || "",
     clearProxyPassword: !document.querySelector("#proxy-password")?.value && hasProxyPassword,
+    // 上下文压缩（v3.10.0）
+    compactAuto: document.querySelector("#compact-auto")?.checked || false,
+    compactThreshold: Number(document.querySelector("#compact-threshold")?.value) || 80,
+    compactInstruction: document.querySelector("#compact-instruction")?.value || "",
     ...network
   };
 }
@@ -150,6 +159,13 @@ function populateSettings(settings) {
   }
   // 代理开关联动
   updateProxyFieldsVisibility();
+  // 上下文压缩回填（v3.10.0）
+  const compactAuto = document.querySelector("#compact-auto");
+  const compactThreshold = document.querySelector("#compact-threshold");
+  const compactInstruction = document.querySelector("#compact-instruction");
+  if (compactAuto) compactAuto.checked = Boolean(settings.compactAuto);
+  if (compactThreshold) compactThreshold.value = settings.compactThreshold ?? 80;
+  if (compactInstruction) compactInstruction.value = settings.compactInstruction || "";
 }
 
 function updateConnectionModeUI() {
@@ -323,8 +339,9 @@ function updateTokenDisplay() {
   if (!counter || !countEl) return;
   const total = conversationTokens + streamingTokens + confirmedTokens;
   countEl.textContent = total.toLocaleString();
-  counter.hidden = total === 0;
+  counter.hidden = total === 0 && !contextTokens && !contextLimit;
   counter.classList.toggle("streaming", Boolean(activeId));
+  renderContextBar();
 }
 
 function addConversationTokens(count) {
@@ -335,6 +352,58 @@ function addConversationTokens(count) {
 function resetStreamingTokens() {
   streamingTokens = 0;
   confirmedTokens = 0;
+}
+
+// ── 上下文进度条（v3.10.0）──
+function formatCompactNumber(value) {
+  const n = Number(value) || 0;
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(n % 1_000_000 === 0 ? 0 : 1)}M`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(n % 1_000 === 0 ? 0 : 1)}K`;
+  return String(n);
+}
+
+function renderContextBar() {
+  const row = document.querySelector("#context-bar-row");
+  const track = document.querySelector("#context-bar-track");
+  const fill = document.querySelector("#context-bar-fill");
+  const percentEl = document.querySelector("#context-percent");
+  const detailEl = document.querySelector("#context-detail");
+  if (!row || !track || !fill || !percentEl || !detailEl) return;
+  const total = conversationTokens + streamingTokens + confirmedTokens;
+  // 无数据时整行隐藏（cloud 模式没有上下文压缩概念）
+  if (!contextTokens && !contextLimit && total === 0) {
+    row.hidden = true;
+    track.hidden = true;
+    return;
+  }
+  row.hidden = false;
+  // 窗口未知时用累计 token 显示，进度条隐藏
+  const limit = contextLimit || 0;
+  track.hidden = !limit;
+  if (limit) {
+    const percent = Math.min(100, (contextTokens / limit) * 100);
+    fill.style.width = `${percent.toFixed(1)}%`;
+    fill.classList.toggle("warn", percent >= 70 && percent < 90);
+    fill.classList.toggle("danger", percent >= 90);
+    percentEl.textContent = `${percent.toFixed(percent < 10 ? 1 : 0)}%`;
+    percentEl.classList.toggle("warn", percent >= 70 && percent < 90);
+    percentEl.classList.toggle("danger", percent >= 90);
+  } else {
+    fill.style.width = "0%";
+    percentEl.textContent = "—";
+    percentEl.classList.remove("warn", "danger");
+  }
+  const parts = [];
+  if (contextTokens) parts.push(`上下文 ${formatCompactNumber(contextTokens)}${limit ? ` / ${formatCompactNumber(limit)}` : ""}`);
+  if (!contextTokens && total) parts.push(`累计 ${formatCompactNumber(total)}`);
+  detailEl.textContent = parts.join(" · ");
+}
+
+function resetContextBar() {
+  contextTokens = 0;
+  contextLimit = 0;
+  compactingNow = false;
+  renderContextBar();
 }
 
 function addMessage(kind, text = "") {
@@ -682,6 +751,7 @@ async function loadConversation(id) {
   conversationId = conversation.id;
   sessionId = conversation.sessionId || "";
   attachments = [];
+  resetContextBar(); // 切换对话时重置上下文进度条（新对话还没有 usage 数据）
   renderAttachments();
   elements.messages.replaceChildren();
   conversation.messages.forEach((message) => {
@@ -1262,6 +1332,147 @@ document.querySelector("#proxy-test")?.addEventListener("click", async () => {
     button.textContent = "测试代理连接";
   }
 });
+
+// ── 上下文压缩按钮（v3.10.0）──
+document.querySelector("#context-compact")?.addEventListener("click", async () => {
+  const button = document.querySelector("#context-compact");
+  if (!button || button.disabled) return;
+  if (!sessionId) {
+    setConnection("当前对话还没有会话记录（先发一条消息），无法压缩。", "error");
+    return;
+  }
+  button.disabled = true;
+  button.classList.add("compacting");
+  button.textContent = "✂ 压缩中…";
+  try {
+    const result = await window.agentChatPro.compactContext({ sessionId, conversationId, instruction: "" });
+    if (result?.ok) {
+      const post = result.event?.postTokens ? `，当前 ${formatCompactNumber(result.event.postTokens)} tokens` : "";
+      setConnection(`上下文压缩完成${post} · 会话已保留`, "connected");
+    } else {
+      setConnection(`上下文压缩未完成${result?.error ? `：${result.error}` : ""}，请稍后重试。`, "error");
+    }
+  } catch (error) {
+    setConnection(`上下文压缩失败：${error?.message || error}`, "error");
+  } finally {
+    button.disabled = false;
+    button.classList.remove("compacting");
+    button.textContent = "✂ 压缩";
+  }
+});
+
+// ── 系统缓存清理（v3.10.0，仅 Windows 有效）──
+const CACHE_RISK_LABELS = { safe: "安全", advanced: "进阶", admin: "管理员" };
+
+function formatCacheSize(bytes) {
+  const n = Number(bytes) || 0;
+  if (n >= 1_073_741_824) return `${(n / 1_073_741_824).toFixed(2)} GB`;
+  if (n >= 1_048_576) return `${(n / 1_048_576).toFixed(1)} MB`;
+  if (n >= 1_024) return `${(n / 1_024).toFixed(1)} KB`;
+  return `${n} B`;
+}
+
+function renderCacheTargets(targets) {
+  const list = document.querySelector("#cache-target-list");
+  const cleanRow = document.querySelector("#cache-clean-row");
+  if (!list || !cleanRow) return;
+  list.replaceChildren();
+  let hasAvailable = false;
+  for (const target of targets || []) {
+    const item = document.createElement("div");
+    item.className = "cache-target-item";
+    const main = document.createElement("div");
+    main.className = "cache-target-main";
+    const name = document.createElement("div");
+    name.className = "cache-target-name";
+    name.textContent = target.name || target.id;
+    const desc = document.createElement("div");
+    desc.className = "cache-target-desc";
+    desc.textContent = `${target.description || ""}${target.location && target.location !== "（内存缓存）" ? `（${target.location}）` : ""}`;
+    main.append(name, desc);
+    const risk = document.createElement("span");
+    risk.className = `cache-risk-badge ${target.risk || "safe"}`;
+    risk.textContent = CACHE_RISK_LABELS[target.risk] || target.risk;
+    const size = document.createElement("span");
+    size.className = "cache-target-size";
+    size.textContent = target.available === false ? "不可用" : `${formatCacheSize(target.size)} · ${target.fileCount || 0} 项`;
+    if (target.available === false) size.classList.add("pending");
+    item.append(risk, main, size);
+    if (target.available !== false) {
+      hasAvailable = true;
+      const checkbox = document.createElement("input");
+      checkbox.type = "checkbox";
+      checkbox.checked = target.risk === "safe"; // 安全级默认勾选
+      checkbox.dataset.targetId = target.id;
+      item.prepend(checkbox);
+    }
+    list.append(item);
+  }
+  list.hidden = !(targets || []).length;
+  cleanRow.hidden = !hasAvailable;
+}
+
+document.querySelector("#cache-scan")?.addEventListener("click", async () => {
+  const button = document.querySelector("#cache-scan");
+  const resultEl = document.querySelector("#cache-scan-result");
+  if (!button || button.disabled) return;
+  button.disabled = true;
+  button.textContent = "扫描中…";
+  if (resultEl) { resultEl.hidden = false; resultEl.textContent = "正在扫描缓存目录…"; }
+  try {
+    const result = await window.agentChatPro.scanSystemCaches();
+    if (!result?.supported) {
+      if (resultEl) resultEl.textContent = `当前系统（${result?.platform || "未知"}）不支持缓存清理，此功能仅限 Windows。`;
+      renderCacheTargets([]);
+      return;
+    }
+    const total = (result.targets || []).reduce((sum, t) => sum + (t.size || 0), 0);
+    if (resultEl) resultEl.textContent = `扫描完成：${result.targets.length} 项，共 ${formatCacheSize(total)}`;
+    renderCacheTargets(result.targets);
+  } catch (error) {
+    if (resultEl) { resultEl.hidden = false; resultEl.textContent = `扫描失败：${error?.message || error}`; }
+  } finally {
+    button.disabled = false;
+    button.textContent = "扫描缓存";
+  }
+});
+
+document.querySelector("#cache-clean")?.addEventListener("click", async () => {
+  const button = document.querySelector("#cache-clean");
+  const resultEl = document.querySelector("#cache-clean-result");
+  if (!button || button.disabled) return;
+  const checked = [...document.querySelectorAll("#cache-target-list input[type=checkbox]:checked")].map((el) => el.dataset.targetId);
+  if (!checked.length) {
+    if (resultEl) { resultEl.hidden = false; resultEl.className = "field-hint fail"; resultEl.textContent = "请先勾选要清理的缓存项。"; }
+    return;
+  }
+  button.disabled = true;
+  button.textContent = "清理中…";
+  if (resultEl) { resultEl.hidden = false; resultEl.className = "field-hint"; resultEl.textContent = "正在清理…（管理员权限项会弹出 UAC 窗口）"; }
+  try {
+    const result = await window.agentChatPro.cleanSystemCaches(checked);
+    const results = result?.results || [];
+    const okList = results.filter((r) => r.ok);
+    const failList = results.filter((r) => !r.ok);
+    const freed = results.reduce((sum, r) => sum + (r.freed || 0), 0);
+    const hasUnknown = results.some((r) => r.freedUnknown);
+    const text = [
+      `完成 ${okList.length}/${results.length}`,
+      freed ? `释放 ${formatCacheSize(freed)}` : hasUnknown ? "部分项无法统计大小" : "",
+      ...failList.map((r) => `${r.name}：${r.message}`)
+    ].filter(Boolean).join(" · ");
+    if (resultEl) {
+      resultEl.hidden = false;
+      resultEl.className = `field-hint ${failList.length ? "fail" : "ok"}`;
+      resultEl.textContent = text;
+    }
+  } catch (error) {
+    if (resultEl) { resultEl.hidden = false; resultEl.className = "field-hint fail"; resultEl.textContent = `清理失败：${error?.message || error}`; }
+  } finally {
+    button.disabled = false;
+    button.textContent = "清理勾选项";
+  }
+});
 passwordInput.addEventListener("input", () => {
   document.querySelector("#password-hint").textContent = passwordInput.value
     ? `本次输入 ${[...passwordInput.value].length} 个字符，请确认没有重复`
@@ -1408,6 +1619,53 @@ window.agentChatPro.onBridgeForceClosed?.((detail) => {
   setConnection(`连接已被强制关闭${detail?.reason === "runner-stopped" ? "（Agent 已停止）" : ""}。`, "error");
   if (activeId) forceClearActiveState("连接已被强制关闭");
 });
+
+// ── 上下文进度条事件（v3.10.0）：model / usage / compact 三类 ──
+window.agentChatPro.onContextEvent?.((event) => {
+  if (!event) return;
+  if (event.type === "model") {
+    contextLimit = Number(event.contextLimit) || 0;
+    renderContextBar();
+  } else if (event.type === "usage") {
+    if (event.contextTokens) contextTokens = Number(event.contextTokens);
+    renderContextBar();
+  } else if (event.type === "compact") {
+    handleCompactEvent(event);
+  } else if (event.type === "compact-runner") {
+    // 压缩执行器状态（connecting/connected/finished）：仅提示
+    if (event.status === "connected") setConnection("正在压缩上下文…", "");
+  }
+});
+
+function handleCompactEvent(event) {
+  const button = document.querySelector("#context-compact");
+  if (event.phase === "started") {
+    compactingNow = true;
+    if (button) {
+      button.disabled = true;
+      button.classList.add("compacting");
+      button.textContent = "✂ 压缩中…";
+    }
+    setConnection("正在压缩上下文（发送 /compact）…", "");
+  } else if (event.phase === "boundary") {
+    // 压缩边界：用 postTokens 覆盖上下文占用
+    if (Number(event.postTokens) > 0) contextTokens = Number(event.postTokens);
+    renderContextBar();
+  } else if (event.phase === "finished") {
+    compactingNow = false;
+    if (button) {
+      button.disabled = false;
+      button.classList.remove("compacting");
+      button.textContent = "✂ 压缩";
+    }
+    if (event.success === true) {
+      const post = event.postTokens ? `，当前 ${formatCompactNumber(event.postTokens)} tokens` : "";
+      setConnection(`上下文压缩完成${post} · 会话已保留`, "connected");
+    } else if (event.success === false) {
+      setConnection(`上下文压缩失败${event.error ? `：${event.error}` : ""}`, "error");
+    }
+  }
+}
 
 // ── 信号灯带（移植自 Agent Orbit 0.9.6）：16 盏状态灯 + 维修灯位 ──
 const SIGNAL_LIGHT_COUNT = 16;

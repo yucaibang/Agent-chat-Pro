@@ -7,6 +7,9 @@ const { Client } = require("ssh2");
 const {
   JsonLineParser,
   buildClaudeCommand,
+  compactEventFromEvent,
+  contextLimitFromModel,
+  modelFromEvent,
   shellQuote,
   sessionFromEvent,
   textFromEvent,
@@ -625,6 +628,14 @@ function runClaude(config, message, sessionId, attachments = [], callbacks = {})
         if (foundUsage) {
           usage = foundUsage;
           callbacks.onUsage?.(usage);
+        }
+        const foundModel = modelFromEvent(item.value);
+        if (foundModel) {
+          callbacks.onModelChange?.({ model: foundModel, contextLimit: contextLimitFromModel(foundModel) });
+        }
+        const compactEvent = compactEventFromEvent(item.value);
+        if (compactEvent) {
+          callbacks.onCompactEvent?.(compactEvent);
         }
         const previousToolCount = tools.size;
         handleToolPayload(item.value, tools, outputPaths, callbacks.onToolEvent);

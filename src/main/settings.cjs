@@ -124,6 +124,20 @@ function modelAdminPasswordState(raw = readRaw()) {
   }
 }
 
+/** 压缩起始阈值（%）：50–95，默认 80 */
+function normalizeCompactThreshold(value) {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return 80;
+  return Math.min(95, Math.max(50, Math.round(num)));
+}
+
+/** 压缩指令：预设空串（默认 /compact）或自定义文本，最长 300 字符 */
+function normalizeCompactInstruction(value) {
+  const text = String(value ?? "").trim();
+  if (!text) return "";
+  return text.slice(0, 300);
+}
+
 function getSettings() {
   const raw = readRaw();
   const defaultDataDirectory = app.getPath("userData");
@@ -182,7 +196,11 @@ function getSettings() {
     // 授权
     hasCloudAiConfig: Boolean(raw.cloudAiApiKeyEncrypted || raw.cloudAiApiKey),
     // 品牌验证服务器（留空则禁用品牌验证）
-    brandServerUrl: raw.brandServerUrl || ""
+    brandServerUrl: raw.brandServerUrl || "",
+    // 上下文压缩（v3.10.0）
+    compactThreshold: normalizeCompactThreshold(raw.compactThreshold),
+    compactAuto: Boolean(raw.compactAuto),
+    compactInstruction: normalizeCompactInstruction(raw.compactInstruction)
   };
 }
 
@@ -324,7 +342,11 @@ function saveSettings(input) {
     // 信号灯带
     showSignalLights: input.showSignalLights !== undefined ? Boolean(input.showSignalLights) : previous.showSignalLights !== false,
     // 品牌验证服务器（留空则禁用）
-    brandServerUrl: input.brandServerUrl !== undefined ? input.brandServerUrl : previous.brandServerUrl || ""
+    brandServerUrl: input.brandServerUrl !== undefined ? input.brandServerUrl : previous.brandServerUrl || "",
+    // 上下文压缩（v3.10.0）
+    compactThreshold: normalizeCompactThreshold(input.compactThreshold !== undefined ? input.compactThreshold : previous.compactThreshold),
+    compactAuto: input.compactAuto !== undefined ? Boolean(input.compactAuto) : Boolean(previous.compactAuto),
+    compactInstruction: normalizeCompactInstruction(input.compactInstruction !== undefined ? input.compactInstruction : previous.compactInstruction)
   };
 
   if (input.clearPassword) next.password = "";

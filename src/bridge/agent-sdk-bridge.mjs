@@ -28,7 +28,7 @@ class MessageQueue {
   close() {
     if (this.#closed) return;
     this.#closed = true;
-    while (this.#waiters.length) this.#waiters.shift({ value: undefined, done: true });
+    while (this.#waiters.length) this.#waiters.shift()({ value: undefined, done: true });
   }
 
   async next() {
