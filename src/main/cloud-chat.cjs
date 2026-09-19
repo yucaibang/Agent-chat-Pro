@@ -377,14 +377,9 @@ function sendCloudChat(config, messages, callbacks = {}) {
   promise.cancel = () => {
     cancelled = true;
     if (req) req.destroy();
-    // 如果 Promise 已经 settled，cancel 是空操作
-    // 如果 Promise 还在等待（极端情况），5秒后强制 resolve
-    // 这确保即使 req.destroy() 没有触发任何事件，UI 也不会永远卡住
-    const forceTimer = setTimeout(() => {
-      try { promise.then(() => {}, () => {}); } catch {}
-      // Promise 已 settled，无需操作
-    }, 5000);
-    forceTimer.unref();
+    // 取消兜底链：req.destroy() 会触发 res 的 error/close 事件，
+    // 由上方 safeResolve/safeReject 确保 Promise 一定 settle；
+    // UI 侧另有 10 秒强制清除状态兜底。
   };
   return promise;
 }

@@ -76,9 +76,7 @@ function createConversationClaudeSignalMonitor(options = {}) {
   const activeGates = new Map(); // requestId → gate
 
   function startRequest(requestId, contractKey) {
-    const contract = registry.get("conversation", "submit");
-    if (!contract) return null;
-    // 动态获取契约
+    // 动态获取契约：contractKey 格式 "moduleId:operation"，缺省为主链提交契约
     const [moduleId, operation] = contractKey ? contractKey.split(":") : ["conversation", "submit"];
     const targetContract = registry.get(moduleId, operation);
     if (!targetContract) return null;

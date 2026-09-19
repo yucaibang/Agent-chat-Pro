@@ -1,4 +1,4 @@
-"use strict.";
+"use strict";
 
 /**
  * 对话传输选择器 — 根据 connectionMode 选择 local 或 remote 执行器。

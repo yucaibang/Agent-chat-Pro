@@ -880,6 +880,15 @@ async function sendMessage() {
       attachments: preparedAttachments,
       workModeId: currentModeId
     });
+    // 超时兜底赢走 race 后，IPC 才报错/返回时避免 unhandled rejection
+    sendPromise.catch(() => {});
+    let sendTimeoutTimer;
+    const result = await Promise.race([
+      sendPromise,
+      new Promise((_, reject) => {
+        sendTimeoutTimer = setTimeout(() => reject(new Error("请求超时（超过 35 分钟未响应，已停止等待）。")), SEND_TIMEOUT_MS);
+      })
+    ]).finally(() => clearTimeout(sendTimeoutTimer));
     if (result.cancelled) {
       answer.classList.remove("generating", "error");
       answer.classList.add("interrupted");

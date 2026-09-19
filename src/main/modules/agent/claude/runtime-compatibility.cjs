@@ -1,4 +1,4 @@
-"use strict.";
+"use strict";
 
 /**
  * 运行时兼容性检测 — 检查 Claude CLI / SDK 版本与 Bridge 的兼容性。
