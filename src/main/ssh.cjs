@@ -15,6 +15,7 @@ const {
 const { buildCommandWithMode, buildBridgeStartWithMode } = require("./modes/mode-params.cjs");
 const { friendlyClaudeLaunchError, describeMissingWorkingDirectory } = require("./claude-launch-diagnostics.cjs");
 const { readModelSettings, replaceModelSettings } = require("./model-config.cjs");
+const { bridgeCompatibility, parseVersion } = require("./modules/agent/claude/runtime-compatibility.cjs");
 
 const TOOL_PROGRESS_NOTICE_COUNTS = [8, 24];
 const MAX_REQUEST_MS = 30 * 60 * 1000;
@@ -274,7 +275,23 @@ async function getAgentSdkBridgeStatus(config, onUnknownHost, onLog) {
     const nodePath = (await runProbe("command -v node")).stdout.trim();
     const probe = await runProbe([`test -r ${shellQuote(`${bridgePath}/agent-sdk-bridge.mjs`)}`, `test -r ${shellQuote(`${bridgePath}/node_modules/@anthropic-ai/claude-agent-sdk/package.json`)}`, `node --check ${shellQuote(`${bridgePath}/agent-sdk-bridge.mjs`)}`].join(" && "));
     const ready = Boolean(nodePath) && probe.code === 0;
-    return { path: bridgePath, nodeAvailable: Boolean(nodePath), installed: probe.code === 0, ready, detail: ready ? "已安装并通过语法校验" : nodePath ? "未安装或依赖不完整" : "目标 NAS 未找到 Node.js" };
+    // 运行时兼容性评估（v3.9.0，Orbit 真实现）：已安装时读取 SDK 版本与 Claude CLI 版本比对
+    let compatibility = { state: "not-applicable", label: "当前模式未使用增强 Bridge SDK", checked: false };
+    if (ready) {
+      try {
+        const sdkResult = await runProbe(`cat -- ${shellQuote(`${bridgePath}/node_modules/@anthropic-ai/claude-agent-sdk/package.json`)}`);
+        const sdk = JSON.parse(sdkResult.stdout);
+        const cliResult = await runProbe("claude --version 2>/dev/null || echo ''");
+        compatibility = bridgeCompatibility({
+          cliVersion: parseVersion(cliResult.stdout),
+          sdkVersion: parseVersion(sdk.version),
+          sdkClaudeCodeVersion: parseVersion(sdk.claudeCodeVersion)
+        });
+      } catch {
+        compatibility = { state: "unknown", label: "SDK 或 Claude 版本无法识别，无法判断匹配情况", checked: false };
+      }
+    }
+    return { path: bridgePath, nodeAvailable: Boolean(nodePath), installed: probe.code === 0, ready, detail: ready ? "已安装并通过语法校验" : nodePath ? "未安装或依赖不完整" : "目标 NAS 未找到 Node.js", compatibility };
   } finally { client.end(); }
 }
 

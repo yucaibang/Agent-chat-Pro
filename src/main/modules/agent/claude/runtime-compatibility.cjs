@@ -1,70 +1,96 @@
 "use strict";
 
-/**
- * 运行时兼容性检测 — 检查 Claude CLI / SDK 版本与 Bridge 的兼容性。
- *
- * 静态检查：比对 CLI 版本与 SDK 基线版本。
- * 返回：matched / review-needed / mismatch / unknown / not-applicable
- */
+const VERSION_PATTERN = /(?:^|\s)(\d+)\.(\d+)\.(\d+)(?:\b|\s)/;
 
-const SDK_BASELINE_VERSION = "0.3.263";
+function parseVersion(value) {
+  const match = String(value || "").match(VERSION_PATTERN);
+  return match ? `${Number(match[1])}.${Number(match[2])}.${Number(match[3])}` : "";
+}
 
-function compareVersions(a, b) {
-  const pa = String(a).replace(/^v/, "").split(".").map(Number);
-  const pb = String(b).replace(/^v/, "").split(".").map(Number);
-  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
-    const na = pa[i] || 0;
-    const nb = pb[i] || 0;
-    if (na > nb) return 1;
-    if (na < nb) return -1;
+function compareVersions(left, right) {
+  const a = parseVersion(left).split(".").map(Number);
+  const b = parseVersion(right).split(".").map(Number);
+  if (a.length !== 3 || b.length !== 3 || a.some(Number.isNaN) || b.some(Number.isNaN)) return null;
+  for (let index = 0; index < 3; index += 1) {
+    if (a[index] !== b[index]) return a[index] > b[index] ? 1 : -1;
   }
   return 0;
 }
 
-function bridgeCompatibility(cliVersion, sdkVersion) {
-  if (!cliVersion) return "unknown";
-  if (!sdkVersion) return "not-applicable";
-
-  const cliCmp = compareVersions(cliVersion, sdkVersion);
-  if (cliCmp >= 0) return "matched";
-
-  // 小版本差距 = review-needed，大版本差距 = mismatch
-  const cliParts = String(cliVersion).split(".").map(Number);
-  const sdkParts = String(sdkVersion).split(".").map(Number);
-  if (cliParts[0] < sdkParts[0]) return "mismatch";
-  if (cliParts[1] < sdkParts[1] - 1) return "mismatch";
-  return "review-needed";
-}
-
-function evaluateLiveCompatibility(results) {
-  if (!results || typeof results !== "object") return { compatible: false, score: 0, details: [] };
-
-  const checks = [
-    { key: "bridgeStart", label: "Bridge 启动", weight: 20 },
-    { key: "sessionEstablished", label: "会话建立", weight: 15 },
-    { key: "streamingReply", label: "流式回复", weight: 15 },
-    { key: "firstReply", label: "首次响应", weight: 10 },
-    { key: "followUpReceived", label: "追问接收", weight: 10 },
-    { key: "followUpReply", label: "追问回复", weight: 10 },
-    { key: "permissionPolicy", label: "权限策略", weight: 5 },
-    { key: "toolStart", label: "工具开始", weight: 5 },
-    { key: "toolComplete", label: "工具完成", weight: 5 },
-    { key: "normalTermination", label: "正常终态", weight: 5 }
-  ];
-
-  let score = 0;
-  const details = [];
-  for (const check of checks) {
-    const passed = Boolean(results[check.key]);
-    if (passed) score += check.weight;
-    details.push({ ...check, passed });
-  }
-
+function bridgeCompatibility({ cliVersion, sdkVersion, sdkClaudeCodeVersion } = {}) {
+  const current = parseVersion(cliVersion);
+  const baseline = parseVersion(sdkClaudeCodeVersion);
+  if (!sdkVersion) return {
+    state: "not-applicable",
+    label: "当前模式未使用增强 Bridge SDK",
+    checked: false
+  };
+  if (!current || !baseline) return {
+    state: "unknown",
+    label: "SDK 或 Claude 版本无法识别，无法判断匹配情况",
+    checked: false
+  };
+  if (current === baseline) return {
+    state: "matched",
+    label: `已匹配：SDK ${sdkVersion} 对应 Claude ${baseline}`,
+    checked: true
+  };
+  const currentParts = current.split(".");
+  const baselineParts = baseline.split(".");
+  if (currentParts[0] === baselineParts[0] && currentParts[1] === baselineParts[1]) return {
+    state: "review-needed",
+    label: `同一 ${currentParts[0]}.${currentParts[1]} 主线：SDK 基线 ${baseline}，当前 Claude ${current}；建议完成一次真实聊天验证`,
+    checked: false
+  };
   return {
-    compatible: score >= 80,
-    score,
-    details
+    state: "mismatch",
+    label: `版本主线不同：SDK 基线 ${baseline}，当前 Claude ${current}`,
+    checked: false
   };
 }
 
-module.exports = { SDK_BASELINE_VERSION, compareVersions, bridgeCompatibility, evaluateLiveCompatibility };
+function evaluateLiveCompatibility({ cliVersion, sdkVersion, sdkClaudeCodeVersion, checks } = {}) {
+  const normalizedChecks = Array.isArray(checks)
+    ? checks.map((check) => ({
+      id: String(check?.id || "unknown"),
+      label: String(check?.label || check?.id || "未知检查"),
+      passed: check?.passed === true,
+      detail: String(check?.detail || "")
+    }))
+    : [];
+  const failed = normalizedChecks.filter((check) => !check.passed);
+  const current = parseVersion(cliVersion);
+  const baseline = parseVersion(sdkClaudeCodeVersion);
+  const versionAligned = Boolean(current && baseline && current === baseline);
+  const versionNote = current && baseline
+    ? versionAligned
+      ? `版本信息一致：Claude ${current}，SDK 基线 ${baseline}`
+      : `版本信息不同：Claude ${current}，SDK 基线 ${baseline}；版本差异不单独判失败`
+    : "版本基线不完整；以真实功能测试为准";
+  if (!sdkVersion) return {
+    state: "not-applicable",
+    label: "当前模式未使用增强 Bridge SDK",
+    checked: false,
+    versionAligned: false,
+    versionNote,
+    checks: normalizedChecks
+  };
+  if (!normalizedChecks.length || failed.length) return {
+    state: "mismatch",
+    label: `实测未完全通过：${failed.length ? failed.map((check) => `${check.label}${check.detail ? `（${check.detail}）` : ""}`).join("；") : "没有取得测试结果"}`,
+    checked: true,
+    versionAligned,
+    versionNote,
+    checks: normalizedChecks
+  };
+  return {
+    state: "matched",
+    label: `实测匹配：SDK ${sdkVersion} 的 Bridge 启动、首次回复、会话、流式输出、同会话追问、权限策略、工具执行和正常终态全部通过。${versionNote}`,
+    checked: true,
+    versionAligned,
+    versionNote,
+    checks: normalizedChecks
+  };
+}
+
+module.exports = { bridgeCompatibility, compareVersions, evaluateLiveCompatibility, parseVersion };

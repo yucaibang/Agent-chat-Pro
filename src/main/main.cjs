@@ -37,15 +37,16 @@ const { NetworkManager, STATES } = require("./network/network-manager.cjs");
 const { LatencyMonitor } = require("./network/latency-monitor.cjs");
 const { sendCloudChat, buildMessages, verifyCloudConnection, testProxyConnectivity } = require("./cloud-chat.cjs");
 const {
-  AUDIT_FILE_FORMATS,
-  AUDIT_TOOL_ACTIONS,
   auditToolDetails
 } = require("./status-event-normalizer.cjs");
+// 状态审计日志（Orbit 真实现接线，v3.9.0）：原内联版提取为独立模块，枚举校验逻辑一致
+const { journalEntry: statusJournalEntry, signalEntry: statusSignalEntry, toolLifecycleEntry: statusToolLifecycleEntry } = require("./modules/status/status-audit-journal.cjs");
 const { readModelSettings, replaceModelSettings } = require("./model-config.cjs");
 const { CloudBrandManager } = require("./cloud-brand.cjs");
 const { IntegrityGuard } = require("./integrity-guard.cjs");
 const { createModuleRegistry } = require("./modules/foundation/module-registry.cjs");
 const { createStatusCenter } = require("./modules/status/status-center.cjs");
+const { createToolPermissionService } = require("./modules/foundation/permissions/tool-permission-service.cjs");
 const { createSignalLightStrip } = require("./modules/foundation/signal-contract/light-strip.cjs");
 const { createConversationClaudeSignalMonitor } = require("./modules/foundation/signal-contract/signal-chain.cjs");
 
@@ -93,80 +94,20 @@ function safeSignal(method, fn) {
   try { return fn(); } catch (error) { writeLog("signal_contract_error", { method, error: String(error?.message || error) }); return null; }
 }
 
-function statusJournalEntry(input = {}) {
-  const states = new Set(["idle", "connected", "working", "proxy", "danger", "error"]);
-  const outcomes = new Set(["applied", "suppressed"]);
-  return {
-    requestId: /^[0-9a-f-]{36}$/i.test(String(input.requestId || "")) ? input.requestId : "",
-    outcome: outcomes.has(input.outcome) ? input.outcome : "applied",
-    state: states.has(input.state) ? input.state : "idle",
-    previousState: states.has(input.previousState) ? input.previousState : "idle",
-    source: String(input.source || "direct").replace(/[^a-z-]/gi, "").slice(0, 40) || "direct",
-    label: String(input.label || "其他活动").slice(0, 80)
-  };
-}
-
-function statusSignalEntry(input = {}) {
-  const directions = new Set(["renderer-sent", "preload-sent", "main-received", "executor-emitted", "main-sent", "preload-received", "renderer-received"]);
-  const signals = new Set(["chat-send", "chat-cancel", "chat-delta", "chat-event", "runner-event", "transport-event", "request-outcome"]);
-  const dispositions = new Set(["received", "accepted", "current", "stale", "missing-answer", "invalid", "attempt", "emitted", "started", "completed", "failed", "cancelled"]);
-  const eventTypes = new Set(["connection", "upload", "tool", "permission", "usage", "delta", "lifecycle", "transport"]);
-  const eventStatuses = new Set(["connecting", "reconnecting", "connected", "continuing", "stopping", "local-starting", "running", "completed", "failed", "denied", "waiting", "allowed", "started", "finished", "cancelled"]);
-  const safeToken = (value, fallback = "") => String(value || "").replace(/[^a-z0-9_-]/gi, "").slice(0, 80) || fallback;
-  return {
-    requestId: /^[0-9a-f-]{36}$/i.test(String(input.requestId || "")) ? input.requestId : "",
-    direction: directions.has(input.direction) ? input.direction : "renderer-received",
-    signal: signals.has(input.signal) ? input.signal : "chat-event",
-    disposition: dispositions.has(input.disposition) ? input.disposition : "invalid",
-    eventType: eventTypes.has(input.eventType) ? input.eventType : "",
-    eventStatus: eventStatuses.has(input.eventStatus) ? input.eventStatus : "",
-    toolId: safeToken(input.toolId),
-    toolName: safeToken(input.toolName),
-    toolStatus: eventStatuses.has(input.toolStatus) ? input.toolStatus : "",
-    textLength: Math.max(0, Math.min(10000000, Number(input.textLength) || 0)),
-    attachmentCount: Math.max(0, Math.min(10, Number(input.attachmentCount) || 0)),
-    attempt: Math.max(0, Math.min(12, Number(input.attempt) || 0)),
-    uploadPercent: Math.max(0, Math.min(100, Number(input.uploadPercent) || 0)),
-    transport: safeToken(input.transport),
-    parser: new Set(["parsed", "unparsed", "empty"]).has(input.parser) ? input.parser : "",
-    rawType: safeToken(input.rawType),
-    rawEventType: safeToken(input.rawEventType),
-    rawContentKind: safeToken(input.rawContentKind),
-    rawLength: Math.max(0, Math.min(10000000, Number(input.rawLength) || 0)),
-    toolAction: AUDIT_TOOL_ACTIONS.has(input.toolAction) ? input.toolAction : "",
-    fileFormats: Array.isArray(input.fileFormats) ? [...new Set(input.fileFormats.filter((format) => AUDIT_FILE_FORMATS.has(format)))].slice(0, 16) : [],
-    executionTarget: safeToken(input.executionTarget),
-    toolTargets: Array.isArray(input.toolTargets) ? [...new Set(input.toolTargets.map((target) => safeToken(target)).filter(Boolean))].slice(0, 8) : []
-  };
-}
-
-function statusToolLifecycleEntry(input = {}) {
-  const tones = new Set(["working", "proxy", "danger", "error"]);
-  const statuses = new Set(["running", "completed", "failed", "denied"]);
-  const safeToken = (value, fallback = "") => String(value || "").replace(/[^a-z0-9_-]/gi, "").slice(0, 80) || fallback;
-  const tool = input.tool || {};
-  const list = (value) => Array.isArray(value) ? value.slice(0, 30).map((item) => ({
-    id: safeToken(item?.id),
-    tone: tones.has(item?.tone) ? item.tone : "",
-    status: statuses.has(item?.status) ? item.status : ""
-  })).filter((item) => item.id) : [];
-  return {
-    requestId: /^[0-9a-f-]{36}$/i.test(String(input.requestId || "")) ? input.requestId : "",
-    transition: safeToken(input.transition, "unknown"),
-    toolId: safeToken(tool.toolId || tool.id),
-    toolName: safeToken(tool.toolName || tool.name),
-    toolStatus: statuses.has(tool.toolStatus || tool.status) ? (tool.toolStatus || tool.status) : "",
-    toolAction: AUDIT_TOOL_ACTIONS.has(tool.toolAction) ? tool.toolAction : "",
-    fileFormats: Array.isArray(tool.fileFormats) ? [...new Set(tool.fileFormats.filter((format) => AUDIT_FILE_FORMATS.has(format)))].slice(0, 16) : [],
-    toolTargets: Array.isArray(tool.toolTargets) ? [...new Set(tool.toolTargets.map((target) => safeToken(target)).filter(Boolean))].slice(0, 8) : [],
-    previousState: tones.has(input.previousState) || input.previousState === "idle" || input.previousState === "connected" ? input.previousState : "",
-    displayedState: tones.has(input.displayedState) || input.displayedState === "idle" || input.displayedState === "connected" ? input.displayedState : "",
-    previousTools: list(input.previousTools),
-    activeTools: list(input.activeTools),
-    selectedToolId: safeToken(input.selectedToolId),
-    selectedToolTone: tones.has(input.selectedToolTone) ? input.selectedToolTone : ""
-  };
-}
+// ── 工具权限服务（Orbit 真实现接线，v3.9.0）──
+const toolPermissionService = createToolPermissionService({
+  getSettings,
+  saveSettings,
+  showConfirmation: (options) => dialog.showMessageBox(window, options),
+  restoreFocus: () => {
+    if (window && !window.isDestroyed()) {
+      window.show();
+      window.focus();
+      window.webContents.focus();
+    }
+  },
+  writeLog
+});
 
 function sendWorkStatusSignal(sender, channel, payload) {
   const event = payload || {};
@@ -342,30 +283,8 @@ app.whenReady().then(async () => {
   });
   ipcMain.handle("settings:tool-mode", async (_event, enabled) => {
     const current = getSettings();
-    try {
-      if (enabled) {
-        const localMode = current.connectionMode === "local";
-        const answer = await dialog.showMessageBox(window, {
-          type: "warning",
-          title: "允许 Agent 自动执行工具",
-          message: `允许 Agent 在${localMode ? "这台电脑" : " NAS"}上自动执行工具操作？`,
-          detail: `开启后，Agent 可以在${localMode ? "本机" : " NAS"}读取、创建、修改文件并运行命令。仅在信任当前${localMode ? "电脑" : " NAS"}和工作目录时开启。`,
-          buttons: ["取消", "允许自动执行"],
-          defaultId: 0,
-          cancelId: 0
-        });
-        if (answer.response !== 1) return { ...current, cancelled: true };
-      }
-      const saved = saveSettings({ ...current, skipPermissions: Boolean(enabled) });
-      writeLog("tool_permission_mode_changed", { automatic: saved.skipPermissions });
-      return saved;
-    } finally {
-      if (window && !window.isDestroyed()) {
-        window.show();
-        window.focus();
-        window.webContents.focus();
-      }
-    }
+    const signal = safeSignal("tool-permission-signal", () => signalMonitor.createToolPermission({ requestId: randomUUID(), connectionMode: current.connectionMode, automatic: Boolean(enabled) }));
+    return toolPermissionService.setAutomaticMode(enabled, signal);
   });
   // ── 模型管理 IPC ──
   ipcMain.handle("model:status", async () => {

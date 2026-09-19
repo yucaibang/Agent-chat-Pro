@@ -1,5 +1,7 @@
 "use strict";
 
+const { isTerminalLifecycle } = require("./modules/status/status-lifecycle.cjs");
+
 const COMMANDS = new Set(["ssh", "sftp", "scp", "rsync"]);
 const OPTIONS_WITH_VALUE = new Set(["-b", "-c", "-d", "-e", "-f", "-i", "-j", "-l", "-m", "-o", "-p", "-r", "-s", "-w"]);
 const AUDIT_FILE_FORMATS = new Set([
@@ -588,7 +590,7 @@ function normalizeStatusEvent(event = {}, context = {}) {
   if (type === "delta") return withDisplayAudit({ ...event, presentation: proxyTone(deltaDisplay(), event.id), coverage }, type, coverage);
   if (type === "usage") return withDisplayAudit({ ...event, presentation: { kind: "usage", updateWorkStatus: false }, coverage }, type, coverage);
   if (type === "lifecycle") {
-    if (["finished", "failed", "cancelled"].includes(event.status)) {
+    if (isTerminalLifecycle(event.status)) {
       clearProxySession(event.id);
       clearToolSemantics(event.id);
     }
@@ -620,7 +622,7 @@ function createStatusSignalObserver({ enabled = false, onGap = () => {} } = {}) 
         else ledger.fallback += 1;
         if (coverage.status === "review" || coverage.status === "unclassified") ledger.review += 1;
         requestLedgers.set(requestId, ledger);
-        if (event?.originalType === "lifecycle" || (event?.type === "lifecycle" && ["finished", "failed", "cancelled"].includes(event?.status))) {
+        if (event?.originalType === "lifecycle" || (event?.type === "lifecycle" && isTerminalLifecycle(event?.status))) {
           report({ status: "display-summary", key: `request:${requestId}`, reason: "状态显示覆盖汇总", eventType: "lifecycle", display: ledger });
           requestLedgers.delete(requestId);
         }

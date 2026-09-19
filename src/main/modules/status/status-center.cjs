@@ -8,6 +8,8 @@
  */
 
 const { auditToolDetails, normalizeStatusEvent } = require("../../status-event-normalizer.cjs");
+// v3.9.0 接线：审计条目走 Orbit 真实现（枚举校验规范化），替代原"透传+时间戳"简陋版
+const { journalEntry: normalizeJournalEntry, signalEntry: normalizeSignalEntry, toolLifecycleEntry: normalizeToolLifecycleEntry } = require("./status-audit-journal.cjs");
 
 function createStatusCenter({ onGap } = {}) {
   const observer = createStatusSignalObserver({ enabled: true, onGap });
@@ -22,21 +24,21 @@ function createStatusCenter({ onGap } = {}) {
       return {
         type: "journalEntry",
         timestamp: Date.now(),
-        ...entry
+        ...normalizeJournalEntry(entry)
       };
     },
     signalEntry(entry) {
       return {
         type: "signalEntry",
         timestamp: Date.now(),
-        ...entry
+        ...normalizeSignalEntry(entry)
       };
     },
     toolLifecycleEntry(entry) {
       return {
         type: "toolLifecycleEntry",
         timestamp: Date.now(),
-        ...entry
+        ...normalizeToolLifecycleEntry(entry)
       };
     }
   });
