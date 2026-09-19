@@ -39,13 +39,15 @@ const { sendCloudChat, buildMessages, verifyCloudConnection } = require("./cloud
 const {
   AUDIT_FILE_FORMATS,
   AUDIT_TOOL_ACTIONS,
-  auditToolDetails,
-  createStatusSignalObserver,
-  normalizeStatusEvent
+  auditToolDetails
 } = require("./status-event-normalizer.cjs");
 const { readModelSettings, replaceModelSettings } = require("./model-config.cjs");
 const { CloudBrandManager } = require("./cloud-brand.cjs");
 const { IntegrityGuard } = require("./integrity-guard.cjs");
+const { createModuleRegistry } = require("./modules/foundation/module-registry.cjs");
+const { createStatusCenter } = require("./modules/status/status-center.cjs");
+const { createSignalLightStrip } = require("./modules/foundation/signal-contract/light-strip.cjs");
+const { createConversationClaudeSignalMonitor } = require("./modules/foundation/signal-contract/signal-chain.cjs");
 
 let window;
 const brandManager = new CloudBrandManager();
@@ -68,15 +70,27 @@ function sanitizeUrl(url) {
   return url;
 }
 
-const statusSignalObserver = createStatusSignalObserver({
-  enabled: true,
-  onGap: (entry) => writeLog("status_signal_gap", entry)
-});
-
 function normalizeAndObserveStatusEvent(event, config) {
-  const normalized = normalizeStatusEvent(event, { connection: config });
-  if (config?.statusSignalCapture) statusSignalObserver.observe(normalized);
-  return normalized;
+  return statusCenter.normalize(event, config);
+}
+
+// ── 模块化架构（移植自 Agent Orbit 0.9.6） ──
+const moduleRegistry = createModuleRegistry();
+moduleRegistry.register({ id: "foundation", label: "软件底座与扩展框架", version: 1, capabilities: ["electron", "ipc", "window", "settings", "credentials", "filesystem", "nativeDialogs", "moduleRegistry"] });
+moduleRegistry.register({ id: "status", label: "状态监控中心", version: 1 });
+const statusCenter = createStatusCenter({ onGap: (entry) => writeLog("status_signal_gap", entry) });
+const signalLights = createSignalLightStrip({
+  publish: (payload) => { if (window && !window.isDestroyed()) window.webContents.send("signal:lights", payload); },
+  writeFault: (entry) => writeLog("signal_contract_fault_journal", entry)
+});
+const signalMonitor = createConversationClaudeSignalMonitor({
+  writeLog,
+  onTransition: (item) => signalLights.transition(item),
+  onRoundComplete: (requestId) => signalLights.completeRound(requestId)
+});
+/** 信号系统安全调用：信号链任何异常都不得影响聊天主流程 */
+function safeSignal(method, fn) {
+  try { return fn(); } catch (error) { writeLog("signal_contract_error", { method, error: String(error?.message || error) }); return null; }
 }
 
 function statusJournalEntry(input = {}) {
@@ -301,12 +315,17 @@ app.whenReady().then(async () => {
     const requestedDirectory = input.dataDirectory || previous.defaultDataDirectory;
     const directoryChanged = !samePath(previous.dataDirectory, requestedDirectory);
     if (directoryChanged && activeRequests.size) throw new Error("Agent 正在回复，暂时不能迁移聊天记录。请等待当前回复结束后再保存。");
+    const saveSignal = safeSignal("settings-save-create", () => signalMonitor.createSettingsSave({ requestId: randomUUID(), connectionMode: input.connectionMode, directoryChanged }));
     const startedAt = Date.now();
     if (directoryChanged) writeLog("storage_migration_start", { hasExistingConversations: listConversations().length > 0 });
     try {
+      safeSignal("preflight", () => { saveSignal.preflightReceived(); saveSignal.preflightToStorage(); saveSignal.storageReceived(); });
       const migration = await prepareConversationDirectory(previous.dataDirectory, requestedDirectory);
+      safeSignal("storage-to-settings", () => { saveSignal.storageToSettings(); saveSignal.settingsReceived(); });
       const saved = saveSettings({ ...input, dataDirectory: migration.directory });
+      safeSignal("persisted", () => { saveSignal.settingsPersisted(); saveSignal.archivesReceived(); });
       ensureConversationArchives();
+      safeSignal("archives-ready", () => saveSignal.archivesReady());
       if (directoryChanged) writeLog("storage_migration_success", {
         conversations: migration.conversations,
         archives: migration.archives,
@@ -316,6 +335,7 @@ app.whenReady().then(async () => {
       writeLog("settings_saved", { connectionMode: saved.connectionMode, host: saved.host, port: saved.port, username: saved.username, wakeName: saved.wakeName, dataDirectory: saved.dataDirectory });
       return saved;
     } catch (error) {
+      safeSignal("settings-save-failed", () => saveSignal.failed(error));
       if (directoryChanged) writeLog("storage_migration_failed", { durationMs: Date.now() - startedAt, error });
       throw error;
     }
@@ -432,8 +452,8 @@ app.whenReady().then(async () => {
     if (event.sender !== window?.webContents) return;
     writeLog("work_status_tool_lifecycle", statusToolLifecycleEntry(input));
   });
-  // ── 信号灯 IPC（UI 隐藏，后端通道预留） ──
-  ipcMain.handle("signal:lights:get", () => []);
+  // ── 信号灯 IPC（16 盏灯带，快照 + 推送双通道） ──
+  ipcMain.handle("signal:lights:get", () => signalLights.snapshot());
   // ── Bridge 强制关闭通知 ──
   // 由 ssh.cjs 的 handleEvents 在收到 bridge_query_force_closed 时触发
   ipcMain.handle("device-control:status", () => getDeviceControlStatus());
@@ -776,9 +796,13 @@ app.whenReady().then(async () => {
         proxy: cloudConfig.proxy,
       }, cloudMessages, cloudCallbacks);
       activeRequests.set(id, { promise: cloudPromise, cancel: () => { cloudPromise.cancel?.(); }, conversationId: input.conversationId });
+      // 信号链：四阶段契约（turn → transport → adapter → runner）+ 灯带投影
+      const chatChain = safeSignal("chat-chain-create", () => signalMonitor.createRequest({ requestId: id, conversationId: input.conversationId, connectionMode: "cloud", attachmentCount: attachments.length, hasSession: Boolean(input.sessionId) }));
+      safeSignal("chain-open", () => { chatChain.turnReceived(); chatChain.turnToTransport({}); chatChain.transportReceived({}); chatChain.transportToAdapter({}); chatChain.adapterReceived({}); chatChain.adapterToRunner({}); chatChain.runnerReceived({}); chatChain.runnerOperation({ promise: cloudPromise }); });
       try {
         const result = await cloudPromise;
         if (draftTimer) clearTimeout(draftTimer);
+        safeSignal("chain-complete", () => chatChain.complete({}));
         if (result.cancelled) {
           addAssistantMessage(input.conversationId, streamedText || "已停止。", "", [], [], id, "cloud");
           writeLog("work_status_signal", statusSignalEntry({ requestId: id, direction: "main-received", signal: "request-outcome", disposition: "cancelled", eventType: "lifecycle", eventStatus: "cancelled" }));
@@ -797,6 +821,7 @@ app.whenReady().then(async () => {
         writeLog("chat_send_failed", { requestId: id, conversationId: input.conversationId, error: error.message });
         writeLog("work_status_signal", statusSignalEntry({ requestId: id, direction: "main-received", signal: "request-outcome", disposition: "failed", eventType: "lifecycle", eventStatus: "failed" }));
         sendWorkStatusSignal(event.sender, "chat:event", normalizeAndObserveStatusEvent({ id, type: "lifecycle", status: "failed" }, { connectionMode: "cloud" }));
+        safeSignal("chain-failed", () => chatChain.failed(error));
         throw error;
       } finally {
         if (draftTimer) clearTimeout(draftTimer);
@@ -853,6 +878,10 @@ app.whenReady().then(async () => {
         const normalized = normalizeAndObserveStatusEvent({ id, type: "connection", status }, config);
         writeLog("work_status_signal", statusSignalEntry({ requestId: id, direction: "executor-emitted", signal: "runner-event", disposition: "emitted", eventType: "connection", eventStatus: status }));
         sendWorkStatusSignal(event.sender, "chat:event", normalized);
+        // 桥被强制关闭（SSH 断开 / 进程被杀）时通知渲染层：状态条降级 + 清除等待态
+        if (status === "stopped" && !window?.isDestroyed()) {
+          event.sender.send("bridge:force-closed", { id, reason: "runner-stopped", connectionMode: config.connectionMode });
+        }
       },
       onSessionId: (sessionId) => {
         latestSessionId = sessionId || latestSessionId;
@@ -912,10 +941,14 @@ app.whenReady().then(async () => {
       : runClaude(config, agentMessage, activeSessionId, attachments, callbacks);
     writeLog("work_status_signal", statusSignalEntry({ requestId: id, direction: "main-received", signal: "request-outcome", disposition: "started", eventType: "lifecycle", eventStatus: "started", transport: config.connectionMode === "local" ? "local-stdio" : "ssh" }));
     activeRequests.set(id, { operation, conversationId: input.conversationId });
+    // 信号链：四阶段契约（turn → transport → adapter → runner）+ 灯带投影
+    const chatChain = safeSignal("chat-chain-create", () => signalMonitor.createRequest({ requestId: id, conversationId: input.conversationId, connectionMode: config.connectionMode, attachmentCount: attachments.length, hasSession: Boolean(activeSessionId) }));
+    safeSignal("chain-open", () => { chatChain.turnReceived(); chatChain.turnToTransport({}); chatChain.transportReceived({}); chatChain.transportToAdapter({}); chatChain.adapterReceived({}); chatChain.adapterToRunner({}); chatChain.runnerReceived({}); chatChain.runnerOperation({ promise: operation.promise }); });
     sendWorkStatusSignal(event.sender, "chat:event", normalizeAndObserveStatusEvent({ id, type: "lifecycle", status: "started" }, config));
     try {
       const result = await operation.promise;
       if (draftTimer) clearTimeout(draftTimer);
+      safeSignal("chain-complete", () => chatChain.complete({}));
       if (!completedTurnCount) {
         addAssistantMessage(input.conversationId, result.text, result.sessionId, result.files, result.tools, id, config.connectionMode, result.usage, Date.now() - startedAt);
       }
@@ -936,6 +969,7 @@ app.whenReady().then(async () => {
       writeLog("chat_send_failed", { requestId: id, conversationId: input.conversationId, error });
       writeLog("work_status_signal", statusSignalEntry({ requestId: id, direction: "main-received", signal: "request-outcome", disposition: "failed", eventType: "lifecycle", eventStatus: "failed" }));
       sendWorkStatusSignal(event.sender, "chat:event", normalizeAndObserveStatusEvent({ id, type: "lifecycle", status: "failed" }, config));
+      safeSignal("chain-failed", () => chatChain.failed(error));
       throw error;
     } finally {
       if (draftTimer) clearTimeout(draftTimer);

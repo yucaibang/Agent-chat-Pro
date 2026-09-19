@@ -73,6 +73,17 @@ const OBFUSCATE_FILES = {
     "main/integrity-guard.cjs",  // 完整性自检模块
     "main/model-config.cjs",      // 模型配置
     "main/status-event-normalizer.cjs", // 状态归一化
+    // ── 模块化架构（移植自 Agent Orbit 0.9.6，v3.7.0 接线）──
+    "main/modules/foundation/module-contract.cjs",
+    "main/modules/foundation/module-registry.cjs",
+    "main/modules/foundation/credential-vault/public.cjs",
+    "main/modules/foundation/permissions/tool-permission-service.cjs",
+    "main/modules/foundation/signal-contract/signal-contract.cjs",
+    "main/modules/foundation/signal-contract/signal-chain.cjs",
+    "main/modules/foundation/signal-contract/light-strip.cjs",
+    "main/modules/foundation/signal-contract/bridge-followup-signal.cjs",
+    "main/modules/status/status-center.cjs",
+    "main/modules/agent/claude/runtime-compatibility.cjs",
   ],
 };
 

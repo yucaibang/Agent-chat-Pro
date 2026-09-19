@@ -272,6 +272,7 @@
           <label>工作目录<input id="working-directory" name="workingDirectory" placeholder="留空则使用 SSH 账号的主目录" /></label>
           <label class="checkbox"><input name="skipPermissions" type="checkbox" /><span id="permission-label">允许 Agent 在 NAS 上自动执行工具操作</span></label>
           <p id="permission-hint" class="hint">开启后会传入 Claude Code 的 bypass permissions 参数。仅在你信任该 NAS 与当前工作目录时使用。</p>
+          <label class="checkbox"><input name="showSignalLights" type="checkbox" checked /><span>显示信号灯带（16 盏状态灯，实时显示 Agent 工作进度）</span></label>
         </details>
         <details id="network-settings">
           <summary>网络配置（外网穿透）</summary>

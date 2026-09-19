@@ -65,6 +65,7 @@ function settingsFromForm() {
     workingDirectory: data.get("workingDirectory"),
     dataDirectory: data.get("dataDirectory"),
     skipPermissions: data.get("skipPermissions") === "on",
+    showSignalLights: data.get("showSignalLights") === "on",
     workModeId: currentModeId,
     networkType: document.querySelector("#network-type").value,
     externalMethod: document.querySelector("#external-method").value,
@@ -91,6 +92,8 @@ function populateSettings(settings) {
     input.value = settings[key] ?? "";
   }
   elements.form.elements.namedItem("skipPermissions").checked = Boolean(settings.skipPermissions);
+  elements.form.elements.namedItem("showSignalLights").checked = settings.showSignalLights !== false;
+  document.body.classList.toggle("signal-lights-hidden", settings.showSignalLights === false);
   elements.form.elements.namedItem("connectionMode").value = settings.connectionMode || "ssh";
   currentConnectionMode = settings.connectionMode === "local" ? "local" : settings.connectionMode === "cloud" ? "cloud" : "ssh";
   updateConnectionModeUI();
@@ -1342,7 +1345,7 @@ window.agentChatPro.onChatEvent((event) => {
       ? { "local-starting": "正在启动本机 Claude…", connected: "本机 Claude 正在处理…" }
       : currentConnectionMode === "cloud"
       ? { connecting: "正在连接云端 AI…", connected: "云端 AI 正在处理…", stopping: "正在停止…" }
-      : { connecting: "正在连接 NAS…", reconnecting: "连接中断，正在自动重连…", connected: "已连接，Claude 正在处理…", stopping: "Claude 已收到停止请求，正在结束当前操作…" };
+      : { connecting: "正在连接 NAS…", reconnecting: "连接中断，正在自动重连…", connected: "已连接，Claude 正在处理…", stopping: "Claude 已收到停止请求，正在结束当前操作…", stopped: "连接已被强制关闭，正在结束当前请求…" };
     setConnection(labels[event.status] || "正在处理…", event.status === "connected" ? "connected" : "");
   } else if (event.type === "tool" && answer) {
     renderTool(answer, event.tool);
@@ -1364,6 +1367,52 @@ window.agentChatPro.onChatEvent((event) => {
     }
   }
 });
+
+// 桥被强制关闭（SSH 断开 / runner 进程被杀）：状态条降级为错误态并清除等待 UI
+window.agentChatPro.onBridgeForceClosed?.((detail) => {
+  setConnection(`连接已被强制关闭${detail?.reason === "runner-stopped" ? "（Agent 已停止）" : ""}。`, "error");
+  if (activeId) forceClearActiveState("连接已被强制关闭");
+});
+
+// ── 信号灯带（移植自 Agent Orbit 0.9.6）：16 盏状态灯 + 维修灯位 ──
+const SIGNAL_LIGHT_COUNT = 16;
+
+function createSignalLightStripDom() {
+  const titlebar = document.querySelector(".titlebar");
+  const menu = titlebar?.querySelector(".app-menu");
+  if (!titlebar || !menu || document.querySelector("#signal-light-strip")) return;
+  const strip = document.createElement("div");
+  strip.id = "signal-light-strip";
+  strip.className = "signal-light-strip";
+  strip.setAttribute("role", "status");
+  strip.setAttribute("aria-label", "信号灯带：等待下一轮信号");
+  strip.title = "信号灯带：等待下一轮信号";
+  for (let index = 1; index <= SIGNAL_LIGHT_COUNT; index += 1) {
+    const light = document.createElement("span");
+    light.className = "signal-light is-idle";
+    light.dataset.position = String(index);
+    strip.append(light);
+  }
+  titlebar.insertBefore(strip, menu);
+}
+
+function renderSignalLights(payload) {
+  const states = Array.isArray(payload?.lights) ? payload.lights : [];
+  document.querySelectorAll("#signal-light-strip .signal-light").forEach((light, index) => {
+    const item = states[index] || { state: "idle", label: "等待信号" };
+    light.className = `signal-light is-${item.state}`;
+    light.title = item.label;
+  });
+}
+
+createSignalLightStripDom();
+window.agentChatPro.onSignalLights?.((payload) => renderSignalLights(payload));
+window.agentChatPro.getSignalLights?.().then((payload) => renderSignalLights(payload)).catch(() => {});
+
+// 设置开关即时生效：保存设置后按返回值切换灯带可见性
+function applySignalLightsVisibility(showSignalLights) {
+  document.body.classList.toggle("signal-lights-hidden", showSignalLights === false);
+}
 
 function closeAppMenus(except) {
   document.querySelectorAll(".menu-group.open").forEach((group) => {

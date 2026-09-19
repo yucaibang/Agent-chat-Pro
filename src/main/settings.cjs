@@ -321,6 +321,8 @@ function saveSettings(input) {
     frostedGlass: input.frostedGlass || previous.frostedGlass || false,
     // 模式
     workModeId: input.workModeId || previous.workModeId || "regular",
+    // 信号灯带
+    showSignalLights: input.showSignalLights !== undefined ? Boolean(input.showSignalLights) : previous.showSignalLights !== false,
     // 品牌验证服务器（留空则禁用）
     brandServerUrl: input.brandServerUrl !== undefined ? input.brandServerUrl : previous.brandServerUrl || ""
   };
