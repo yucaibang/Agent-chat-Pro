@@ -18,10 +18,15 @@
  *   5. 运行时自检（integrity-guard.cjs）
  *   6. 商业壳加固（需在 Windows 端手动执行，见文档）
  *
- * 注意：bytenode 编译必须用 Electron 本体执行（electron: true + electronPath），
- *       V8 字节码与 V8 版本强绑定但跨操作系统兼容（实测 Electron 35.7.5 Linux 编译
- *       → 同版本 Electron 加载成功 / 系统 Node 加载报 Invalid cachedData）。
- *       如果 bytenode 不可用，跳过此步骤，回退到纯混淆模式。
+ * 注意：bytenode 编译必须用 Electron 本体执行（electron: true + electronPath）。
+ *       ⚠️ v3.11.0 重大更正（2026-09-19 Windows 真机实测）：V8 字节码与 V8 版本强绑定，
+ *       且**跨操作系统不兼容**——Linux Electron 35.7.5 编译的 .jsc 在 Windows Electron
+ *       加载即抛 `Invalid or incompatible cached data (cachedDataRejected)`，主进程启动
+ *       即崩。v3.8.0 时「跨 OS 兼容」的结论只在 Linux 同平台自测过，未在 Windows 验证。
+ *       因此：构建目标平台 ≠ 当前平台时跳过字节码编译（回退到纯混淆模式），
+ *       只有同平台构建（未来 Windows 端构建）才启用 .jsc。
+ *       设 ACP_FORCE_BYTECODE=1 可强制编译（仅限实验）。
+ *       如果 bytenode 不可用，同样跳过此步骤。
  */
 
 const { execSync } = require("child_process");
@@ -41,6 +46,17 @@ const BYTECODE_FILES = [
   "src/main/ssh.cjs",
   "src/main/cache-cleaner.cjs",
 ];
+
+// 构建目标平台（step3 的 electron-builder --win 恒为 Windows）
+const TARGET_PLATFORM = "win32";
+
+// V8 字节码跨 OS 不兼容（v3.11.0 实测：Linux 编译 → Windows 加载 cachedDataRejected）。
+// 仅当「当前平台 === 目标平台」时才编译 .jsc；ACP_FORCE_BYTECODE=1 可强制（仅限实验）。
+function bytecodeEnabled() {
+  if (process.env.ACP_FORCE_BYTECODE === "1") return true;
+  if (process.env.ACP_FORCE_BYTECODE === "0") return false;
+  return process.platform === TARGET_PLATFORM;
+}
 
 // ── 工具函数 ──────────────────────────────────────────
 
@@ -81,6 +97,14 @@ function step1_obfuscate() {
 
 async function step2_bytenode() {
   log("⚙️", "步骤 2/6: V8 字节码编译（bytenode）...");
+
+  // 跨平台构建必须跳过（v3.11.0：Linux 编译的 .jsc 在 Windows 加载即崩）
+  if (!bytecodeEnabled()) {
+    log("⏭️", `跳过字节码编译：构建目标 ${TARGET_PLATFORM} ≠ 当前平台 ${process.platform}（V8 字节码跨 OS 不兼容，v3.11.0 Windows 真机实测）`);
+    log("💡", "  asar 将包含混淆版源码（防破解依赖混淆 + Fuse + ASAR完整性 + IntegrityGuard）");
+    log("💡", "  未来在 Windows 端构建可重新启用 .jsc；或设 ACP_FORCE_BYTECODE=1 强制（仅限实验）");
+    return false;
+  }
 
   // 检查 bytenode 是否可用
   try {
@@ -224,16 +248,48 @@ function step6_verify() {
     return false;
   }
 
-  // 验证字节码已打包（v3.8.0）：asar 内必须有 .jsc + bytenode 运行时
+  // 验证字节码打包（v3.11.0 条件化）：
+  //   同平台构建 → asar 内必须有 .jsc + bytenode 运行时
+  //   跨平台构建 → asar 内必须【无】.jsc 且核心主模块为混淆源码（否则 Windows 加载即崩）
   try {
     const asarList = execSync(`npx asar list "${asarPath}"`, { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
     const jscCount = (asarList.match(/\.jsc\b/gm) || []).length;
     const hasBytenode = /bytenode[\\/]lib[\\/]index\.js/.test(asarList);
-    if (jscCount >= BYTECODE_FILES.length && hasBytenode) {
-      log("✅", `V8 字节码已打包（${jscCount} 个 .jsc + bytenode 运行时）`);
+
+    if (bytecodeEnabled()) {
+      if (jscCount >= BYTECODE_FILES.length && hasBytenode) {
+        log("✅", `V8 字节码已打包（${jscCount} 个 .jsc + bytenode 运行时）`);
+      } else {
+        log("❌", `字节码打包不完整: .jsc=${jscCount}（期望≥${BYTECODE_FILES.length}），bytenode=${hasBytenode ? "有" : "无"}`);
+        return false;
+      }
     } else {
-      log("❌", `字节码打包不完整: .jsc=${jscCount}（期望≥${BYTECODE_FILES.length}），bytenode=${hasBytenode ? "有" : "无"}`);
-      return false;
+      if (jscCount > 0) {
+        log("❌", `跨平台构建不应包含字节码: 发现 ${jscCount} 个 .jsc（Windows 加载会 cachedDataRejected 崩溃）`);
+        return false;
+      }
+      if (!hasBytenode) {
+        log("⚠️", "bytenode 运行时未打包（跨平台跳过字节码时属预期，不阻断）");
+      }
+      // 主模块混淆特征验证（javascript-obfuscator 产物含 _0x 变量名）
+      // 用 @electron/asar API 读取（CLI extract-file 输出到 cwd basename，路径不可靠）
+      const asar = require("@electron/asar");
+      const mainContent = asar.extractFile(asarPath, "src/main/main.cjs").toString("utf8");
+      const isLoader = /require\("\.\/main\.jsc"\)/.test(mainContent);
+      const isObfuscated = mainContent.includes("_0x");
+      const isPlain = mainContent.includes("createWindow") || mainContent.includes("app.on(\"ready\")") || mainContent.includes("app.on('ready')");
+      if (isLoader) {
+        log("❌", "跨平台构建的 main.cjs 仍是 .jsc 加载桥（字节码模式残留），Windows 加载必崩");
+        return false;
+      }
+      if (isObfuscated) {
+        log("✅", "跨平台混淆模式验证通过（无 .jsc，main.cjs 为混淆源码）");
+      } else if (isPlain) {
+        log("❌", "main.cjs 疑似未混淆（含明文业务标识）——混淆步骤可能未生效");
+        return false;
+      } else {
+        log("⚠️", "main.cjs 未检测到混淆特征 _0x（可能混淆等级未输出该模式），不阻断");
+      }
     }
   } catch (e) {
     log("⚠️", `asar 字节码清单验证失败（不阻断）: ${e.message}`);

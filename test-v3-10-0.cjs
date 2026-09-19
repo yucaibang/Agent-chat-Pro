@@ -133,7 +133,13 @@ function check(name, condition) {
   check("cache-cleaner.cjs 纳入中等混淆", /"main\/cache-cleaner\.cjs"/.test(obfuscate));
   check("v3.9.0 遗漏补齐：status 两模块纳入混淆", /"main\/modules\/status\/status-audit-journal\.cjs"/.test(obfuscate) && /"main\/modules\/status\/status-lifecycle\.cjs"/.test(obfuscate));
   check("cache-cleaner.cjs 纳入 V8 字节码编译", /"src\/main\/cache-cleaner\.cjs"/.test(pipeline));
-  check("版本号 3.10.0", /"version": "3\.10\.0"/.test(read("package.json")));
+  check("版本号 ≥ 3.10.0（语义比较）", (() => {
+    const m = read("package.json").match(/"version": "(\d+)\.(\d+)\.(\d+)"/);
+    if (!m) return false;
+    const [maj, min, pat] = [Number(m[1]), Number(m[2]), Number(m[3])];
+    return maj > 3 || (maj === 3 && (min > 10 || (min === 10 && pat >= 0)));
+  })());
+  check("v3.11.0 跨平台构建跳过字节码", /bytecodeEnabled\(\)/.test(pipeline) && /跨 OS 不兼容/.test(pipeline));
 
   console.log("── bridge MessageQueue 修复（上轮半成品）──");
   const bridge = read("src/bridge/agent-sdk-bridge.mjs");
