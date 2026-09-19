@@ -73,6 +73,7 @@ const OBFUSCATE_FILES = {
     "main/integrity-guard.cjs",  // 完整性自检模块
     "main/model-config.cjs",      // 模型配置
     "main/status-event-normalizer.cjs", // 状态归一化
+    "main/claude-launch-diagnostics.cjs", // Claude 启动失败诊断（v3.7.1）
     // ── 模块化架构（移植自 Agent Orbit 0.9.6，v3.7.0 接线）──
     "main/modules/foundation/module-contract.cjs",
     "main/modules/foundation/module-registry.cjs",

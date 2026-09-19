@@ -13,6 +13,7 @@ const {
   usageFromEvent
 } = require("./protocol.cjs");
 const { buildCommandWithMode, buildBridgeStartWithMode } = require("./modes/mode-params.cjs");
+const { friendlyClaudeLaunchError } = require("./claude-launch-diagnostics.cjs");
 const { readModelSettings, replaceModelSettings } = require("./model-config.cjs");
 
 const TOOL_PROGRESS_NOTICE_COUNTS = [8, 24];
@@ -91,7 +92,7 @@ async function verifyConnection(config, onUnknownHost, onLog) {
     const prefix = directory ? `cd -- ${shellQuote(directory)} && ` : "";
     const result = await exec(client, `${prefix}${shellQuote(config.wakeName)} --version`);
     onLog?.("claude_version_result", { exitCode: result.code, version: result.stdout.trim(), stderr: result.stderr.trim() });
-    if (result.code !== 0) throw new Error(result.stderr || "无法运行 Claude 命令。");
+    if (result.code !== 0) throw new Error(friendlyClaudeLaunchError(result.stderr || "无法运行 Claude 命令。", { host: config.host }));
     return result.stdout.trim() || "已连接";
   } finally {
     client.end();
@@ -648,7 +649,7 @@ function runClaude(config, message, sessionId, attachments = [], callbacks = {})
             });
             if (cancelled) return reject(cancellationError());
             if (code === undefined || code === null) return reject(asConnectionFailure(new Error("SSH 数据流意外中断。")));
-            if (code !== 0) return reject(new Error(cleanError(stderr) || `Claude 已退出（代码 ${code}）。`));
+            if (code !== 0) return reject(new Error(friendlyClaudeLaunchError(cleanError(stderr) || `Claude 已退出（代码 ${code}）。`, { host: config.host })));
             resolve();
           });
         });
@@ -693,7 +694,7 @@ function runClaude(config, message, sessionId, attachments = [], callbacks = {})
             });
             if (cancelled) return reject(cancellationError());
             if (code === undefined || code === null) return reject(asConnectionFailure(new Error("SSH 数据流意外中断。")));
-            if (code !== 0) return reject(new Error(cleanError(stderr) || `Claude 已退出（代码 ${code}）。`));
+            if (code !== 0) return reject(new Error(friendlyClaudeLaunchError(cleanError(stderr) || `Claude 已退出（代码 ${code}）。`, { host: config.host })));
             resolve();
           });
         });

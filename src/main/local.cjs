@@ -6,6 +6,7 @@ const { spawn, execFile } = require("child_process");
 const { JsonLineParser, buildClaudeArgs, sessionFromEvent, textFromEvent, usageFromEvent } = require("./protocol.cjs");
 const { buildLocalArgsWithMode } = require("./modes/mode-params.cjs");
 const { handleToolPayload, mimeFromPath } = require("./ssh.cjs");
+const { friendlyClaudeLaunchError } = require("./claude-launch-diagnostics.cjs");
 const { readModelSettings, replaceModelSettings } = require("./model-config.cjs");
 
 const MAX_REQUEST_MS = 30 * 60 * 1000;
@@ -15,7 +16,7 @@ async function verifyLocalConnection(config, onLog) {
   const command = await resolveLocalCommand(config.wakeName);
   const result = await runProcess(command, ["--version"], "", config.workingDirectory);
   onLog?.("local_claude_version_result", { exitCode: result.code, version: result.stdout.trim(), stderr: result.stderr.trim() });
-  if (result.code !== 0) throw new Error(cleanError(result.stderr) || "无法运行本机 Claude 命令。");
+  if (result.code !== 0) throw new Error(friendlyClaudeLaunchError(cleanError(result.stderr) || "无法运行本机 Claude 命令。", { local: true }));
   return result.stdout.trim() || "本机 Claude 已就绪";
 }
 
@@ -165,7 +166,7 @@ function runLocalClaude(config, message, sessionId, attachments = [], callbacks 
           stderr: cleanError(stderr)
         });
         if (cancelled) return reject(cancellationError());
-        if (code !== 0) return reject(new Error(cleanError(stderr) || `本机 Claude 已退出（代码 ${code}）。`));
+        if (code !== 0) return reject(new Error(friendlyClaudeLaunchError(cleanError(stderr) || `本机 Claude 已退出（代码 ${code}）。`, { local: true })));
         resolve();
       });
       child.stdin.end(prompt);
