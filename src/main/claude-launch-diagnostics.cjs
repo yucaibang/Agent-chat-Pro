@@ -56,4 +56,24 @@ function friendlyClaudeLaunchError(raw, context = {}) {
   return parts.join("\n");
 }
 
-module.exports = { friendlyClaudeLaunchError, LAUNCH_FAILURE_PATTERNS, FIX_COMMAND };
+/**
+ * 工作目录不存在时的中文诊断（v3.7.2）。
+ *
+ * 背景：SDK 0.3.263 的启发式很粗糙——「文件存在 + spawn 失败」一律套 libc
+ * 模板。实测 2026-09-19 用户报错，真实原因是客户端传的 workingDirectory 在
+ * NAS 上不存在，SDK 却误报成「musl 版 Claude」。与其让 SDK 猜，不如客户端
+ * 在启动前先验证目录，报准确的错误。
+ * @param {string} directory 客户端设置里填的工作目录
+ * @param {{host?: string, local?: boolean}} [context] 场景上下文
+ * @returns {string} 中文友好报错
+ */
+function describeMissingWorkingDirectory(directory, context = {}) {
+  const where = context.local ? "这台电脑" : (context.host ? `NAS（${context.host}）` : "NAS");
+  return [
+    `${where}上找不到工作目录「${directory}」。`,
+    "Claude 需要在一个已存在的目录里启动，目录不存在会导致 Agent 启动失败（远端 SDK 可能把它误报为 libc / 二进制问题，请忽略那种提示）。",
+    "修复方法：到「设置 → 工作目录」改成 NAS 上已存在的路径（例如 /data），或直接留空使用主目录。"
+  ].join("\n");
+}
+
+module.exports = { friendlyClaudeLaunchError, describeMissingWorkingDirectory, LAUNCH_FAILURE_PATTERNS, FIX_COMMAND };

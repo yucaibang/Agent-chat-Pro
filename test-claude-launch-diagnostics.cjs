@@ -15,7 +15,7 @@
 
 const assert = require("assert");
 const fs = require("fs");
-const { friendlyClaudeLaunchError, LAUNCH_FAILURE_PATTERNS, FIX_COMMAND } = require("./src/main/claude-launch-diagnostics.cjs");
+const { friendlyClaudeLaunchError, describeMissingWorkingDirectory, LAUNCH_FAILURE_PATTERNS, FIX_COMMAND } = require("./src/main/claude-launch-diagnostics.cjs");
 
 let pass = 0;
 let fail = 0;
@@ -94,6 +94,50 @@ test("接线点：local.cjs verifyLocalConnection + runLocalClaude 均已套用"
 test("接线点：混淆清单已纳入诊断模块", () => {
   const obf = fs.readFileSync("scripts/obfuscate.cjs", "utf8");
   assert.ok(obf.includes("main/claude-launch-diagnostics.cjs"), "obfuscate.cjs 应含诊断模块");
+});
+
+// ===== v3.7.2 工作目录诊断 =====
+
+test("工作目录诊断：NAS 带主机名措辞 + 修复指引", () => {
+  const result = describeMissingWorkingDirectory("/vol1/bad/dir", { host: "10.66.1.99" });
+  assert.ok(result.includes("NAS（10.66.1.99）"), `应含主机名：${result}`);
+  assert.ok(result.includes("/vol1/bad/dir"), "应回显坏目录路径");
+  assert.ok(result.includes("工作目录"), "应含「工作目录」关键词");
+  assert.ok(result.includes("留空使用主目录"), "应含修复指引");
+  assert.ok(!result.includes("常见原因"), "不应套用启动失败的误导模板");
+  assert.ok(!result.includes("musl 版 Claude"), "不应出现 musl 版 Claude 的误导提示");
+});
+
+test("工作目录诊断：本机措辞", () => {
+  const result = describeMissingWorkingDirectory("C:\\bad\\dir", { local: true });
+  assert.ok(result.includes("这台电脑"), `应含本机措辞：${result}`);
+});
+
+test("工作目录诊断：无主机时默认 NAS", () => {
+  const result = describeMissingWorkingDirectory("/tmp/x", {});
+  assert.ok(result.startsWith("NAS"), `应以 NAS 开头：${result}`);
+});
+
+test("工作目录诊断：已导出且可独立调用", () => {
+  assert.strictEqual(typeof describeMissingWorkingDirectory, "function");
+  const result = describeMissingWorkingDirectory("/x", { host: "h" });
+  assert.ok(result.includes("设置"), "应指向设置页");
+});
+
+test("v3.7.2 接线点：ssh.cjs 两处预检 + require 扩展", () => {
+  const ssh = fs.readFileSync("src/main/ssh.cjs", "utf8");
+  assert.ok(ssh.includes("describeMissingWorkingDirectory"), "ssh.cjs 应导入目录诊断");
+  const checks = (ssh.match(/test -d -- /g) || []).length;
+  assert.strictEqual(checks, 2, `ssh.cjs 应有 2 处 test -d 预检（verifyConnection + runClaude）：实际 ${checks}`);
+  const dirThrows = (ssh.match(/describeMissingWorkingDirectory\(/g) || []).length;
+  assert.strictEqual(dirThrows, 2, `ssh.cjs 应有 2 处目录诊断调用：实际 ${dirThrows}`);
+});
+
+test("v3.7.2 接线点：local.cjs 目录校验统一走诊断函数", () => {
+  const local = fs.readFileSync("src/main/local.cjs", "utf8");
+  const uses = (local.match(/describeMissingWorkingDirectory\(/g) || []).length;
+  assert.strictEqual(uses, 1, `local.cjs validatedWorkingDirectory 应有 1 处调用：实际 ${uses}`);
+  assert.ok(!local.includes("本机工作目录不存在："), "旧文案应已替换");
 });
 
 console.log(`\n==================================================\n📊 测试结果: ${pass} 通过, ${fail} 失败, 共 ${pass + fail} 项`);

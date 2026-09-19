@@ -13,7 +13,7 @@ const {
   usageFromEvent
 } = require("./protocol.cjs");
 const { buildCommandWithMode, buildBridgeStartWithMode } = require("./modes/mode-params.cjs");
-const { friendlyClaudeLaunchError } = require("./claude-launch-diagnostics.cjs");
+const { friendlyClaudeLaunchError, describeMissingWorkingDirectory } = require("./claude-launch-diagnostics.cjs");
 const { readModelSettings, replaceModelSettings } = require("./model-config.cjs");
 
 const TOOL_PROGRESS_NOTICE_COUNTS = [8, 24];
@@ -89,6 +89,13 @@ async function verifyConnection(config, onUnknownHost, onLog) {
   const client = await connectWithRetry(config, onUnknownHost, onLog);
   try {
     const directory = String(config.workingDirectory || "").trim();
+    if (directory) {
+      // v3.7.2：工作目录预检——目录不存在时报准确中文错误，不让 SDK 误报 libc 问题
+      const directoryCheck = await exec(client, `test -d -- ${shellQuote(directory)}`);
+      if (directoryCheck.code !== 0) {
+        throw new Error(describeMissingWorkingDirectory(directory, { host: config.host }));
+      }
+    }
     const prefix = directory ? `cd -- ${shellQuote(directory)} && ` : "";
     const result = await exec(client, `${prefix}${shellQuote(config.wakeName)} --version`);
     onLog?.("claude_version_result", { exitCode: result.code, version: result.stdout.trim(), stderr: result.stderr.trim() });
@@ -482,6 +489,15 @@ function runClaude(config, message, sessionId, attachments = [], callbacks = {})
     ].join(" && "));
     bridgeMode = bridgeCheck.stdout.trim() === "READY";
     bridgeCapabilityChecked = true;
+    // v3.7.2：工作目录预检——目录不存在时远端 SDK 会误报 libc 问题（实测
+    // 2026-09-19：workingDirectory 不存在 → SDK 套 libc 模板），提前拦截。
+    const workingDirectory = String(config.workingDirectory || "").trim();
+    if (workingDirectory) {
+      const directoryCheck = await exec(client, `test -d -- ${shellQuote(workingDirectory)}`);
+      if (directoryCheck.code !== 0) {
+        throw new Error(describeMissingWorkingDirectory(workingDirectory, { host: config.host }));
+      }
+    }
     const wakeName = String(config.wakeName || "claude").trim();
     let resolvedClaude = "";
     if (bridgeMode) {

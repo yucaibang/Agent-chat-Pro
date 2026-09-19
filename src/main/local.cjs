@@ -6,7 +6,7 @@ const { spawn, execFile } = require("child_process");
 const { JsonLineParser, buildClaudeArgs, sessionFromEvent, textFromEvent, usageFromEvent } = require("./protocol.cjs");
 const { buildLocalArgsWithMode } = require("./modes/mode-params.cjs");
 const { handleToolPayload, mimeFromPath } = require("./ssh.cjs");
-const { friendlyClaudeLaunchError } = require("./claude-launch-diagnostics.cjs");
+const { friendlyClaudeLaunchError, describeMissingWorkingDirectory } = require("./claude-launch-diagnostics.cjs");
 const { readModelSettings, replaceModelSettings } = require("./model-config.cjs");
 
 const MAX_REQUEST_MS = 30 * 60 * 1000;
@@ -234,7 +234,7 @@ function validatedWorkingDirectory(value) {
   const directory = String(value || "").trim();
   if (!directory) return undefined;
   let stat;
-  try { stat = fs.statSync(directory); } catch { throw new Error(`本机工作目录不存在：${directory}`); }
+  try { stat = fs.statSync(directory); } catch { throw new Error(describeMissingWorkingDirectory(directory, { local: true })); }
   if (!stat.isDirectory()) throw new Error("本机工作目录不是文件夹。");
   return directory;
 }
