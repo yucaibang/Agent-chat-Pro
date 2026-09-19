@@ -78,7 +78,7 @@ function step1_obfuscate() {
   log("✅", "代码混淆完成");
 }
 
-function step2_bytenode() {
+async function step2_bytenode() {
   log("⚙️", "步骤 2/6: V8 字节码编译（bytenode）...");
 
   // 检查 bytenode 是否可用
@@ -113,12 +113,13 @@ function step2_bytenode() {
     }
 
     try {
-      bytenode.compileFile({
+      await bytenode.compileFile({
         filename: srcPath,
         output: jscPath,
         electron: true,
         electronPath,
       });
+      if (!fs.existsSync(jscPath)) throw new Error("编译后未生成 .jsc 文件");
       log("  ✅", `编译: ${path.basename(file)} → ${path.basename(jscPath)}`);
       compiled++;
       compiledList.push(jscPath);
@@ -251,7 +252,6 @@ async function main() {
   const target = process.argv[2] || "nsis";
 
   if (target === "verify") {
-    step6_verify();
     process.exit(step6_verify() ? 0 : 1);
   }
 
@@ -265,11 +265,12 @@ async function main() {
 
   try {
     step1_obfuscate();
-    step2_bytenode(); // 可选步骤，失败则跳过
+    await step2_bytenode(); // 可选步骤，失败则跳过
     step3_build(target);
     step4_fuses();
     step5_restore();
-    step6_verify();
+    const verified = step6_verify();
+    if (!verified) throw new Error("构建产物验证未通过（见上方 ❌ 项）");
 
     const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
     console.log("");
