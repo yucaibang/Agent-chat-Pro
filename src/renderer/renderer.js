@@ -1227,6 +1227,41 @@ document.querySelector("#toggle-proxy-password")?.addEventListener("click", () =
   document.querySelector("#toggle-proxy-password").textContent = visible ? "显示" : "隐藏";
   input.focus();
 });
+// ── 代理连通性测试 ──
+document.querySelector("#proxy-test")?.addEventListener("click", async () => {
+  const button = document.querySelector("#proxy-test");
+  const resultEl = document.querySelector("#proxy-test-result");
+  if (!button || !resultEl || button.disabled) return;
+  button.disabled = true;
+  button.textContent = "测试中…";
+  resultEl.hidden = false;
+  resultEl.classList.remove("ok", "fail");
+  resultEl.textContent = "正在通过代理发起测试请求…";
+  try {
+    const result = await window.agentChatPro.testProxy({
+      enabled: document.querySelector("#proxy-enabled")?.checked || false,
+      type: document.querySelector("#proxy-type")?.value || "http",
+      host: document.querySelector("#proxy-host")?.value || "",
+      port: Number(document.querySelector("#proxy-port")?.value) || 0,
+      username: document.querySelector("#proxy-username")?.value || "",
+      password: document.querySelector("#proxy-password")?.value || "", // 留空时主进程用已保存密码兜底
+    });
+    if (result?.ok) {
+      resultEl.textContent = `✅ ${result.message} · ${result.latencyMs}ms`;
+      resultEl.classList.add("ok");
+    } else {
+      resultEl.textContent = `❌ ${result?.error || "测试失败"}`;
+      resultEl.classList.add("fail");
+    }
+  } catch (error) {
+    resultEl.hidden = false;
+    resultEl.textContent = `❌ 测试失败：${error?.message || error}`;
+    resultEl.classList.add("fail");
+  } finally {
+    button.disabled = false;
+    button.textContent = "测试代理连接";
+  }
+});
 passwordInput.addEventListener("input", () => {
   document.querySelector("#password-hint").textContent = passwordInput.value
     ? `本次输入 ${[...passwordInput.value].length} 个字符，请确认没有重复`

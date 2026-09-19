@@ -35,7 +35,7 @@ const { listModes, getMode, createMode, updateMode, deleteMode, exportModes, imp
 const { buildCommandWithMode, buildBridgeStartWithMode, buildLocalArgsWithMode } = require("./modes/mode-params.cjs");
 const { NetworkManager, STATES } = require("./network/network-manager.cjs");
 const { LatencyMonitor } = require("./network/latency-monitor.cjs");
-const { sendCloudChat, buildMessages, verifyCloudConnection } = require("./cloud-chat.cjs");
+const { sendCloudChat, buildMessages, verifyCloudConnection, testProxyConnectivity } = require("./cloud-chat.cjs");
 const {
   AUDIT_FILE_FORMATS,
   AUDIT_TOOL_ACTIONS,
@@ -677,6 +677,17 @@ app.whenReady().then(async () => {
     const error = await shell.openPath(localPath);
     if (error) throw new Error("文件已下载，但无法打开：" + error);
     return localPath;
+  });
+  ipcMain.handle("chat:test-proxy", async (_event, proxyConfig) => {
+    const merged = { ...(proxyConfig || {}) };
+    if (!merged.password) {
+      // 表单密码留空时用已保存的代理密码兜底（避免"密码已保存未重输"场景测试失败）
+      const cloudConfig = getCloudAiConfig();
+      if (cloudConfig?.proxy?.password) merged.password = cloudConfig.proxy.password;
+    }
+    const result = await testProxyConnectivity(merged);
+    writeLog("proxy_test", { ok: result.ok, latencyMs: result.latencyMs, statusCode: result.statusCode }); // 不记录地址/凭据
+    return result;
   });
   ipcMain.handle("connection:test", async (_event, input) => {
     const mode = input?.connectionMode === "local" ? "local" : input?.connectionMode === "cloud" ? "cloud" : "ssh";

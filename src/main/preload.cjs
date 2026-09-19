@@ -68,6 +68,8 @@ contextBridge.exposeInMainWorld("agentChatPro", {
   },
   // ── 连接测试 IPC ──
   testConnection: (settings) => ipcRenderer.invoke("connection:test", settings),
+  // ── 代理连通性测试 IPC ──
+  testProxy: (proxyConfig) => ipcRenderer.invoke("chat:test-proxy", proxyConfig),
   // ── Markdown 渲染 IPC ──
   renderMarkdown: (source) => ipcRenderer.invoke("markdown:render", source),
   // ── 链接打开 IPC ──

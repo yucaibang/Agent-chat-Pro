@@ -397,6 +397,69 @@ function friendlyError(error) {
   return Object.assign(new Error(`云端 AI 连接失败：${msg}`), { code: "CLOUD_ERROR" });
 }
 
+// ────────────────────────────────────────────
+//  代理连通性测试
+// ────────────────────────────────────────────
+
+const PROXY_TEST_URL = "https://www.gstatic.com/generate_204";
+const PROXY_TEST_TIMEOUT_MS = 10000;
+
+/** 代理测试错误转中文提示 */
+function translateProxyTestError(error) {
+  const code = error && error.code;
+  const msg = (error && error.message) || "";
+  if (code === "ECONNREFUSED") return "代理端口拒绝连接（ECONNREFUSED），请确认代理软件正在运行、地址端口填写正确。";
+  if (code === "ETIMEDOUT" || /timeout/i.test(msg)) return "连接代理超时，请检查地址/端口/防火墙设置。";
+  if (code === "ECONNRESET" || code === "EPIPE") return "连接被重置，代理可能不稳定或代理类型选择有误。";
+  if (code === "ENOTFOUND" || code === "EAI_AGAIN") return "代理地址无法解析，请检查代理地址是否填写正确。";
+  if (code === "EHOSTUNREACH" || code === "ENETUNREACH") return "无法连接到代理服务器，请检查代理地址和端口。";
+  if (code === "EPROTO") return "协议不匹配，请确认代理类型（HTTP/SOCKS5）选择正确。";
+  if (code === "ABORT_ERR") return "测试请求已超时取消。";
+  return `代理测试失败：${msg || String(error)}`;
+}
+
+/** 代理连通性测试 — 通过代理发起一次轻量 HTTPS 请求，返回结果与耗时 */
+function testProxyConnectivity(proxyConfig) {
+  return new Promise((resolve) => {
+    const startedAt = Date.now();
+    const finish = (partial) => resolve({ latencyMs: Date.now() - startedAt, ...partial });
+    const config = proxyConfig || {};
+    if (!config.enabled || !config.host || !config.port) {
+      return finish({ ok: false, error: "代理未启用或地址/端口不完整，请先启用代理并填写地址和端口。" });
+    }
+    let agent;
+    try {
+      agent = buildProxyAgent(config);
+    } catch (error) {
+      return finish({ ok: false, error: `代理配置无效：${error.message}` });
+    }
+    if (!agent) {
+      return finish({ ok: false, error: "代理未启用或地址/端口不完整，请先启用代理并填写地址和端口。" });
+    }
+    let settled = false;
+    const request = https.get(PROXY_TEST_URL, { agent, timeout: PROXY_TEST_TIMEOUT_MS }, (response) => {
+      const statusCode = response.statusCode || 0;
+      response.resume(); // 丢弃响应体，只测连通
+      if (statusCode === 407) {
+        settled = true;
+        return finish({ ok: false, statusCode, error: "代理要求认证（407），请检查用户名/密码。" });
+      }
+      settled = true;
+      // 任何其他状态码都代表代理隧道已建立，即视为连通
+      request.destroy();
+      response.destroy();
+      return finish({ ok: true, statusCode, message: `代理连通正常（HTTP ${statusCode}）` });
+    });
+    request.on("timeout", () => {
+      request.destroy();
+      if (!settled) finish({ ok: false, error: "连接代理超时（10 秒），请检查地址/端口/防火墙设置。" });
+    });
+    request.on("error", (error) => {
+      if (!settled) finish({ ok: false, error: translateProxyTestError(error) });
+    });
+  });
+}
+
 /** 测试云端 AI 连接 */
 function verifyCloudConnection(config, onLog) {
   return sendCloudChat(
@@ -408,4 +471,4 @@ function verifyCloudConnection(config, onLog) {
   });
 }
 
-module.exports = { sendCloudChat, buildMessages, verifyCloudConnection, friendlyError };
+module.exports = { sendCloudChat, buildMessages, verifyCloudConnection, friendlyError, testProxyConnectivity };
