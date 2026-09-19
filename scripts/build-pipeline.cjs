@@ -18,8 +18,9 @@
  *   5. 运行时自检（integrity-guard.cjs）
  *   6. 商业壳加固（需在 Windows 端手动执行，见文档）
  *
- * 注意：bytenode 编译需要在目标 Electron 版本的 Node 上执行，
- *       当前在 NAS(Linux) 上编译可能不兼容 Windows Electron。
+ * 注意：bytenode 编译必须用 Electron 本体执行（electron: true + electronPath），
+ *       V8 字节码与 V8 版本强绑定但跨操作系统兼容（实测 Electron 35.7.5 Linux 编译
+ *       → 同版本 Electron 加载成功 / 系统 Node 加载报 Invalid cachedData）。
  *       如果 bytenode 不可用，跳过此步骤，回退到纯混淆模式。
  */
 
@@ -37,6 +38,7 @@ const BYTECODE_FILES = [
   "src/main/main.cjs",
   "src/main/settings.cjs",
   "src/main/cloud-chat.cjs",
+  "src/main/ssh.cjs",
 ];
 
 // ── 工具函数 ──────────────────────────────────────────
@@ -84,62 +86,65 @@ function step2_bytenode() {
     require.resolve("bytenode");
   } catch {
     log("⚠️", "bytenode 不可用，跳过字节码编译（回退到纯混淆模式）");
-    log("💡", "安装方法: npm install --save-dev bytenode");
+    log("💡", "安装方法: npm install --save bytenode");
     return false;
   }
 
-  // 检查 Electron 版本兼容性
+  // Electron 二进制必须存在（编译用它执行，保证 V8 版本与运行时一致）
+  const electronPath = path.join(PROJECT_ROOT, "node_modules", "electron", "dist", "electron");
+  if (!fs.existsSync(electronPath)) {
+    log("⚠️", `Electron 二进制不存在: ${electronPath}，跳过字节码编译`);
+    return false;
+  }
   const electronVersion = require(path.join(PROJECT_ROOT, "node_modules/electron/package.json")).version;
-  log("📋", `Electron 版本: ${electronVersion}`);
+  log("📋", `Electron 版本: ${electronVersion}（用其本体编译，V8 字节码跨 OS 兼容）`);
 
-  try {
-    const bytenode = require("bytenode");
+  const bytenode = require("bytenode");
+  let compiled = 0;
+  const compiledList = [];
 
-    let compiled = 0;
-    for (const file of BYTECODE_FILES) {
-      const srcPath = path.join(PROJECT_ROOT, file);
-      const jscPath = srcPath.replace(/\.cjs$/, ".jsc");
+  for (const file of BYTECODE_FILES) {
+    const srcPath = path.join(PROJECT_ROOT, file);
+    const jscPath = srcPath.replace(/\.cjs$/, ".jsc");
 
-      if (!fs.existsSync(srcPath)) {
-        log("⚠️", `  跳过（文件不存在）: ${file}`);
-        continue;
-      }
-
-      try {
-        bytenode.compileFile({
-          filename: srcPath,
-          output: jscPath,
-          electron: path.join(PROJECT_ROOT, "node_modules/electron/dist/electron"),
-        });
-        log("  ✅", `编译: ${path.basename(file)} → ${path.basename(jscPath)}`);
-        compiled++;
-      } catch (e) {
-        log("⚠️", `  编译失败: ${file} — ${e.message}`);
-        log("💡", `  跳过此文件，将使用混淆版 .cjs`);
-      }
+    if (!fs.existsSync(srcPath)) {
+      log("⚠️", `  跳过（文件不存在）: ${file}`);
+      continue;
     }
 
-    // 创建加载器：.cjs 文件加载对应的 .jsc（如果存在）
-    for (const file of BYTECODE_FILES) {
-      const srcPath = path.join(PROJECT_ROOT, file);
-      const jscPath = srcPath.replace(/\.cjs$/, ".jsc");
-      const jscFile = path.basename(file).replace(/\.cjs$/, ".jsc");
-
-      if (fs.existsSync(jscPath)) {
-        // 替换 .cjs 为加载器
-        const loader = `"use strict";\nrequire("./${jscFile}");\n`;
-        fs.writeFileSync(srcPath, loader);
-        log("  📝", `创建加载器: ${path.basename(file)} → require("${jscFile}")`);
-      }
+    try {
+      bytenode.compileFile({
+        filename: srcPath,
+        output: jscPath,
+        electron: true,
+        electronPath,
+      });
+      log("  ✅", `编译: ${path.basename(file)} → ${path.basename(jscPath)}`);
+      compiled++;
+      compiledList.push(jscPath);
+    } catch (e) {
+      log("⚠️", `  编译失败: ${file} — ${e.message}`);
+      log("💡", "  跳过此文件，将使用混淆版 .cjs");
     }
+  }
 
-    log("✅", `字节码编译完成: ${compiled}/${BYTECODE_FILES.length} 个文件`);
-    return compiled > 0;
-  } catch (e) {
-    log("⚠️", `bytenode 编译失败: ${e.message}`);
-    log("💡", "回退到纯混淆模式");
+  if (compiled === 0) {
+    log("⚠️", "没有任何文件编译成功，回退到纯混淆模式");
     return false;
   }
+
+  // 用加载桥替换 .cjs（修复：必须 require bytenode 注册 .jsc 扩展 + module.exports 转发，
+  // 否则 require 该模块的业务代码拿到 undefined 直接崩溃）
+  for (const jscPath of compiledList) {
+    const srcPath = jscPath.replace(/\.jsc$/, ".cjs");
+    const jscFile = path.basename(jscPath);
+    const loader = `"use strict";\nrequire("bytenode");\nmodule.exports = require("./${jscFile}");\n`;
+    fs.writeFileSync(srcPath, loader);
+    log("  📝", `加载桥: ${path.basename(srcPath)} → bytenode + require("./${jscFile}")`);
+  }
+
+  log("✅", `字节码编译完成: ${compiled}/${BYTECODE_FILES.length} 个文件`);
+  return compiled > 0;
 }
 
 function step3_build(target = "nsis") {
@@ -215,6 +220,21 @@ function step6_verify() {
   } else {
     log("❌", "ASAR 包不存在！");
     return false;
+  }
+
+  // 验证字节码已打包（v3.8.0）：asar 内必须有 .jsc + bytenode 运行时
+  try {
+    const asarList = execSync(`npx asar list "${asarPath}"`, { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
+    const jscCount = (asarList.match(/\.jsc\b/gm) || []).length;
+    const hasBytenode = /bytenode[\\/]lib[\\/]index\.js/.test(asarList);
+    if (jscCount >= BYTECODE_FILES.length && hasBytenode) {
+      log("✅", `V8 字节码已打包（${jscCount} 个 .jsc + bytenode 运行时）`);
+    } else {
+      log("❌", `字节码打包不完整: .jsc=${jscCount}（期望≥${BYTECODE_FILES.length}），bytenode=${hasBytenode ? "有" : "无"}`);
+      return false;
+    }
+  } catch (e) {
+    log("⚠️", `asar 字节码清单验证失败（不阻断）: ${e.message}`);
   }
 
   // 验证 integrity-guard.cjs 存在
