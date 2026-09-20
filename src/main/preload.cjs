@@ -74,6 +74,8 @@ contextBridge.exposeInMainWorld("agentChatPro", {
   compactContext: (payload) => ipcRenderer.invoke("chat:compact", payload),
   // 上下文进度条回填（v3.12.1）：切换对话时取 main 侧记录的 {tokens, limit}
   getConversationContext: (conversationId) => ipcRenderer.invoke("context:get", conversationId),
+  // 关于页版本（v3.12.2）
+  getAppVersion: () => ipcRenderer.invoke("app:version"),
   // ── 缓存清理 IPC（v3.10.0）──
   scanSystemCaches: () => ipcRenderer.invoke("cache:scan"),
   cleanSystemCaches: (targets) => ipcRenderer.invoke("cache:clean", targets),

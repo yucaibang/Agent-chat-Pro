@@ -1062,6 +1062,8 @@ app.whenReady().then(async () => {
       return false;
     }
   });
+  // 关于页版本展示（v3.12.2）
+  ipcMain.handle("app:version", () => app.getVersion());
   ipcMain.handle("cache:scan", async () => {
     try {
       const result = await scanSystemCaches();

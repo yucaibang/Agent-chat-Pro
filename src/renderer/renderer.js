@@ -1023,6 +1023,21 @@ document.querySelector("#show-settings").addEventListener("click", openSettings)
 document.querySelector("#header-appearance").addEventListener("click", openAppearanceDialog);
 document.querySelector("#close-settings").addEventListener("click", () => elements.dialog.close());
 document.querySelector("#close-appearance").addEventListener("click", () => document.querySelector("#appearance-dialog").close());
+
+// ── 设置中心导航（v3.12.2：连接设置 / 插件 / 关于）──
+function switchSettingsTab(tab) {
+  document.querySelectorAll("[data-settings-tab]").forEach((item) => item.classList.toggle("active", item.dataset.settingsTab === tab));
+  document.querySelectorAll("[data-settings-panel]").forEach((panel) => { panel.hidden = panel.dataset.settingsPanel !== tab; });
+}
+document.querySelectorAll("[data-settings-tab]").forEach((item) => {
+  item.addEventListener("click", () => switchSettingsTab(item.dataset.settingsTab));
+});
+async function fillAboutVersion() {
+  try { document.querySelector("#about-version").textContent = await window.agentChatPro.getAppVersion(); }
+  catch { /* 版本通道不可用时保持占位符 */ }
+}
+fillAboutVersion();
+
 elements.dialog.addEventListener("close", async () => {
   try { populateSettings(await window.agentChatPro.loadSettings()); }
   catch (error) { setConnection("重新读取设置失败：" + error.message, "error"); }
@@ -1736,6 +1751,13 @@ document.querySelectorAll(".menu-trigger").forEach((trigger) => {
 document.querySelectorAll("[data-window-action]").forEach((button) => {
   button.addEventListener("click", async () => {
     closeAppMenus();
+    // 「关于」走设置中心的关于页（v3.12.2），其余窗口动作照旧发 main
+    if (button.dataset.windowAction === "about") {
+      populateSettings(await window.agentChatPro.loadSettings());
+      switchSettingsTab("about");
+      elements.dialog.showModal();
+      return;
+    }
     await window.agentChatPro.windowAction(button.dataset.windowAction);
   });
 });
