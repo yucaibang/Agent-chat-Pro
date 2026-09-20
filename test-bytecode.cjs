@@ -26,8 +26,8 @@ function check(name, condition) {
   console.log("── 流水线接线断言 ──");
   const pipeline = read("scripts/build-pipeline.cjs");
   check("BYTECODE_FILES 含 6 个核心模块", (pipeline.match(/src\/main\/[\w-]+\.cjs/g) || []).length >= 6);
-  check("loader 桥带 require(bytenode)", /require\("bytenode"\)/.test(pipeline));
-  check("loader 桥带 module.exports 转发", /module\.exports = require\("\.\//.test(pipeline));
+  check("loader 桥带 require(bytenode)", /require\("bytenode"\)/.test(read("scripts/loader-templates.cjs")));
+  check("loader 桥带 module.exports 转发（v3.12.0 模板已独立模块）", /module\.exports = require\("\.\//.test(read("scripts/loader-templates.cjs")));
   check("electron: true 参数", /electron: true,/.test(pipeline));
   check("electronPath 指向 Electron 本体", /electron.*dist.*electron/.test(pipeline));
   check("verify 校验 asar 内 .jsc", /asar list/.test(pipeline) && /\.jsc/.test(pipeline));

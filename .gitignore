@@ -1,2 +1,5 @@
 dist/
 node_modules/
+src/main/*.jsc
+src/main/*.enc
+dist/.bytecode-key.json

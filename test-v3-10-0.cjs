@@ -139,7 +139,7 @@ function check(name, condition) {
     const [maj, min, pat] = [Number(m[1]), Number(m[2]), Number(m[3])];
     return maj > 3 || (maj === 3 && (min > 10 || (min === 10 && pat >= 0)));
   })());
-  check("v3.11.0 跨平台构建跳过字节码", /bytecodeEnabled\(\)/.test(pipeline) && /跨 OS 不兼容/.test(pipeline));
+  check("v3.12.0 fallback 三件套替代 v3.11.0 跨平台跳过（skipJscCompile + fallback loader 模板）", /skipJscCompile\(\)/.test(pipeline) && /跨操作系统不兼容/.test(pipeline) && /fallbackLoaderTemplate/.test(pipeline) && /bytecode-encrypt\.cjs/.test(pipeline));
 
   console.log("── bridge MessageQueue 修复（上轮半成品）──");
   const bridge = read("src/bridge/agent-sdk-bridge.mjs");
