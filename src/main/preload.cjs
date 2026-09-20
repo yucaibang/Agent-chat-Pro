@@ -72,6 +72,8 @@ contextBridge.exposeInMainWorld("agentChatPro", {
   testProxy: (proxyConfig) => ipcRenderer.invoke("chat:test-proxy", proxyConfig),
   // ── 上下文压缩 IPC（v3.10.0）──
   compactContext: (payload) => ipcRenderer.invoke("chat:compact", payload),
+  // 上下文进度条回填（v3.12.1）：切换对话时取 main 侧记录的 {tokens, limit}
+  getConversationContext: (conversationId) => ipcRenderer.invoke("context:get", conversationId),
   // ── 缓存清理 IPC（v3.10.0）──
   scanSystemCaches: () => ipcRenderer.invoke("cache:scan"),
   cleanSystemCaches: (targets) => ipcRenderer.invoke("cache:clean", targets),

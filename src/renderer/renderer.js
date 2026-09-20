@@ -752,6 +752,15 @@ async function loadConversation(id) {
   sessionId = conversation.sessionId || "";
   attachments = [];
   resetContextBar(); // 切换对话时重置上下文进度条（新对话还没有 usage 数据）
+  // 回填 main 侧记录的该对话上下文状态（v3.12.1：切回旧对话进度条不再归零）
+  try {
+    const known = await window.agentChatPro.getConversationContext?.(conversationId);
+    if (known) {
+      contextTokens = Number(known.tokens) || 0;
+      contextLimit = Number(known.limit) || 0;
+      renderContextBar();
+    }
+  } catch {}
   renderAttachments();
   elements.messages.replaceChildren();
   conversation.messages.forEach((message) => {
@@ -1600,14 +1609,16 @@ window.agentChatPro.onChatEvent((event) => {
     // 处理 usage 事件：用实际 token 数据替换估算值
     if (event.usage) {
       const usage = event.usage;
-      // 兼容不同 API 的字段名：OpenAI 用 prompt_tokens/completion_tokens，Claude 用 input_tokens/output_tokens
-      const inputTokens = usage.input_tokens || usage.prompt_tokens || 0;
-      const outputTokens = usage.output_tokens || usage.completion_tokens || 0;
+      // 三种字段风格兼容（v3.12.1 修复：SSH/local 模式 protocol 已归一为驼峰，
+      // 旧代码只读下划线 → 确认值恒 0；OpenAI 风格为 prompt_tokens/completion_tokens）
+      const inputTokens = Number(usage.inputTokens ?? usage.input_tokens ?? usage.prompt_tokens ?? 0) || 0;
+      const outputTokens = Number(usage.outputTokens ?? usage.output_tokens ?? usage.completion_tokens ?? 0) || 0;
       if (inputTokens || outputTokens) {
-        // usage 事件包含当前回合的完整 token 数据
         // 把之前估算的流式 token 清零，用实际数据
         streamingTokens = 0;
-        confirmedTokens = inputTokens + outputTokens;
+        // ⚠️ 累计口径只记本轮真实输出：usage.input 是本轮请求的总输入（含全部历史上下文），
+        //    全量累加会随轮数平方级膨胀；输入部分已由用户消息按估算入账
+        confirmedTokens = outputTokens;
         updateTokenDisplay();
       }
     }

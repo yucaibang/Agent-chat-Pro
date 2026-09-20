@@ -956,6 +956,11 @@ app.whenReady().then(async () => {
     }
   };
 
+  // 渲染层切换对话时回填该对话的上下文进度条（v3.12.1：切回旧对话不再归零）
+  ipcMain.handle("context:get", (_event, conversationId) => {
+    return lastKnownContext.get(String(conversationId || "")) || null;
+  });
+
   /**
    * 执行压缩：独立一次 CLI 调用（resume 原会话 + 输入 "/compact"）。
    * /compact 是 CLI 本地命令（harness 拦截执行），不产生文本流，只发压缩事件。
