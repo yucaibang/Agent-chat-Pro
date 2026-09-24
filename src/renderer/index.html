@@ -179,6 +179,8 @@
         <aside class="settings-nav">
           <button type="button" class="settings-nav-item active" data-settings-tab="connection">🔗 连接设置</button>
           <button type="button" class="settings-nav-item" data-settings-tab="plugins">🧩 插件</button>
+          <button type="button" class="settings-nav-item" data-settings-tab="device">🖥️ 设备联动</button>
+          <button type="button" class="settings-nav-item" data-settings-tab="cache">🧹 缓存清理</button>
           <button type="button" class="settings-nav-item" data-settings-tab="about">ℹ️ 关于</button>
         </aside>
         <div class="settings-body">
@@ -358,7 +360,7 @@
       </form>
           </section>
           <section class="settings-panel" data-settings-panel="plugins" hidden>
-            <div class="settings-panel-heading"><div><h2>插件</h2><p>增强与扩展能力：上下文压缩 / Bridge / 联动控制 / 缓存清理</p></div></div>
+            <div class="settings-panel-heading"><div><h2>插件</h2><p>聊天链路增强：上下文压缩 / 增强 Bridge</p></div></div>
         <details id="compact-settings">
           <summary>上下文压缩</summary>
           <label class="checkbox"><input id="compact-auto" type="checkbox" /><span>自动压缩（上下文占用超过阈值时，回复结束后自动发送 /compact）</span></label>
@@ -386,7 +388,11 @@
             </div>
           </div>
         </details>
-        <details id="device-control-settings">
+            <p class="hint">更多插件能力规划中。</p>
+          </section>
+          <section class="settings-panel" data-settings-panel="device" hidden>
+            <div class="settings-panel-heading"><div><h2>设备联动</h2><p>Agent 直接控制本机：安装联动控件后，NAS 上的 Agent 可操作这台电脑</p></div></div>
+        <details id="device-control-settings" open>
           <summary>Agent 联动控制（可选安装）</summary>
           <div class="device-control-card">
             <div class="device-control-heading">
@@ -420,7 +426,10 @@
             </div>
           </div>
         </details>
-        <details id="cache-settings">
+          </section>
+          <section class="settings-panel" data-settings-panel="cache" hidden>
+            <div class="settings-panel-heading"><div><h2>缓存清理</h2><p>扫描并清理本机常见系统缓存（Windows）</p></div></div>
+        <details id="cache-settings" open>
           <summary>系统缓存清理（Windows）</summary>
           <p class="hint">扫描并清理本机常见缓存。分级：安全（默认勾选）/ 进阶（手动勾选）/ 管理员（弹出 UAC 确认）。明确不清理 Prefetch、WinSxS、Windows.old。</p>
           <div class="cache-scan-row">
@@ -433,7 +442,6 @@
             <span id="cache-clean-result" class="field-hint" hidden></span>
           </div>
         </details>
-            <p class="hint">更多插件能力规划中。</p>
           </section>
           <section class="settings-panel" data-settings-panel="about" hidden>
             <div class="about-hero">

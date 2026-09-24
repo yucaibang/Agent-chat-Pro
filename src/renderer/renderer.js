@@ -1027,7 +1027,14 @@ document.querySelector("#close-appearance").addEventListener("click", () => docu
 // ── 设置中心导航（v3.12.2：连接设置 / 插件 / 关于）──
 function switchSettingsTab(tab) {
   document.querySelectorAll("[data-settings-tab]").forEach((item) => item.classList.toggle("active", item.dataset.settingsTab === tab));
-  document.querySelectorAll("[data-settings-panel]").forEach((panel) => { panel.hidden = panel.dataset.settingsPanel !== tab; });
+  // hidden 与 .active 同步切换（v3.12.4 修复：两套 CSS 显示模型——
+  // [hidden]{display:none!important} 与 .settings-panel.active{display:block}——都必须正确，
+  // 否则面板 hidden 移除后因缺少 .active 仍被 .settings-panel{display:none} 隐藏 → 空白页）
+  document.querySelectorAll("[data-settings-panel]").forEach((panel) => {
+    const active = panel.dataset.settingsPanel === tab;
+    panel.classList.toggle("active", active);
+    panel.hidden = !active;
+  });
 }
 document.querySelectorAll("[data-settings-tab]").forEach((item) => {
   item.addEventListener("click", () => switchSettingsTab(item.dataset.settingsTab));
