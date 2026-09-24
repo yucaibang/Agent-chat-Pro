@@ -14,8 +14,18 @@ const { Transport } = require("./transport-base.cjs");
  * 3. 通过虚拟 IP 直接 SSH 到 NAS 的虚拟 IP
  * 4. 断开时终止 edge 进程
  *
+ * 传输模式自动兼容（v3.12.3）：
+ * - 默认先尝试 UDP 模式（edge 原生方式）
+ * - 网络就绪超时自动降级 TCP 模式（-S2，edge 全流量走 supernode TCP）——
+ *   适配 supernode 经由 FRP TCP 隧道暴露的场景（UDP 包无法进入 TCP 隧道）
+ * - 成功模式按「supernodeAddr:port」缓存，同进程内重连直接用已验证模式
+ *
  * 前提：需要本机安装 n2n（edge 命令），NAS 端也需运行 edge 加入同一社区。
  */
+
+/** 每个超级节点入口上次成功的传输模式（"udp" | "tcp"），进程内记忆 */
+const MODE_CACHE = new Map();
+
 class N2nMeshTransport extends Transport {
   constructor() {
     super("n2n-mesh");
@@ -58,20 +68,24 @@ class N2nMeshTransport extends Transport {
     this._setState("connecting", `N2N 虚拟网络连接中…`);
     onLog?.("n2n_mesh_connect_start", { supernodeAddr, supernodePort, community: "[REDACTED]" });
 
+    // Step 1+2: 建立虚拟网络（UDP 自动兼容降级 TCP）
     try {
-      // Step 1: 启动 n2n edge 进程
-      this._edgeProcess = await this._startEdgeProcess({
+      await this._establishN2nNetwork({
         supernodeAddr,
         supernodePort,
         community,
         key
-      }, onLog);
-      onLog?.("n2n_mesh_edge_started", { supernodeAddr, community });
+      }, targetHost, targetPort, onLog);
+    } catch (error) {
+      this._cleanup();
+      this._setState("error", `N2N 连接失败：${this._friendlyError(error)}`);
+      onLog?.("n2n_mesh_connect_failed", { error: error.message });
+      throw error;
+    }
 
-      // Step 2: 等待虚拟网络就绪（轮询连接目标）
-      await this._waitForNetworkReady(targetHost, targetPort, onLog);
-
-      // Step 3: 通过 N2N 虚拟网络建立 SSH 连接
+    // Step 3: 网络已就绪，通过 N2N 虚拟网络建立 SSH 连接
+    // （此阶段失败是 SSH 层问题，不再切换传输模式）
+    try {
       this._client = await this._createSshOverN2n(config, onUnknownHost, onLog);
       this._hostFingerprint = config.hostFingerprint || "";
       this._setState("connected", `N2N 虚拟网络已连接 ${targetHost}:${targetPort}`);
@@ -82,6 +96,55 @@ class N2nMeshTransport extends Transport {
       onLog?.("n2n_mesh_connect_failed", { error: error.message });
       throw error;
     }
+  }
+
+  /**
+   * 建立 N2N 虚拟网络（自动兼容 UDP/TCP 传输模式）：
+   * 1. 查缓存：该 supernode 入口上次成功是 tcp → 直接 TCP；否则先 UDP 后 TCP
+   * 2. UDP 阶段：启动 edge（默认模式）→ 缩短轮询（8 次）
+   * 3. UDP 失败 → 结束进程 → TCP 阶段：edge 加 -S2 → 完整轮询（15 次）
+   * 4. 任一阶段网络就绪即返回成功模式，并写入缓存
+   */
+  async _establishN2nNetwork(edgeOptions, targetHost, targetPort, onLog) {
+    const modeKey = `${edgeOptions.supernodeAddr}:${edgeOptions.supernodePort}`;
+    const cached = MODE_CACHE.get(modeKey);
+    const modes = cached === "tcp" ? ["tcp"] : ["udp", "tcp"];
+
+    let lastError = null;
+    for (const mode of modes) {
+      const isTcp = mode === "tcp";
+      if (isTcp && !cached) {
+        onLog?.("n2n_mesh_udp_fallback_tcp", { reason: lastError?.message || "udp 未就绪" });
+      }
+      try {
+        onLog?.("n2n_mesh_mode_attempt", { mode });
+        this._edgeProcess = await this._startEdgeProcess(edgeOptions, onLog, isTcp);
+        onLog?.("n2n_mesh_edge_started", { supernodeAddr: edgeOptions.supernodeAddr, community: "[REDACTED]", mode });
+        await this._waitForNetworkReady(targetHost, targetPort, onLog, isTcp ? 15 : 8);
+        // 网络就绪 → 记录成功模式
+        if (MODE_CACHE.get(modeKey) !== mode) {
+          MODE_CACHE.set(modeKey, mode);
+          onLog?.("n2n_mesh_mode_cached", { mode, cached: Boolean(cached) });
+        }
+        return mode;
+      } catch (error) {
+        lastError = error;
+        // 清理本次失败的 edge 进程，为下一模式让路
+        if (this._edgeProcess) {
+          try { this._edgeProcess.kill("SIGTERM"); } catch { /* 忽略 */ }
+          this._edgeProcess = null;
+        }
+        if (isTcp) {
+          // TCP 也失败：两种模式都未通
+          throw new Error(
+            `N2N 虚拟网络就绪失败（已自动尝试 UDP 和 TCP 两种模式）。` +
+            `请检查超级节点地址/端口是否正确、本机是否已安装 n2n、NAS 端 edge 是否在线。原因：${error.message}`
+          );
+        }
+        onLog?.("n2n_mesh_udp_attempt_failed", { error: error.message });
+      }
+    }
+    throw lastError || new Error("N2N 虚拟网络连接失败。");
   }
 
   async disconnect() {
@@ -120,13 +183,18 @@ class N2nMeshTransport extends Transport {
     }
   }
 
-  _startEdgeProcess(options, onLog) {
+  _startEdgeProcess(options, onLog, isTcp = false) {
     return new Promise((resolve, reject) => {
       const args = [
         "-l", `${options.supernodeAddr}:${options.supernodePort}`,
         "-c", options.community,
         "-f"  // foreground mode (we manage the process lifecycle)
       ];
+      if (isTcp) {
+        // -S2：不 P2P，全流量经 supernode 中继且 edge↔supernode 走 TCP
+        // （适配 supernode 经 FRP TCP 隧道暴露：UDP 无法穿过 TCP 隧道）
+        args.push("-S2");
+      }
       if (options.key) {
         args.push("-k", options.key);
       }
@@ -190,9 +258,8 @@ class N2nMeshTransport extends Transport {
     });
   }
 
-  _waitForNetworkReady(targetHost, targetPort, onLog) {
+  _waitForNetworkReady(targetHost, targetPort, onLog, maxAttempts = 15) {
     return new Promise((resolve, reject) => {
-      const maxAttempts = 15;
       const interval = 1_000;
       let attempts = 0;
 
@@ -304,6 +371,8 @@ class N2nMeshTransport extends Transport {
 
   _friendlyError(error) {
     const msg = String(error?.message || error);
+    // 双模式自动兼容的完整结论保留原文，不做泛化改写
+    if (/已自动尝试 UDP 和 TCP/.test(msg)) return msg;
     if (/authentication|密码|账号/i.test(msg)) return "SSH 账号或密码不正确。";
     if (/ECONNREFUSED/i.test(msg)) return "N2N 虚拟网络连接被拒绝，请检查 NAS 是否已加入同一社区。";
     if (/ETIMEDOUT|超时/i.test(msg)) return "N2N 虚拟网络连接超时，请检查 N2N 配置和 NAS 状态。";
