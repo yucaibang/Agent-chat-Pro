@@ -3,3 +3,4 @@ node_modules/
 src/main/*.jsc
 src/main/*.enc
 dist/.bytecode-key.json
+tools/n2n_v3_windows_x64_v3.1.1_r1255_static_by_heiye/
