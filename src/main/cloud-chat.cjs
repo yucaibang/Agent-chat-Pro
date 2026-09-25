@@ -250,7 +250,8 @@ function sendCloudChat(config, messages, callbacks = {}) {
         let bodyText = "";
         res.on("data", (chunk) => { bodyText += chunk; });
         res.on("end", () => {
-          const error = new Error(`云端 AI 返回错误 (${res.statusCode})：${bodyText.slice(0, 200)}`);
+          // v3.15.3：常见状态码（402 余额不足/403/404/5xx...）翻译成人话，带服务商名，原始信息附后
+          const error = new Error(translateHttpError(res.statusCode, bodyText, config.provider));
           error.code = "CLOUD_ERROR";
           safeReject(error);
         });
@@ -457,6 +458,51 @@ function sendCloudChat(config, messages, callbacks = {}) {
   return promise;
 }
 
+// ────────────────────────────────────────────
+//  HTTP 状态码友好翻译（v3.15.3）
+//  修复：402 余额不足等错误把服务商原始 JSON 直接甩给用户，且看不出是哪家平台的问题
+// ────────────────────────────────────────────
+
+/** provider → 中文名（与渲染层 CLOUD_PROVIDERS 对齐） */
+const PROVIDER_LABELS = {
+  zhipu: "智谱 AI",
+  deepseek: "DeepSeek",
+  kimi: "Kimi",
+  doubao: "豆包",
+  openai: "OpenAI",
+  gemini: "Gemini",
+  groq: "Groq",
+  siliconflow: "硅基流动",
+  anthropic: "Claude",
+  custom: "自定义接口"
+};
+
+/** 常见 HTTP 状态码 → 人话提示（占位符 {provider} 会被替换） */
+const HTTP_ERROR_HINTS = {
+  402: "{provider} 账户余额不足（HTTP 402），请登录对应开放平台充值后重试。",
+  403: "{provider} 拒绝访问（HTTP 403）：API 密钥权限不足，或该模型未开通/未授权。",
+  404: "接口或模型不存在（HTTP 404）：请检查模型名称与 API 地址是否匹配。",
+  408: "{provider} 服务器处理超时（HTTP 408），请稍后重试。",
+  413: "请求内容过长（HTTP 413）：请精简对话或调小上下文长度。",
+  500: "{provider} 服务器内部错误（HTTP 500），请稍后重试。",
+  502: "{provider} 网关错误（HTTP 502），请稍后重试。",
+  503: "{provider} 服务繁忙或维护中（HTTP 503），请稍后重试。",
+  504: "{provider} 网关超时（HTTP 504），请稍后重试。"
+};
+
+/**
+ * 把非 200 响应翻译成用户能看懂的提示（v3.15.3）
+ * 有匹配的常见状态码 → 友好提示在前 + 原始信息在后（方便排查）；
+ * 未匹配 → 保留原有格式，不丢排查线索。
+ */
+function translateHttpError(statusCode, bodyText, provider) {
+  const label = PROVIDER_LABELS[provider] || "云端 AI";
+  const hint = HTTP_ERROR_HINTS[statusCode];
+  const raw = bodyText ? bodyText.slice(0, 200) : "（无返回内容）";
+  if (hint) return `${hint.replace("{provider}", label)}\n（原始信息：${raw}）`;
+  return `云端 AI 返回错误 (${statusCode})：${raw}`;
+}
+
 /** 友好错误提示 */
 function friendlyError(error) {
   const msg = error.message || "";
@@ -544,4 +590,4 @@ function verifyCloudConnection(config, onLog) {
   });
 }
 
-module.exports = { sendCloudChat, buildMessages, verifyCloudConnection, friendlyError, testProxyConnectivity, buildChatBody, buildAnthropicBody };
+module.exports = { sendCloudChat, buildMessages, verifyCloudConnection, friendlyError, testProxyConnectivity, buildChatBody, buildAnthropicBody, translateHttpError };

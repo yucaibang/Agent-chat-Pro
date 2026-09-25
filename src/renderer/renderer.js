@@ -1136,7 +1136,13 @@ async function sendMessage() {
   } catch (error) {
     answer.classList.remove("generating");
     answer.classList.add("error");
-    answer.querySelector(".message-content").textContent = "连接或 Claude 执行失败：\n" + error.message;
+    // v3.15.3：错误前缀按本轮连接模式动态显示（cloud→云端 AI / local→本机引擎 / ssh→NAS Agent），不再硬编码 Claude
+    const localEngineName = currentLocalEngine === "atomcode" ? "AtomCode" : currentLocalEngine === "custom" ? "自定义命令" : "Claude";
+    const failureLabel =
+      streamingConnectionMode === "cloud" ? "连接或云端 AI 执行失败"
+      : streamingConnectionMode === "local" ? `连接或本机 ${localEngineName} 执行失败`
+      : "连接或 NAS Agent 执行失败";
+    answer.querySelector(".message-content").textContent = failureLabel + "：\n" + error.message;
     setConnection("连接失败", "error");
     // 失败时也合并已估算的 token
     addConversationTokens(streamingTokens + confirmedTokens);
