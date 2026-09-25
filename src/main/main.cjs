@@ -6,7 +6,7 @@ const path = require("path");
 const { randomUUID } = require("crypto");
 const { getConnection, getSettings, getAtomcodeToken, getSshConnection, getCloudAiConfig, sameSshTarget, saveSettings, setModelAdminPassword, trustHostFingerprint, verifyModelAdminPassword } = require("./settings.cjs");
 const { downloadRemoteFile, ensureDeviceControlKey, finalizeDeviceControl, getAgentSdkBridgeStatus, getClaudeModelStatus, installAgentSdkBridge, markDeviceControlDisabled, readRemoteFile, runClaude, uninstallAgentSdkBridge, updateClaudeModel, verifyConnection } = require("./ssh.cjs");
-const { copyLocalFile, getLocalClaudeModelStatus, readLocalFile, runLocalClaude, updateLocalClaudeModel, verifyLocalConnection } = require("./local.cjs");
+const { copyLocalFile, getLocalClaudeModelStatus, readLocalFile, runLocalClaude, updateLocalClaudeModel, validatedWorkingDirectory: validatedLocalWorkdir, verifyLocalConnection } = require("./local.cjs");
 const { runAtomCodeChat, verifyAtomCodeConnection } = require("./daemon-chat.cjs");
 const { runCustomCli, verifyCustomCliConnection } = require("./custom-cli.cjs");
 const { contextTokensFromUsage } = require("./protocol.cjs");
@@ -40,6 +40,7 @@ const { buildCommandWithMode, buildBridgeStartWithMode, buildLocalArgsWithMode }
 const { NetworkManager, STATES } = require("./network/network-manager.cjs");
 const { LatencyMonitor } = require("./network/latency-monitor.cjs");
 const { sendCloudChat, buildMessages, verifyCloudConnection, testProxyConnectivity } = require("./cloud-chat.cjs");
+const { executeToolCall, toolDefinitions, MAX_TOOL_ROUNDS } = require("./cloud-tools.cjs");
 const {
   auditToolDetails
 } = require("./status-event-normalizer.cjs");
@@ -715,6 +716,17 @@ app.whenReady().then(async () => {
       const systemPrompt = modeConfig?.systemPrompt || "";
       const cloudMessages = buildMessages(conversation, systemPrompt);
       cloudMessages.push({ role: "user", content: message });
+
+      // 工具执行（v3.14.0 云办公一期）：推理走云端 API，工具在本机工作目录内执行
+      const toolsEnabled = Boolean(cloudConfig.toolsEnabled);
+      const allowCommand = toolsEnabled && Boolean(cloudConfig.runCommandEnabled);
+      if (toolsEnabled && !validatedLocalWorkdir(cloudConfig.workingDirectory)) {
+        throw new Error("已开启工具执行，请先在设置中配置云端模式的工作目录。");
+      }
+      const cloudTools = toolsEnabled ? toolDefinitions(allowCommand) : undefined;
+      const isAnthropicProvider = cloudConfig.provider === "anthropic";
+      const collectedTools = [];
+
       let streamedText = "";
       let draftTimer;
       const persistDraft = () => {
@@ -722,6 +734,11 @@ app.whenReady().then(async () => {
         if (!streamedText) return;
         try { saveAssistantDraft(input.conversationId, id, streamedText); }
         catch (error) { writeLog("conversation_draft_save_failed", { requestId: id, conversationId: input.conversationId, error }); }
+      };
+      const emitToolCard = (tool) => {
+        const normalized = normalizeAndObserveStatusEvent({ id, type: "tool", tool }, { connectionMode: "cloud" });
+        writeLog("work_status_signal", statusSignalEntry({ requestId: id, direction: "executor-emitted", signal: "runner-event", disposition: "emitted", eventType: "tool", ...(normalized.audit || {}) }));
+        sendWorkStatusSignal(event.sender, "chat:event", normalized);
       };
       const cloudCallbacks = {
         onDelta: (text) => {
@@ -731,10 +748,10 @@ app.whenReady().then(async () => {
         },
         onStatus: (status) => sendWorkStatusSignal(event.sender, "chat:event", { id, type: "connection", status }),
         onUsage: (usage) => sendWorkStatusSignal(event.sender, "chat:event", { id, type: "usage", usage }),
+        onToolEvent: emitToolCard,
         onLog: writeLog
       };
-      sendWorkStatusSignal(event.sender, "chat:event", normalizeAndObserveStatusEvent({ id, type: "lifecycle", status: "connecting" }, { connectionMode: "cloud" }));
-      const cloudPromise = sendCloudChat({
+      const requestOnce = (messages) => sendCloudChat({
         apiKey: cloudConfig.apiKey,
         baseURL: cloudConfig.baseURL,
         model: cloudConfig.model || "glm-4-flash",
@@ -742,7 +759,69 @@ app.whenReady().then(async () => {
         temperature: modeConfig?.hallucinationControl === "strict" ? 0.3 : modeConfig?.hallucinationControl === "creative" ? 0.9 : undefined,
         provider: cloudConfig.provider,
         proxy: cloudConfig.proxy,
-      }, cloudMessages, cloudCallbacks);
+        tools: cloudTools,
+      }, messages, cloudCallbacks);
+
+      // 工具循环（agent loop）：tool_calls → 本机执行 → 结果回填 → 再请求，直到纯文本回复或达轮数上限
+      const runCloudWithTools = async () => {
+        let loopMessages = cloudMessages;
+        for (let round = 0; round <= MAX_TOOL_ROUNDS; round += 1) {
+          const promise = requestOnce(loopMessages);
+          activeRequests.set(id, { promise, cancel: () => { promise.cancel?.(); }, conversationId: input.conversationId });
+          const result = await promise;
+          if (result.cancelled) return { ...result, tools: collectedTools };
+          const toolCalls = toolsEnabled ? (result.toolCalls || []) : [];
+          if (!toolCalls.length) return { ...result, tools: collectedTools };
+
+          const toolCallsRaw = toolCalls.map((call, index) => {
+            let input = {};
+            try { input = JSON.parse(call.arguments || "{}"); } catch { input = {}; }
+            return { id: call.id || `cloud-tool-${round}-${index}`, name: call.name || "unknown", arguments: call.arguments || "{}", input };
+          });
+          const assistantText = result.text || "";
+          if (isAnthropicProvider) {
+            const content = [];
+            if (assistantText) content.push({ type: "text", text: assistantText });
+            for (const call of toolCallsRaw) content.push({ type: "tool_use", id: call.id, name: call.name, input: call.input });
+            loopMessages = [...loopMessages, { raw: true, role: "assistant", content }];
+          } else {
+            loopMessages = [...loopMessages, {
+              raw: true,
+              role: "assistant",
+              content: assistantText || null,
+              extra: { tool_calls: toolCallsRaw.map((call) => ({ id: call.id, type: "function", function: { name: call.name, arguments: call.arguments } })) }
+            }];
+          }
+
+          for (const call of toolCallsRaw) {
+            const card = { id: call.id, name: call.name, status: "running", input: call.input, result: "" };
+            collectedTools.push(card);
+            emitToolCard(card);
+            let output;
+            try {
+              output = await executeToolCall({ id: call.id, name: call.name, arguments: call.arguments }, { workdir: cloudConfig.workingDirectory, allowCommand, onLog: writeLog });
+              card.status = "completed";
+              card.result = String(output).slice(0, 400);
+              writeLog("cloud_tool_success", { requestId: id, tool: call.name, outputLength: String(output).length });
+            } catch (error) {
+              card.status = "failed";
+              card.result = String(error.message || error).slice(0, 400);
+              output = `工具执行失败：${error.message}`;
+              writeLog("cloud_tool_failed", { requestId: id, tool: call.name, error: error.message });
+            }
+            emitToolCard(card);
+            if (isAnthropicProvider) {
+              loopMessages.push({ raw: true, role: "user", content: [{ type: "tool_result", tool_use_id: call.id, content: output }] });
+            } else {
+              loopMessages.push({ raw: true, role: "tool", content: output, extra: { tool_call_id: call.id } });
+            }
+          }
+        }
+        throw new Error(`工具执行轮数已达上限（${MAX_TOOL_ROUNDS} 轮），已停止本轮任务。`);
+      };
+
+      sendWorkStatusSignal(event.sender, "chat:event", normalizeAndObserveStatusEvent({ id, type: "lifecycle", status: "connecting" }, { connectionMode: "cloud" }));
+      const cloudPromise = runCloudWithTools();
       activeRequests.set(id, { promise: cloudPromise, cancel: () => { cloudPromise.cancel?.(); }, conversationId: input.conversationId });
       // 信号链：四阶段契约（turn → transport → adapter → runner）+ 灯带投影
       const chatChain = safeSignal("chat-chain-create", () => signalMonitor.createRequest({ requestId: id, conversationId: input.conversationId, connectionMode: "cloud", attachmentCount: attachments.length, hasSession: Boolean(input.sessionId) }));
@@ -752,21 +831,24 @@ app.whenReady().then(async () => {
         if (draftTimer) clearTimeout(draftTimer);
         safeSignal("chain-complete", () => chatChain.complete({}));
         if (result.cancelled) {
-          addAssistantMessage(input.conversationId, streamedText || "已停止。", "", [], [], id, "cloud");
+          addAssistantMessage(input.conversationId, streamedText || "已停止。", "", [], collectedTools, id, "cloud");
           writeLog("work_status_signal", statusSignalEntry({ requestId: id, direction: "main-received", signal: "request-outcome", disposition: "cancelled", eventType: "lifecycle", eventStatus: "cancelled" }));
           sendWorkStatusSignal(event.sender, "chat:event", normalizeAndObserveStatusEvent({ id, type: "lifecycle", status: "cancelled" }, { connectionMode: "cloud" }));
-          return { id, cancelled: true, text: streamedText, sessionId: "", tools: [], files: [] };
+          return { id, cancelled: true, text: streamedText, sessionId: "", tools: collectedTools, files: [] };
         }
-        addAssistantMessage(input.conversationId, result.text, "", [], [], id, "cloud");
+        addAssistantMessage(input.conversationId, streamedText || "（无输出）", "", [], collectedTools, id, "cloud");
         const stats = conversationStats(getConversation(input.conversationId));
-        writeLog("chat_send_success", { requestId: id, conversationId: input.conversationId, textLength: result.text.length, connectionMode: "cloud" });
+        writeLog("chat_send_success", { requestId: id, conversationId: input.conversationId, textLength: streamedText.length, toolCallCount: collectedTools.length, connectionMode: "cloud" });
         writeLog("work_status_signal", statusSignalEntry({ requestId: id, direction: "main-received", signal: "request-outcome", disposition: "completed", eventType: "lifecycle", eventStatus: "finished" }));
         sendWorkStatusSignal(event.sender, "chat:event", normalizeAndObserveStatusEvent({ id, type: "lifecycle", status: "finished" }, { connectionMode: "cloud" }));
-        return { id, ...result, sessionId: "", tools: [], files: [], stats };
+        return { id, text: streamedText, usage: result.usage, stopReason: result.stopReason, sessionId: "", tools: collectedTools, files: [], stats };
       } catch (error) {
         if (draftTimer) clearTimeout(draftTimer);
         persistDraft();
-        writeLog("chat_send_failed", { requestId: id, conversationId: input.conversationId, error: error.message });
+        if (toolsEnabled && error.code === "CLOUD_ERROR" && !error.message.includes("工具执行轮数")) {
+          error.message += "（若当前服务商不支持工具调用，请在设置中关闭「工具执行」后重试。）";
+        }
+        writeLog("chat_send_failed", { requestId: id, conversationId: input.conversationId, error: error.message, toolCallCount: collectedTools.length });
         writeLog("work_status_signal", statusSignalEntry({ requestId: id, direction: "main-received", signal: "request-outcome", disposition: "failed", eventType: "lifecycle", eventStatus: "failed" }));
         sendWorkStatusSignal(event.sender, "chat:event", normalizeAndObserveStatusEvent({ id, type: "lifecycle", status: "failed" }, { connectionMode: "cloud" }));
         safeSignal("chain-failed", () => chatChain.failed(error));

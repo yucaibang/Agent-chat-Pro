@@ -198,6 +198,10 @@ function getSettings() {
     cloudAiApiKey: "",
     cloudAiModel: raw.cloudAiModel || "glm-4-flash",
     cloudAiBaseUrl: raw.cloudAiBaseUrl || "",
+    // 云端模式工具执行（v3.14.0 云办公一期）
+    cloudToolsEnabled: Boolean(raw.cloudToolsEnabled),
+    cloudRunCommandEnabled: Boolean(raw.cloudRunCommandEnabled),
+    cloudWorkingDirectory: String(raw.cloudWorkingDirectory || "").trim(),
     // 代理设置
     proxyEnabled: Boolean(raw.proxyEnabled),
     proxyType: raw.proxyType === "socks5" ? "socks5" : "http",
@@ -288,6 +292,10 @@ function getCloudAiConfig() {
     apiKey,
     baseURL: raw.cloudAiBaseUrl || config.baseURL,
     model: raw.cloudAiModel || config.defaultModel,
+    // 工具执行（v3.14.0 云办公一期）
+    toolsEnabled: Boolean(raw.cloudToolsEnabled),
+    runCommandEnabled: Boolean(raw.cloudRunCommandEnabled),
+    workingDirectory: String(raw.cloudWorkingDirectory || "").trim(),
     maxTokens: raw.cloudAiMaxTokens || 4096,
     proxy: {
       enabled: Boolean(raw.proxyEnabled),
@@ -350,6 +358,10 @@ function saveSettings(input) {
     cloudAiProvider: input.cloudAiProvider || previous.cloudAiProvider || "zhipu",
     cloudAiModel: input.cloudAiModel || previous.cloudAiModel || "glm-4-flash",
     cloudAiBaseUrl: input.cloudAiBaseUrl || previous.cloudAiBaseUrl || "",
+    // 云端模式工具执行（v3.14.0 云办公一期）
+    cloudToolsEnabled: Boolean(input.cloudToolsEnabled),
+    cloudRunCommandEnabled: Boolean(input.cloudRunCommandEnabled),
+    cloudWorkingDirectory: String(input.cloudWorkingDirectory || "").trim(),
     cloudAiMaxTokens: input.cloudAiMaxTokens || previous.cloudAiMaxTokens || 4096,
     cloudAiApiKeyEncrypted: previous.cloudAiApiKeyEncrypted || "",
     cloudAiApiKey: "",

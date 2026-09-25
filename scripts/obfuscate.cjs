@@ -69,6 +69,7 @@ const OBFUSCATE_FILES = {
     "main/modes/mode-manager.cjs",
     "main/modes/mode-params.cjs",
     "main/cloud-chat.cjs",        // 纯 Node.js 模块，可以混淆
+    "main/cloud-tools.cjs",     // 云端模式工具执行器（v3.14.0 云办公一期）
     "main/cloud-brand.cjs",      // 品牌验证模块
     "main/integrity-guard.cjs",  // 完整性自检模块
     "main/model-config.cjs",      // 模型配置

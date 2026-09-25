@@ -92,6 +92,10 @@ function settingsFromForm() {
     cloudAiBaseUrl: document.querySelector("#cloud-base-url")?.value || (config?.baseUrl || ""),
     cloudAiApiKey: document.querySelector("#cloud-api-key")?.value || "",
     clearCloudAiApiKey: !document.querySelector("#cloud-api-key")?.value && hasCloudApiKey,
+    // 云端模式工具执行（v3.14.0 云办公一期）
+    cloudToolsEnabled: document.querySelector("#cloud-tools-enabled")?.checked || false,
+    cloudRunCommandEnabled: document.querySelector("#cloud-run-command-enabled")?.checked || false,
+    cloudWorkingDirectory: document.querySelector("#cloud-working-directory")?.value || "",
     // 代理设置
     proxyEnabled: document.querySelector("#proxy-enabled")?.checked || false,
     proxyType: document.querySelector("#proxy-type")?.value || "http",
@@ -154,6 +158,13 @@ function populateSettings(settings) {
   if (cloudBaseURL) cloudBaseURL.value = baseURL || (CLOUD_PROVIDERS[provider]?.baseUrl || "");
   if (cloudModel) cloudModel.value = model;
   if (cloudProvider) cloudProvider.dispatchEvent(new Event("change"));
+  // 工具执行回填（v3.14.0 云办公一期）
+  const cloudToolsEnabled = document.querySelector("#cloud-tools-enabled");
+  const cloudRunCommandEnabled = document.querySelector("#cloud-run-command-enabled");
+  const cloudWorkingDirectory = document.querySelector("#cloud-working-directory");
+  if (cloudToolsEnabled) cloudToolsEnabled.checked = Boolean(settings.cloudToolsEnabled);
+  if (cloudRunCommandEnabled) cloudRunCommandEnabled.checked = Boolean(settings.cloudRunCommandEnabled);
+  if (cloudWorkingDirectory) cloudWorkingDirectory.value = settings.cloudWorkingDirectory || "";
   // 代理设置回填
   hasProxyPassword = Boolean(settings.hasProxyPassword);
   const proxyEnabled = document.querySelector("#proxy-enabled");

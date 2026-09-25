@@ -4,6 +4,7 @@ const https = require("https");
 const http = require("http");
 const { HttpsProxyAgent } = require("https-proxy-agent");
 const { SocksProxyAgent } = require("socks-proxy-agent");
+const { toAnthropicTools } = require("./cloud-tools.cjs");
 
 /**
  * 云端 AI 聊天模块 — OpenAI 兼容 API + Anthropic Messages API
@@ -40,6 +41,7 @@ function toAnthropicMessages(messages) {
   const result = [];
   for (const msg of messages) {
     if (msg.role === "system") continue; // 系统提示单独传
+    if (msg.raw) { result.push({ role: msg.role, content: msg.content }); continue; } // 工具循环构造的消息原样透传
     result.push({ role: msg.role, content: msg.content || "" });
   }
   return result;
@@ -61,6 +63,9 @@ function buildAnthropicBody(messages, options = {}) {
     max_tokens: options.maxTokens || 4096,
     stream: true
   };
+  if (Array.isArray(options.tools) && options.tools.length) {
+    body.tools = toAnthropicTools(options.tools);
+  }
   if (systemPrompt) body.system = systemPrompt;
   return body;
 }
@@ -82,10 +87,17 @@ function parseAnthropicSSE(line, callbacks) {
     if (eventType === "content_block_delta") {
       const text = parsed.delta?.text || "";
       if (text) return { delta: text };
+      if (parsed.delta?.type === "input_json_delta") {
+        return { toolUseDelta: { index: parsed.index || 0, partialJson: parsed.delta.partial_json || "" } };
+      }
+    }
+
+    if (eventType === "content_block_start" && parsed.content_block?.type === "tool_use") {
+      return { toolUseStart: { index: parsed.index || 0, id: parsed.content_block.id || "", name: parsed.content_block.name || "" } };
     }
 
     if (eventType === "message_delta" && parsed.usage) {
-      return { usage: { prompt_tokens: parsed.usage.input_tokens || 0, completion_tokens: parsed.usage.output_tokens || 0, total_tokens: (parsed.usage.input_tokens || 0) + (parsed.usage.output_tokens || 0) } };
+      return { usage: { prompt_tokens: parsed.usage.input_tokens || 0, completion_tokens: parsed.usage.output_tokens || 0, total_tokens: (parsed.usage.input_tokens || 0) + (parsed.usage.output_tokens || 0) }, stopReason: parsed.delta?.stop_reason || "" };
     }
 
     return { parsed };
@@ -102,13 +114,15 @@ function parseAnthropicSSE(line, callbacks) {
 function buildChatBody(messages, options = {}) {
   const body = {
     model: options.model || "glm-4-flash",
-    messages: messages.map((msg) => ({
-      role: msg.role,
-      content: msg.text || msg.content || ""
-    })),
+    // raw 消息（工具循环构造的 assistant.tool_calls / role:"tool"）原样透传，其余走文本转换
+    messages: messages.map((msg) => {
+      if (msg.raw) return { role: msg.role, content: msg.content, ...msg.extra };
+      return { role: msg.role, content: msg.text || msg.content || "" };
+    }),
     stream: true,
     max_tokens: options.maxTokens || 4096
   };
+  if (Array.isArray(options.tools) && options.tools.length) body.tools = options.tools;
   if (options.temperature !== undefined) body.temperature = options.temperature;
   if (options.topP !== undefined) body.topP = options.topP;
   return body;
@@ -132,6 +146,20 @@ function buildMessages(conversation, systemPrompt) {
 //  通用发送逻辑
 // ────────────────────────────────────────────
 
+/** 组装 OpenAI 增量工具调用（按 index 排序） */
+function assembleOpenAiToolCalls(accumulator) {
+  return Array.from(accumulator.entries())
+    .sort((a, b) => a[0] - b[0])
+    .map(([, value]) => ({ id: value.id, name: value.name, arguments: value.arguments }));
+}
+
+/** 组装 Anthropic tool_use 块（按 index 排序） */
+function assembleAnthropicToolCalls(blocks) {
+  return Array.from(blocks.entries())
+    .sort((a, b) => a[0] - b[0])
+    .map(([, value]) => ({ id: value.id, name: value.name, arguments: value.json }));
+}
+
 /**
  * 发送云端 AI 聊天请求（流式）
  * @param {object} config - { apiKey, baseURL, model, maxTokens, provider, proxy }
@@ -152,7 +180,7 @@ function sendCloudChat(config, messages, callbacks = {}) {
     let url, body, headers;
     if (anthropic) {
       url = new URL(`${baseURL}/messages`);
-      body = buildAnthropicBody(messages, { model: config.model, maxTokens: config.maxTokens });
+      body = buildAnthropicBody(messages, { model: config.model, maxTokens: config.maxTokens, tools: config.tools });
       headers = {
         "Content-Type": "application/json",
         "x-api-key": config.apiKey,
@@ -161,7 +189,7 @@ function sendCloudChat(config, messages, callbacks = {}) {
       };
     } else {
       url = new URL(`${baseURL}/chat/completions`);
-      body = buildChatBody(messages, { model: config.model, maxTokens: config.maxTokens });
+      body = buildChatBody(messages, { model: config.model, maxTokens: config.maxTokens, tools: config.tools });
       headers = {
         "Content-Type": "application/json",
         "Authorization": `Bearer ${config.apiKey}`,
@@ -239,6 +267,9 @@ function sendCloudChat(config, messages, callbacks = {}) {
       let fullText = "";
       let lastUsage = null;
       let buffer = "";
+      let stopReason = "";
+      const toolCallAccumulator = new Map(); // OpenAI：index → {id, name, arguments} 增量拼接
+      const anthropicToolBlocks = new Map(); // Anthropic：index → {id, name, json}
 
       res.on("data", (chunk) => {
         // 取消后忽略后续数据
@@ -275,6 +306,14 @@ function sendCloudChat(config, messages, callbacks = {}) {
                 lastUsage = result.usage;
                 if (callbacks.onUsage) callbacks.onUsage(result.usage);
               }
+              if (result.stopReason) stopReason = result.stopReason;
+              if (result.toolUseStart) {
+                anthropicToolBlocks.set(result.toolUseStart.index, { id: result.toolUseStart.id, name: result.toolUseStart.name, json: "" });
+              }
+              if (result.toolUseDelta) {
+                const block = anthropicToolBlocks.get(result.toolUseDelta.index);
+                if (block) block.json += result.toolUseDelta.partialJson;
+              }
             }
           } else {
             // OpenAI 兼容 SSE 格式
@@ -283,11 +322,24 @@ function sendCloudChat(config, messages, callbacks = {}) {
             if (data === "[DONE]") continue;
             try {
               const parsed = JSON.parse(data);
-              const delta = parsed.choices?.[0]?.delta?.content || "";
-              if (delta) {
-                fullText += delta;
-                if (callbacks.onDelta) callbacks.onDelta(delta);
+              const choice = parsed.choices?.[0];
+              const delta = choice?.delta || {};
+              if (delta.content) {
+                fullText += delta.content;
+                if (callbacks.onDelta) callbacks.onDelta(delta.content);
               }
+              // 工具调用增量：按 index 拼接 id/name/arguments 分片
+              if (Array.isArray(delta.tool_calls)) {
+                for (const piece of delta.tool_calls) {
+                  const index = Number.isInteger(piece.index) ? piece.index : 0;
+                  const existing = toolCallAccumulator.get(index) || { id: "", name: "", arguments: "" };
+                  if (piece.id) existing.id = piece.id;
+                  if (piece.function?.name) existing.name += piece.function.name;
+                  if (piece.function?.arguments) existing.arguments += piece.function.arguments;
+                  toolCallAccumulator.set(index, existing);
+                }
+              }
+              if (choice?.finish_reason) stopReason = choice.finish_reason;
               if (parsed.usage && (parsed.usage.prompt_tokens || parsed.usage.completion_tokens || parsed.usage.total_tokens)) {
                 lastUsage = parsed.usage;
                 if (callbacks.onUsage) callbacks.onUsage(parsed.usage);
@@ -312,6 +364,14 @@ function sendCloudChat(config, messages, callbacks = {}) {
             if (result) {
               if (result.delta) fullText += result.delta;
               if (result.usage) lastUsage = result.usage;
+              if (result.stopReason) stopReason = result.stopReason;
+              if (result.toolUseStart) {
+                anthropicToolBlocks.set(result.toolUseStart.index, { id: result.toolUseStart.id, name: result.toolUseStart.name, json: "" });
+              }
+              if (result.toolUseDelta) {
+                const block = anthropicToolBlocks.get(result.toolUseDelta.index);
+                if (block) block.json += result.toolUseDelta.partialJson;
+              }
             }
           } else {
             if (trimmed.startsWith("data:")) {
@@ -319,8 +379,20 @@ function sendCloudChat(config, messages, callbacks = {}) {
               if (data !== "[DONE]") {
                 try {
                   const parsed = JSON.parse(data);
-                  const delta = parsed.choices?.[0]?.delta?.content || "";
-                  if (delta) fullText += delta;
+                  const choice = parsed.choices?.[0];
+                  const delta = choice?.delta || {};
+                  if (delta.content) fullText += delta.content;
+                  if (Array.isArray(delta.tool_calls)) {
+                    for (const piece of delta.tool_calls) {
+                      const index = Number.isInteger(piece.index) ? piece.index : 0;
+                      const existing = toolCallAccumulator.get(index) || { id: "", name: "", arguments: "" };
+                      if (piece.id) existing.id = piece.id;
+                      if (piece.function?.name) existing.name += piece.function.name;
+                      if (piece.function?.arguments) existing.arguments += piece.function.arguments;
+                      toolCallAccumulator.set(index, existing);
+                    }
+                  }
+                  if (choice?.finish_reason) stopReason = choice.finish_reason;
                   if (parsed.usage && (parsed.usage.prompt_tokens || parsed.usage.completion_tokens || parsed.usage.total_tokens)) {
                     lastUsage = parsed.usage;
                   }
@@ -329,8 +401,9 @@ function sendCloudChat(config, messages, callbacks = {}) {
             }
           }
         }
-        if (callbacks.onLog) callbacks.onLog("cloud_chat_success", { textLength: fullText.length, usage: lastUsage });
-        safeResolve({ text: fullText, usage: lastUsage });
+        if (callbacks.onLog) callbacks.onLog("cloud_chat_success", { textLength: fullText.length, usage: lastUsage, stopReason, toolCallCount: anthropic ? anthropicToolBlocks.size : toolCallAccumulator.size });
+        const toolCalls = anthropic ? assembleAnthropicToolCalls(anthropicToolBlocks) : assembleOpenAiToolCalls(toolCallAccumulator);
+        safeResolve({ text: fullText, usage: lastUsage, toolCalls, stopReason });
       });
 
       res.on("error", (error) => {
@@ -350,7 +423,7 @@ function sendCloudChat(config, messages, callbacks = {}) {
             // 流意外关闭但已收到部分数据 — 作为正常完成处理
             if (fullText.length > 0) {
               if (callbacks.onLog) callbacks.onLog("cloud_chat_close_with_data", { textLength: fullText.length });
-              safeResolve({ text: fullText, usage: lastUsage });
+              safeResolve({ text: fullText, usage: lastUsage, toolCalls: anthropic ? assembleAnthropicToolCalls(anthropicToolBlocks) : assembleOpenAiToolCalls(toolCallAccumulator), stopReason });
             } else {
               safeReject(new Error("云端 AI 连接意外关闭，未收到任何数据。"));
             }
@@ -471,4 +544,4 @@ function verifyCloudConnection(config, onLog) {
   });
 }
 
-module.exports = { sendCloudChat, buildMessages, verifyCloudConnection, friendlyError, testProxyConnectivity };
+module.exports = { sendCloudChat, buildMessages, verifyCloudConnection, friendlyError, testProxyConnectivity, buildChatBody, buildAnthropicBody };

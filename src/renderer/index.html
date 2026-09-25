@@ -234,6 +234,15 @@
             <label>API 地址<input id="cloud-base-url" placeholder="https://open.bigmodel.cn/api/paas/v4/" /></label>
             <span class="field-hint">OpenAI 兼容的 chat/completions 端点地址。</span>
           </div>
+          <details id="cloud-tools-settings" class="proxy-settings">
+            <summary>🛠️ 工具执行（云办公）</summary>
+            <label class="checkbox"><input id="cloud-tools-enabled" type="checkbox" /><span>启用工具执行（AI 可读写文件、抓网页、执行命令）</span></label>
+            <p class="field-hint">开启后云端 AI 可调用本机工具干活：读/写文件、列目录、抓网页。工具一律限制在下方工作目录内执行，AI 会多轮调用工具直到完成任务。</p>
+            <label>工作目录<input id="cloud-working-directory" placeholder="例如 C:\Users\你\Documents\云办公" /></label>
+            <p class="field-hint">所有文件工具只能访问该目录内的文件（含子目录），目录外的路径会被拒绝。</p>
+            <label class="checkbox"><input id="cloud-run-command-enabled" type="checkbox" /><span>允许执行命令（run_command，有安全风险）</span></label>
+            <p class="field-hint">⚠️ 开启后 AI 可在工作目录内执行任意命令（默认 2 分钟超时）。AI 生成的命令可能删除文件或修改系统，请仅在可信任的任务中开启。</p>
+          </details>
           <details id="proxy-settings" class="proxy-settings">
             <summary>🔧 代理设置（可选）</summary>
             <label class="checkbox"><input id="proxy-enabled" type="checkbox" /><span>启用代理</span></label>

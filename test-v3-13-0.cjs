@@ -494,8 +494,9 @@ async function main() {
     assert.ok(obfuscateSrc.includes('"main/daemon-chat.cjs"'), "daemon-chat.cjs 未登记混淆");
     assert.ok(obfuscateSrc.includes('"main/custom-cli.cjs"'), "custom-cli.cjs 未登记混淆");
   });
-  await test("package.json 版本 3.13.0", () => {
-    assert.strictEqual(packageJson.version, "3.13.0");
+  await test("package.json 版本 ≥ 3.13.0（v3.14.0 起跟随当前版本，语义向后兼容）", () => {
+    const [major, minor] = packageJson.version.split(".").map(Number);
+    assert.ok(major > 3 || (major === 3 && minor >= 13), `当前版本 ${packageJson.version} 应不低于 3.13.0`);
   });
 
   // ── 汇总 ─────────────────
