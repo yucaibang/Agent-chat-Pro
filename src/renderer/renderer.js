@@ -413,7 +413,8 @@ function updateTokenDisplay() {
   const total = conversationTokens + streamingTokens + confirmedTokens;
   countEl.textContent = total.toLocaleString();
   counter.hidden = total === 0 && !contextTokens && !contextLimit;
-  counter.classList.toggle("streaming", Boolean(activeId));
+  // v3.15.1：streaming 态仅当进行中任务属于当前显示的对话（后台任务不点亮当前计数器）
+  counter.classList.toggle("streaming", Boolean(activeId && streamingConversationId === conversationId));
   renderContextBar();
 }
 
@@ -1153,6 +1154,8 @@ async function sendMessage() {
 const sidebarToggle = document.querySelector("#sidebar-toggle");
 function syncSidebarToggle() {
   const collapsed = document.body.classList.contains("sidebar-collapsed");
+  // v3.15.1：图标改箭头语义——展开时显示「←」（点击收起），收起时显示「→」（点击展开）
+  sidebarToggle.textContent = collapsed ? "→" : "←";
   sidebarToggle.title = collapsed ? "展开侧边栏" : "收起侧边栏";
 }
 if (localStorage.getItem("acp-sidebar-collapsed") === "1") document.body.classList.add("sidebar-collapsed");
@@ -1767,11 +1770,14 @@ window.agentChatPro.onDelta(({ id, text }) => {
   const answer = messages.get(id);
   if (!answer) return;
   answer.querySelector(".message-content").textContent += text;
-  // v3.15.0 智能滚动：仅当用户停在底部附近才跟随，上滚看历史不再被拉回
-  if (isNearBottom()) elements.messages.scrollTop = elements.messages.scrollHeight;
-  // 实时估算流式 token
-  streamingTokens += estimateTokens(text);
-  updateTokenDisplay();
+  // v3.15.1：仅当进行中任务属于当前显示的对话才刷新 token 计数与滚动（后台任务不挪用当前对话的计量）
+  if (streamingConversationId === conversationId) {
+    // v3.15.0 智能滚动：仅当用户停在底部附近才跟随，上滚看历史不再被拉回
+    if (isNearBottom()) elements.messages.scrollTop = elements.messages.scrollHeight;
+    // 实时估算流式 token
+    streamingTokens += estimateTokens(text);
+    updateTokenDisplay();
+  }
 });
 window.agentChatPro.onChatEvent((event) => {
   const answer = messages.get(event.id);
@@ -1795,6 +1801,8 @@ window.agentChatPro.onChatEvent((event) => {
     // v3.15.0 智能滚动：仅当用户停在底部附近才跟随
     if (isNearBottom()) elements.messages.scrollTop = elements.messages.scrollHeight;
   } else if (event.type === "usage") {
+    // v3.15.1：后台任务的 usage 不挪用当前对话的 token 计量（切回该对话时按消息重算兜底）
+    if (streamingConversationId !== conversationId) return;
     // 处理 usage 事件：用实际 token 数据替换估算值
     if (event.usage) {
       const usage = event.usage;
@@ -1823,6 +1831,8 @@ window.agentChatPro.onBridgeForceClosed?.((detail) => {
 // ── 上下文进度条事件（v3.10.0）：model / usage / compact 三类 ──
 window.agentChatPro.onContextEvent?.((event) => {
   if (!event) return;
+  // v3.15.1：后台任务的上下文事件不挪用当前对话的进度条（切回该对话时按记录回填兜底）
+  if (activeId && streamingConversationId !== conversationId) return;
   if (event.type === "model") {
     contextLimit = Number(event.contextLimit) || 0;
     renderContextBar();

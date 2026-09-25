@@ -179,12 +179,29 @@ async function runRendererTests() {
     assert.ok(fn.includes("updateConnectionModeUI()"), "联动未更新 UI");
   });
   // 功能1：侧边栏收缩
-  await test("侧边栏收缩接线 + localStorage 记忆", () => {
+  await test("侧边栏收缩接线 + localStorage 记忆 + 箭头图标（←收起/→展开）", () => {
     assert.ok(rendererSrc.includes('document.querySelector("#sidebar-toggle")'), "未接线 #sidebar-toggle");
     assert.ok(rendererSrc.includes("body.classList.toggle(\"sidebar-collapsed\")"), "未切换 sidebar-collapsed 类");
     assert.ok(rendererSrc.includes('"acp-sidebar-collapsed"'), "未用 localStorage 记忆");
     assert.ok(rendererSrc.includes('localStorage.getItem("acp-sidebar-collapsed") === "1"'), "启动未恢复收缩状态");
-    assert.ok(rendererSrc.includes("function syncSidebarToggle()"), "未同步按钮 title");
+    assert.ok(rendererSrc.includes('collapsed ? "→" : "←"'), "图标未用箭头语义（v3.15.1）");
+  });
+  // v3.15.1：token/上下文计量与后台任务隔离
+  await test("onDelta 仅当前对话刷新 token 计数（后台任务不挪用计量）", () => {
+    const onDeltaBlock = rendererSrc.split("window.agentChatPro.onDelta(")[1].split("});")[0];
+    assert.ok(onDeltaBlock.includes("streamingConversationId === conversationId"), "onDelta 未按对话隔离 token 计数");
+    assert.ok(onDeltaBlock.includes("streamingTokens += estimateTokens"), "streamingTokens 累计丢失");
+  });
+  await test("usage 事件仅当前对话生效", () => {
+    const usageBlock = rendererSrc.split('event.type === "usage"')[1].split("}\n});")[0];
+    assert.ok(usageBlock.includes("streamingConversationId !== conversationId") && usageBlock.includes("return;"), "usage 未条件化");
+  });
+  await test("上下文事件仅当前对话刷新进度条", () => {
+    const ctxBlock = rendererSrc.split("window.agentChatPro.onContextEvent")[1].split("if (event.type === \"model\")")[0];
+    assert.ok(ctxBlock.includes("streamingConversationId !== conversationId"), "context 事件未条件化");
+  });
+  await test("token 计数器 streaming 态仅当前对话点亮", () => {
+    assert.ok(rendererSrc.includes("Boolean(activeId && streamingConversationId === conversationId)"), "streaming class 未条件化");
   });
 }
 
