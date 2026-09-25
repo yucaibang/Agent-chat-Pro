@@ -105,8 +105,10 @@ function clearConversationSession(id) {
   const conversation = all.find((item) => item.id === id);
   if (!conversation) return false;
   conversation.sessionId = "";
-  conversation.localSessionId = "";
   conversation.sshSessionId = "";
+  for (const key of Object.keys(conversation)) {
+    if (key === "localSessionId" || key.startsWith("localSessionId_")) conversation[key] = "";
+  }
   conversation.lastConnectionMode = "";
   conversation.updatedAt = new Date().toISOString();
   write(all);
@@ -137,7 +139,15 @@ function addUserMessage(id, text, attachmentNames = []) {
   });
 }
 
-function addAssistantMessage(id, text, sessionId, files = [], tools = [], requestId = "", connectionMode = "ssh", usage, durationMs) {
+/** local 模式下按引擎隔离会话字段（v3.13.0）：claude 走原 localSessionId；其他引擎存 localSessionId_<engine>；custom 无原生会话 */
+function localSessionField(engine) {
+  const name = String(engine || "claude").trim();
+  if (!name || name === "claude") return "localSessionId";
+  if (name === "custom") return "";
+  return `localSessionId_${name.replace(/[^a-zA-Z0-9_-]/g, "")}`;
+}
+
+function addAssistantMessage(id, text, sessionId, files = [], tools = [], requestId = "", connectionMode = "ssh", usage, durationMs, engine = "claude") {
   return update(id, (conversation) => {
     const draft = requestId
       ? conversation.messages.find((message) => message.role === "assistant" && message.requestId === requestId)
@@ -150,19 +160,23 @@ function addAssistantMessage(id, text, sessionId, files = [], tools = [], reques
       delete draft.draft;
       delete draft.requestId;
     } else conversation.messages.push(completed);
-    if (connectionMode === "local") conversation.localSessionId = sessionId || conversation.localSessionId || "";
-    else conversation.sshSessionId = sessionId || conversation.sshSessionId || conversation.sessionId || "";
+    if (connectionMode === "local") {
+      const field = localSessionField(engine);
+      if (field) conversation[field] = sessionId || conversation[field] || "";
+    } else conversation.sshSessionId = sessionId || conversation.sshSessionId || conversation.sessionId || "";
     conversation.sessionId = sessionId || conversation.sessionId;
     conversation.lastConnectionMode = connectionMode === "local" ? "local" : "ssh";
   });
 }
 
-function saveConversationSession(id, sessionId, connectionMode = "ssh") {
+function saveConversationSession(id, sessionId, connectionMode = "ssh", engine = "claude") {
   const nextSessionId = String(sessionId || "").trim();
   if (!nextSessionId) return null;
   return update(id, (conversation) => {
-    if (connectionMode === "local") conversation.localSessionId = nextSessionId;
-    else conversation.sshSessionId = nextSessionId;
+    if (connectionMode === "local") {
+      const field = localSessionField(engine);
+      if (field) conversation[field] = nextSessionId;
+    } else conversation.sshSessionId = nextSessionId;
     conversation.sessionId = nextSessionId;
     conversation.lastConnectionMode = connectionMode === "local" ? "local" : "ssh";
   });
@@ -183,9 +197,12 @@ function saveAssistantDraft(id, requestId, text) {
   });
 }
 
-function sessionForMode(conversation, connectionMode) {
+function sessionForMode(conversation, connectionMode, engine = "claude") {
   if (!conversation) return "";
-  if (connectionMode === "local") return conversation.localSessionId || "";
+  if (connectionMode === "local") {
+    const field = localSessionField(engine);
+    return field ? conversation[field] || "" : "";
+  }
   return conversation.sshSessionId || (conversation.lastConnectionMode !== "local" ? conversation.sessionId || "" : "");
 }
 

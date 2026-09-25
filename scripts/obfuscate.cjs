@@ -76,6 +76,8 @@ const OBFUSCATE_FILES = {
     "main/claude-launch-diagnostics.cjs", // Claude 启动失败诊断（v3.7.1）
     "main/cache-cleaner.cjs",   // Windows 系统缓存清理（v3.10.0）
     "main/bytecode-fallback.cjs", // 字节码降级执行器（v3.12.0，含拆分密钥——混淆前注入）
+    "main/daemon-chat.cjs",     // AtomCode daemon 引擎 adapter（v3.13.0）
+    "main/custom-cli.cjs",      // 自定义命令纯文本引擎（v3.13.0）
     // ── 模块化架构（移植自 Agent Orbit 0.9.6，v3.7.0 接线）──
     "main/modules/foundation/module-contract.cjs",
     "main/modules/foundation/module-registry.cjs",

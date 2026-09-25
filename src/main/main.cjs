@@ -4,9 +4,11 @@ const { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, shell } = requir
 const fs = require("fs");
 const path = require("path");
 const { randomUUID } = require("crypto");
-const { getConnection, getSettings, getSshConnection, getCloudAiConfig, sameSshTarget, saveSettings, setModelAdminPassword, trustHostFingerprint, verifyModelAdminPassword } = require("./settings.cjs");
+const { getConnection, getSettings, getAtomcodeToken, getSshConnection, getCloudAiConfig, sameSshTarget, saveSettings, setModelAdminPassword, trustHostFingerprint, verifyModelAdminPassword } = require("./settings.cjs");
 const { downloadRemoteFile, ensureDeviceControlKey, finalizeDeviceControl, getAgentSdkBridgeStatus, getClaudeModelStatus, installAgentSdkBridge, markDeviceControlDisabled, readRemoteFile, runClaude, uninstallAgentSdkBridge, updateClaudeModel, verifyConnection } = require("./ssh.cjs");
 const { copyLocalFile, getLocalClaudeModelStatus, readLocalFile, runLocalClaude, updateLocalClaudeModel, verifyLocalConnection } = require("./local.cjs");
+const { runAtomCodeChat, verifyAtomCodeConnection } = require("./daemon-chat.cjs");
+const { runCustomCli, verifyCustomCliConnection } = require("./custom-cli.cjs");
 const { contextTokensFromUsage } = require("./protocol.cjs");
 const { scanSystemCaches, cleanSystemCaches } = require("./cache-cleaner.cjs");
 const { getDeviceControlStatus, installDeviceControl, preferredAddress, uninstallDeviceControl } = require("./device-control.cjs");
@@ -51,6 +53,11 @@ const { createStatusCenter } = require("./modules/status/status-center.cjs");
 const { createToolPermissionService } = require("./modules/foundation/permissions/tool-permission-service.cjs");
 const { createSignalLightStrip } = require("./modules/foundation/signal-contract/light-strip.cjs");
 const { createConversationClaudeSignalMonitor } = require("./modules/foundation/signal-contract/signal-chain.cjs");
+
+/** local 模式引擎（v3.13.0）：claude（默认，兼容旧配置）/ atomcode / custom */
+function localEngineOf(config) {
+  return config?.connectionMode === "local" ? String(config?.localEngine || "claude") : "claude";
+}
 
 let window;
 const brandManager = new CloudBrandManager();
@@ -291,6 +298,7 @@ app.whenReady().then(async () => {
   // ── 模型管理 IPC ──
   ipcMain.handle("model:status", async () => {
     const config = getConnection();
+    if (localEngineOf(config) !== "claude") throw new Error("当前本机引擎不使用 Claude 模型配置。");
     return config.connectionMode === "local"
       ? getLocalClaudeModelStatus()
       : getClaudeModelStatus(config, (fingerprint) => trustHost(config, fingerprint), writeLog);
@@ -310,6 +318,7 @@ app.whenReady().then(async () => {
     assertModelAdminPassword(input?.adminPassword);
     const model = input?.model;
     const config = getConnection();
+    if (localEngineOf(config) !== "claude") throw new Error("当前本机引擎不使用 Claude 模型配置，无法切换模型。");
     const local = config.connectionMode === "local";
     const answer = await dialog.showMessageBox(window, {
       type: "warning",
@@ -638,10 +647,17 @@ app.whenReady().then(async () => {
       saved = getSettings();
     }
     const config = { ...saved, ...input, connectionMode: mode === "local" ? "local" : "ssh", password: input.password || saved.password };
+    // AtomCode 引擎：优先用表单里未保存的新 token，否则读加密存储（v3.13.0）
+    if (mode === "local") config.atomcodeToken = String(input.atomcodeToken || "").trim() || getAtomcodeToken();
     writeLog("connection_test_start", { connectionMode: mode, host: config.host, port: config.port, username: config.username ? config.username[0] + "***" : "", wakeName: config.wakeName });
     try {
+      const engine = localEngineOf(config);
       const result = mode === "local"
-        ? await verifyLocalConnection(config, writeLog)
+        ? (engine === "atomcode"
+          ? await verifyAtomCodeConnection(config, writeLog)
+          : engine === "custom"
+            ? await verifyCustomCliConnection(config, writeLog)
+            : await verifyLocalConnection(config, writeLog))
         : await verifyConnection(config, (fingerprint) => trustHost(config, fingerprint), writeLog);
       writeLog("connection_test_success", { version: result });
       return result;
@@ -763,9 +779,11 @@ app.whenReady().then(async () => {
 
     // ── SSH / 本机模式 ──
     const config = getConnection();
+    const localEngine = localEngineOf(config);
+    if (localEngine === "atomcode") config.atomcodeToken = getAtomcodeToken();
     const agentMessage = `${message}${message ? "\n\n" : ""}[来源电脑：${config.clientLabel}]`;
     const conversation = getConversation(input.conversationId);
-    const activeSessionId = sessionForMode(conversation, config.connectionMode);
+    const activeSessionId = sessionForMode(conversation, config.connectionMode, localEngine);
     let streamedText = "";
     let streamedTurnText = "";
     let completedTurnCount = 0;
@@ -836,7 +854,7 @@ app.whenReady().then(async () => {
       onSessionId: (sessionId) => {
         latestSessionId = sessionId || latestSessionId;
         try {
-          saveConversationSession(input.conversationId, sessionId, config.connectionMode);
+          saveConversationSession(input.conversationId, sessionId, config.connectionMode, localEngine);
           writeLog("chat_session_checkpointed", { requestId: id, conversationId: input.conversationId, sessionId, connectionMode: config.connectionMode });
         } catch (error) {
           writeLog("chat_session_checkpoint_failed", { requestId: id, conversationId: input.conversationId, error });
@@ -886,10 +904,19 @@ app.whenReady().then(async () => {
     };
     config.localUploadDirectory = path.join(app.getPath("userData"), "local-uploads");
     config.workModeId = input.workModeId || config.workModeId || "regular";
-    const operation = config.connectionMode === "local"
-      ? runLocalClaude(config, agentMessage, activeSessionId, attachments, callbacks)
-      : runClaude(config, agentMessage, activeSessionId, attachments, callbacks);
-    writeLog("work_status_signal", statusSignalEntry({ requestId: id, direction: "main-received", signal: "request-outcome", disposition: "started", eventType: "lifecycle", eventStatus: "started", transport: config.connectionMode === "local" ? "local-stdio" : "ssh" }));
+    let operation;
+    if (config.connectionMode === "local" && localEngine === "atomcode") {
+      operation = runAtomCodeChat(config, agentMessage, activeSessionId, attachments, callbacks);
+    } else if (config.connectionMode === "local" && localEngine === "custom") {
+      // 自定义命令引擎无原生会话：回放历史续聊（最后一条是刚入库的本次用户消息，排除）
+      config.history = conversation.messages.slice(0, -1);
+      operation = runCustomCli(config, agentMessage, activeSessionId, attachments, callbacks);
+    } else if (config.connectionMode === "local") {
+      operation = runLocalClaude(config, agentMessage, activeSessionId, attachments, callbacks);
+    } else {
+      operation = runClaude(config, agentMessage, activeSessionId, attachments, callbacks);
+    }
+    writeLog("work_status_signal", statusSignalEntry({ requestId: id, direction: "main-received", signal: "request-outcome", disposition: "started", eventType: "lifecycle", eventStatus: "started", transport: config.connectionMode === "local" ? `local-${localEngine}` : "ssh" }));
     activeRequests.set(id, { operation, conversationId: input.conversationId });
     // 信号链：四阶段契约（turn → transport → adapter → runner）+ 灯带投影
     const chatChain = safeSignal("chat-chain-create", () => signalMonitor.createRequest({ requestId: id, conversationId: input.conversationId, connectionMode: config.connectionMode, attachmentCount: attachments.length, hasSession: Boolean(activeSessionId) }));
@@ -900,7 +927,7 @@ app.whenReady().then(async () => {
       if (draftTimer) clearTimeout(draftTimer);
       safeSignal("chain-complete", () => chatChain.complete({}));
       if (!completedTurnCount) {
-        addAssistantMessage(input.conversationId, result.text, result.sessionId, result.files, result.tools, id, config.connectionMode, result.usage, Date.now() - startedAt);
+        addAssistantMessage(input.conversationId, result.text, result.sessionId, result.files, result.tools, id, config.connectionMode, result.usage, Date.now() - startedAt, localEngine);
       }
       const stats = conversationStats(getConversation(input.conversationId));
       writeLog("chat_send_success", { requestId: id, conversationId: input.conversationId, sessionId: result.sessionId, textLength: result.text.length });
@@ -968,6 +995,7 @@ app.whenReady().then(async () => {
   const executeCompact = async (sender, sessionId, conversationId, instruction = "", options = {}) => {
     const config = getConnection();
     if (config.connectionMode === "cloud") throw new Error("云端模式直连 API，没有上下文压缩。");
+    if (config.connectionMode === "local" && String(config.localEngine || "claude") !== "claude") throw new Error("当前本机引擎不支持上下文压缩（仅 Claude CLI 引擎可用）。");
     const sid = String(sessionId || "");
     if (!sid) throw new Error("当前对话还没有会话记录，无法压缩。");
     // 会话防重入

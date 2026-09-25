@@ -195,12 +195,12 @@ function runLocalClaude(config, message, sessionId, attachments = [], callbacks 
   };
 }
 
-async function resolveLocalCommand(value) {
+async function resolveLocalCommand(value, subject = "本机 Claude 唤醒命令") {
   const command = String(value || "").trim();
-  if (!command) throw new Error("请填写本机 Claude 唤醒命令。");
-  if (/[\0\r\n]/.test(command)) throw new Error("本机 Claude 唤醒命令无效。");
+  if (!command) throw new Error(`请填写${subject}。`);
+  if (/[\0\r\n]/.test(command)) throw new Error(`${subject}无效。`);
   if (path.isAbsolute(command) || /[\\/]/.test(command)) {
-    if (!fs.existsSync(command)) throw new Error(`找不到本机 Claude 命令：${command}`);
+    if (!fs.existsSync(command)) throw new Error(`找不到${subject}：${command}`);
     return command;
   }
   if (process.platform !== "win32") return command;
@@ -222,7 +222,7 @@ async function resolveLocalCommand(value) {
   }
   const scriptMatch = candidates.find((item) => /\.(?:cmd|bat)$/i.test(item));
   if (scriptMatch) return scriptMatch;
-  throw new Error(`这台 Windows 没有找到"${command}"。请先安装 Claude Code，或填写 claude.exe/claude.cmd 的完整路径。`);
+  throw new Error(`这台 Windows 没有找到"${command}"。请先安装对应工具，或填写其完整路径。`);
 }
 
 function launchSpec(command, args) {
@@ -331,4 +331,4 @@ function cleanError(value) {
   return String(value || "").replace(/\x1B\[[0-?]*[ -/]*[@-~]/g, "").trim();
 }
 
-module.exports = { buildLocalAttachmentNote, copyLocalFile, getLocalClaudeModelStatus, inspectLocalFiles, launchSpec, readLocalFile, resolveLocalCommand, runLocalClaude, safeSessionId, updateLocalClaudeModel, verifyLocalConnection };
+module.exports = { buildLocalAttachmentNote, copyLocalFile, getLocalClaudeModelStatus, inspectLocalFiles, launchSpec, readLocalFile, resolveLocalCommand, runLocalClaude, safeSessionId, updateLocalClaudeModel, validatedWorkingDirectory, verifyLocalConnection, writeLocalAttachments };

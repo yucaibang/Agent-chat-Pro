@@ -138,6 +138,24 @@ function normalizeCompactInstruction(value) {
   return text.slice(0, 300);
 }
 
+/** 本机模式引擎归一化（v3.13.0）：仅接受 atomcode / custom，其余一律 claude（兼容旧配置） */
+function normalizeLocalEngine(value) {
+  return value === "atomcode" || value === "custom" ? value : "claude";
+}
+
+function normalizeAtomcodePort(value) {
+  const port = Number(value);
+  return Number.isInteger(port) && port >= 1 && port <= 65535 ? port : 13456;
+}
+
+/** AtomCode daemon token：加密存储，仅主进程解密使用，不出设置接口 */
+function getAtomcodeToken() {
+  const raw = readRaw();
+  if (!raw.atomcodeTokenEncrypted) return "";
+  if (!safeStorage.isEncryptionAvailable()) throw new Error("Windows 系统加密不可用，无法解密 AtomCode token。");
+  return decryptStoredString(raw.atomcodeTokenEncrypted, "AtomCode token");
+}
+
 function getSettings() {
   const raw = readRaw();
   const defaultDataDirectory = app.getPath("userData");
@@ -148,6 +166,12 @@ function getSettings() {
     username: raw.username || "",
     clientLabel: raw.clientLabel || os.hostname(),
     wakeName: raw.wakeName || "claude",
+    // 本机模式引擎（v3.13.0）
+    localEngine: normalizeLocalEngine(raw.localEngine),
+    atomcodeHost: String(raw.atomcodeHost || "127.0.0.1").trim() || "127.0.0.1",
+    atomcodePort: normalizeAtomcodePort(raw.atomcodePort),
+    hasAtomcodeToken: Boolean(raw.atomcodeTokenEncrypted),
+    customCliCommand: String(raw.customCliCommand || "").trim(),
     workingDirectory: raw.workingDirectory || "",
     skipPermissions: Boolean(raw.skipPermissions),
     statusSignalCapture: raw.statusSignalCapture === undefined ? !app.isPackaged : Boolean(raw.statusSignalCapture),
@@ -290,6 +314,13 @@ function saveSettings(input) {
     username: String(input.username || "").trim(),
     clientLabel: String(input.clientLabel || os.hostname()).trim(),
     wakeName: String(input.wakeName || "claude").trim(),
+    // 本机模式引擎（v3.13.0）
+    localEngine: normalizeLocalEngine(input.localEngine !== undefined ? input.localEngine : previous.localEngine),
+    atomcodeHost: String(input.atomcodeHost !== undefined ? input.atomcodeHost : (previous.atomcodeHost || "127.0.0.1")).trim() || "127.0.0.1",
+    atomcodePort: normalizeAtomcodePort(input.atomcodePort !== undefined ? input.atomcodePort : previous.atomcodePort),
+    atomcodeTokenEncrypted: previous.atomcodeTokenEncrypted || "",
+    atomcodeToken: "",
+    customCliCommand: String(input.customCliCommand !== undefined ? input.customCliCommand : (previous.customCliCommand || "")).trim(),
     workingDirectory: String(input.workingDirectory || "").trim(),
     skipPermissions: Boolean(input.skipPermissions),
     statusSignalCapture: typeof input.statusSignalCapture === "boolean"
@@ -368,7 +399,20 @@ function saveSettings(input) {
     next.proxyPasswordEncrypted = safeStorage.encryptString(input.proxyPassword).toString("base64");
     next.proxyPassword = "";
   }
-  if (!next.wakeName) throw new Error("Claude 唤醒命令不能为空。");
+  // AtomCode daemon token 加密存储（v3.13.0）
+  if (input.clearAtomcodeToken) {
+    next.atomcodeTokenEncrypted = "";
+  } else if (typeof input.atomcodeToken === "string" && input.atomcodeToken.trim().length > 0) {
+    if (!safeStorage.isEncryptionAvailable()) throw new Error("Windows 系统加密不可用，无法安全保存 AtomCode token。");
+    next.atomcodeTokenEncrypted = safeStorage.encryptString(input.atomcodeToken.trim()).toString("base64");
+  }
+  // 非 Claude 引擎不依赖 Claude 唤醒命令（v3.13.0）
+  if (!(connectionMode === "local" && next.localEngine !== "claude") && !next.wakeName) {
+    throw new Error("Claude 唤醒命令不能为空。");
+  }
+  if (connectionMode === "local" && next.localEngine === "custom" && !next.customCliCommand) {
+    throw new Error("自定义命令模板不能为空，例如：aider --message {message}。");
+  }
   if (!next.clientLabel || next.clientLabel.length > 32 || !/^[\p{L}\p{N}._-]+$/u.test(next.clientLabel)) {
     throw new Error("本机标识需为 1–32 个字符，只能使用文字、数字、点、短横线或下划线。");
   }
@@ -410,4 +454,4 @@ function verifyModelAdminPassword(value) {
   return expected.length === actual.length && crypto.timingSafeEqual(expected, actual);
 }
 
-module.exports = { getConnection, getSettings, getSshConnection, getCloudAiConfig, modelAdminPasswordState, sameSshTarget, saveSettings, setModelAdminPassword, trustHostFingerprint, verifyModelAdminPassword };
+module.exports = { getConnection, getSettings, getAtomcodeToken, getSshConnection, getCloudAiConfig, modelAdminPasswordState, sameSshTarget, saveSettings, setModelAdminPassword, trustHostFingerprint, verifyModelAdminPassword };

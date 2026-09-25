@@ -197,7 +197,7 @@
             <button type="button" id="mode-cloud" data-connection-mode="cloud">云端 AI</button>
             <button type="button" id="mode-local" data-connection-mode="local">本机</button>
           </div>
-          <span class="field-hint">SSH 远程：连接 NAS 上的 Claude Code；云端 AI：无需本地 CLI，直接用免费 API 聊天；本机：使用本机 Claude Code。</span>
+          <span class="field-hint">SSH 远程：连接 NAS 上的 Claude Code；云端 AI：无需本地 CLI，直接用免费 API 聊天；本机：使用本机 AI CLI（Claude Code / AtomCode / 自定义命令）。</span>
         </label>
         <div id="cloud-fields" class="settings-group" hidden>
           <label>API 服务商
@@ -277,7 +277,36 @@
             <span id="password-hint" class="field-hint">已保存密码时可留空</span>
           </label>
         </div>
-        <label>Agent 唤醒命令<input name="wakeName" required placeholder="当前例如：claude 或完整路径" /></label>
+        <div id="local-fields" class="settings-group" hidden>
+          <label>本机引擎
+            <input type="hidden" name="localEngine" id="local-engine" value="claude" />
+            <div class="mode-switch" role="group" aria-label="本机引擎">
+              <button type="button" id="engine-claude" data-local-engine="claude">Claude CLI</button>
+              <button type="button" id="engine-atomcode" data-local-engine="atomcode">AtomCode</button>
+              <button type="button" id="engine-custom" data-local-engine="custom">自定义命令</button>
+            </div>
+            <span class="field-hint">Claude CLI：本机安装的 Claude Code；AtomCode：GitCode 开源终端 AI，需本机运行 atomcode-daemon；自定义命令：接入任意终端 AI（Aider、OpenCode 等）。</span>
+          </label>
+          <div id="atomcode-fields" hidden>
+            <div class="two-columns">
+              <label>Daemon 地址<input id="atomcode-host" placeholder="127.0.0.1" /></label>
+              <label>端口<input id="atomcode-port" type="number" min="1" max="65535" placeholder="13456" /></label>
+            </div>
+            <label>Daemon Token（可选）
+              <div class="password-row">
+                <input id="atomcode-token" type="password" placeholder="留空自动读取 ~/.atomcode/daemon-端口.json" autocomplete="new-password" />
+                <button type="button" id="toggle-atomcode-token" class="password-toggle">显示</button>
+              </div>
+              <span class="field-hint">atomcode-daemon 启动时会在 ~/.atomcode/ 下生成 daemon-端口.json（内含 token）；留空时软件自动读取该文件。</span>
+            </label>
+            <p class="field-hint">提示：需要 daemon 执行 bash / 写文件时，先设置环境变量 ATOMCODE_DAEMON_ENABLE_DANGEROUS_TOOLS=1 再启动 daemon。AtomCode 会话与 Claude 会话互相独立，切换引擎请新建对话。</p>
+          </div>
+          <div id="custom-fields" hidden>
+            <label>命令模板<input id="custom-cli-command" placeholder="例如：aider --message {message}" /></label>
+            <span class="field-hint">{message} 会替换成你发送的消息；模板不含 {message} 时消息走标准输入。无原生会话，软件自动回放最近对话作为上下文（纯文本输出，无工具卡片）。</span>
+          </div>
+        </div>
+        <label id="wake-name-field">Agent 唤醒命令<input name="wakeName" required placeholder="当前例如：claude 或完整路径" /></label>
         <label>本机标识
           <input name="clientLabel" required maxlength="32" placeholder="例如：JIANG-PC" />
           <span class="field-hint">每次消息会在后台附加"来源电脑"，便于 Agent 判断"我的桌面"是哪台电脑；聊天气泡不会重复显示。</span>
@@ -294,7 +323,7 @@
         <details>
           <summary>可选设置</summary>
           <label>工作目录<input id="working-directory" name="workingDirectory" placeholder="留空则使用 SSH 账号的主目录" /></label>
-          <label class="checkbox"><input name="skipPermissions" type="checkbox" /><span id="permission-label">允许 Agent 在 NAS 上自动执行工具操作</span></label>
+          <label class="checkbox" id="skip-permissions-field"><input name="skipPermissions" type="checkbox" /><span id="permission-label">允许 Agent 在 NAS 上自动执行工具操作</span></label>
           <p id="permission-hint" class="hint">开启后会传入 Claude Code 的 bypass permissions 参数。仅在你信任该 NAS 与当前工作目录时使用。</p>
           <label class="checkbox"><input name="showSignalLights" type="checkbox" checked /><span>显示信号灯带（16 盏状态灯，实时显示 Agent 工作进度）</span></label>
         </details>

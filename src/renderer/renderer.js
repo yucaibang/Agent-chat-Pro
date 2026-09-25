@@ -28,6 +28,13 @@ let attachments = [];
 let conversationCache = [];
 let automaticTools = false;
 let currentConnectionMode = "ssh";
+let currentLocalEngine = "claude";  // 本机模式引擎（v3.13.0）：claude / atomcode / custom
+
+/** 本机引擎显示名（不含"本机"前缀） */
+function localEngineLabel() {
+  if (currentConnectionMode !== "local") return "Claude";
+  return currentLocalEngine === "atomcode" ? "AtomCode" : currentLocalEngine === "custom" ? "自定义命令" : "Claude";
+}
 let hasCloudApiKey = false;
 let brandConfig = null;     // 云端品牌配置
 let brandVerified = false;  // 是否通过云端验证
@@ -66,6 +73,12 @@ function settingsFromForm() {
     username: data.get("username"),
     password: data.get("password"),
     wakeName: data.get("wakeName"),
+    // 本机模式引擎（v3.13.0）
+    localEngine: data.get("localEngine") || "claude",
+    atomcodeHost: document.querySelector("#atomcode-host")?.value || "",
+    atomcodePort: Number(document.querySelector("#atomcode-port")?.value) || 0,
+    atomcodeToken: document.querySelector("#atomcode-token")?.value || "",
+    customCliCommand: document.querySelector("#custom-cli-command")?.value || "",
     clientLabel: data.get("clientLabel"),
     workingDirectory: data.get("workingDirectory"),
     dataDirectory: data.get("dataDirectory"),
@@ -105,6 +118,8 @@ function populateSettings(settings) {
   document.body.classList.toggle("signal-lights-hidden", settings.showSignalLights === false);
   elements.form.elements.namedItem("connectionMode").value = settings.connectionMode || "ssh";
   currentConnectionMode = settings.connectionMode === "local" ? "local" : settings.connectionMode === "cloud" ? "cloud" : "ssh";
+  elements.form.elements.namedItem("localEngine").value = settings.localEngine || "claude";
+  currentLocalEngine = settings.localEngine || "claude";
   updateConnectionModeUI();
   setToolModeAppearance(Boolean(settings.skipPermissions));
   const password = elements.form.elements.namedItem("password");
@@ -166,6 +181,19 @@ function populateSettings(settings) {
   if (compactAuto) compactAuto.checked = Boolean(settings.compactAuto);
   if (compactThreshold) compactThreshold.value = settings.compactThreshold ?? 80;
   if (compactInstruction) compactInstruction.value = settings.compactInstruction || "";
+  // 本机引擎回填（v3.13.0）
+  const atomcodeHost = document.querySelector("#atomcode-host");
+  const atomcodePort = document.querySelector("#atomcode-port");
+  const atomcodeToken = document.querySelector("#atomcode-token");
+  if (atomcodeHost) atomcodeHost.value = settings.atomcodeHost || "127.0.0.1";
+  if (atomcodePort) atomcodePort.value = settings.atomcodePort ?? 13456;
+  if (atomcodeToken) {
+    atomcodeToken.value = "";
+    atomcodeToken.placeholder = settings.hasAtomcodeToken ? "已安全保存 Token；留空不会修改" : "留空自动读取 ~/.atomcode/daemon-端口.json";
+    document.querySelector("#toggle-atomcode-token").textContent = "显示";
+  }
+  const customCliCommand = document.querySelector("#custom-cli-command");
+  if (customCliCommand) customCliCommand.value = settings.customCliCommand || "";
 }
 
 function updateConnectionModeUI() {
@@ -173,6 +201,8 @@ function updateConnectionModeUI() {
   currentConnectionMode = modeValue === "local" ? "local" : modeValue === "cloud" ? "cloud" : "ssh";
   const isLocal = currentConnectionMode === "local";
   const isCloud = currentConnectionMode === "cloud";
+  const localEngine = elements.form.elements.namedItem("localEngine")?.value || "claude";
+  currentLocalEngine = isLocal ? localEngine : "claude";
   document.querySelector("#mode-ssh").classList.toggle("active", currentConnectionMode === "ssh");
   document.querySelector("#mode-cloud").classList.toggle("active", isCloud);
   document.querySelector("#mode-local").classList.toggle("active", isLocal);
@@ -180,6 +210,24 @@ function updateConnectionModeUI() {
   document.querySelector("#cloud-fields").hidden = !isCloud;
   document.querySelector("#device-control-settings").hidden = isLocal || isCloud;
   document.querySelector("#bridge-settings").hidden = isLocal || isCloud;
+  // 本机引擎子面板（v3.13.0）
+  const localFields = document.querySelector("#local-fields");
+  if (localFields) {
+    localFields.hidden = !isLocal;
+    localFields.querySelectorAll("[data-local-engine]").forEach((button) => button.classList.toggle("active", button.dataset.localEngine === localEngine));
+  }
+  const atomcodeFields = document.querySelector("#atomcode-fields");
+  if (atomcodeFields) atomcodeFields.hidden = !isLocal || localEngine !== "atomcode";
+  const customFields = document.querySelector("#custom-fields");
+  if (customFields) customFields.hidden = !isLocal || localEngine !== "custom";
+  const claudeEngine = !isLocal || localEngine === "claude";
+  const wakeField = document.querySelector("#wake-name-field");
+  if (wakeField) wakeField.hidden = !claudeEngine;
+  elements.form.elements.namedItem("wakeName").required = claudeEngine;
+  const skipPermissionsField = document.querySelector("#skip-permissions-field");
+  if (skipPermissionsField) skipPermissionsField.hidden = !claudeEngine;
+  const permissionHint = document.querySelector("#permission-hint");
+  if (permissionHint) permissionHint.hidden = !claudeEngine;
   elements.form.elements.namedItem("host").required = currentConnectionMode === "ssh";
   elements.form.elements.namedItem("username").required = currentConnectionMode === "ssh";
   document.querySelector("#working-directory").placeholder = isLocal ? "留空则使用本机默认目录" : "留空则使用 SSH 账号的主目录";
@@ -188,12 +236,16 @@ function updateConnectionModeUI() {
   document.querySelector("#settings-description").textContent = isCloud
     ? "直接使用云端 AI API 聊天，无需安装任何 CLI。"
     : isLocal
-    ? "直接使用这台 Windows 电脑上的 Agent CLI（当前适配 Claude Code）。"
+    ? (localEngine === "atomcode"
+      ? "使用本机 AtomCode（通过 atomcode-daemon 本机接口）。"
+      : localEngine === "custom"
+      ? "通过自定义命令接入本机终端 AI。"
+      : "直接使用这台 Windows 电脑上的 Claude Code。")
     : "通过 SSH 使用 NAS 或服务器上的 Agent CLI（当前适配 Claude Code）。";
   document.querySelector("#connection-subtitle").textContent = isCloud
     ? "使用云端 AI API 聊天（无需本地 CLI）"
     : isLocal
-    ? "使用本机 Windows 上的 Agent CLI"
+    ? (localEngine === "atomcode" ? "使用本机 AtomCode" : localEngine === "custom" ? "使用本机自定义命令" : "使用本机 Windows 上的 Agent CLI")
     : "通过 SSH 使用 NAS 上的 Agent CLI";
   document.querySelector("#empty-description").textContent = isCloud
     ? "选择云端 AI 模式，输入消息即可开始聊天，无需任何本地安装。"
@@ -203,7 +255,9 @@ function updateConnectionModeUI() {
   document.querySelector("#security-note").textContent = isCloud
     ? "云端模式仅传输文本消息，不执行任何本地或远程命令。API 密钥仅保存在本地。"
     : isLocal
-    ? "本机模式不保存 SSH 密码；Agent 登录信息由对应 CLI 自己管理。"
+    ? (localEngine === "atomcode"
+      ? "本机模式通过本机 daemon 接口通信；Token 仅保存在这台电脑的加密存储中。"
+      : "本机模式不保存 SSH 密码；Agent 登录信息由对应 CLI 自己管理。")
     : "密码仅保存在这台 Windows 电脑的系统加密存储中。";
 }
 
@@ -781,7 +835,7 @@ async function loadConversation(id) {
     }
   });
   elements.empty.hidden = conversation.messages.length > 0;
-  setConnection(sessionId ? `已恢复${currentConnectionMode === "cloud" ? "云端 AI" : currentConnectionMode === "local" ? "本机" : " SSH"} 会话` : "新对话，等待发送", "connected");
+  setConnection(sessionId ? `已恢复${currentConnectionMode === "cloud" ? "云端 AI" : currentConnectionMode === "local" ? `本机 ${localEngineLabel()}` : " SSH"} 会话` : "新对话，等待发送", "connected");
   // 从历史消息估算累计 token
   conversationTokens = 0;
   for (const msg of conversation.messages) {
@@ -939,7 +993,7 @@ async function sendMessage() {
   elements.prompt.value = "";
   adjustTextarea();
   setBusy(true);
-  setConnection(currentConnectionMode === "cloud" ? "正在连接云端 AI…" : currentConnectionMode === "local" ? "正在启动本机 Claude…" : "正在连接 NAS…", "");
+  setConnection(currentConnectionMode === "cloud" ? "正在连接云端 AI…" : currentConnectionMode === "local" ? `正在启动本机 ${localEngineLabel()}…` : "正在连接 NAS…", "");
   // 重置流式 token 计数，估算用户消息 token
   resetStreamingTokens();
   addConversationTokens(estimateTokens(message));
@@ -1000,7 +1054,7 @@ async function sendMessage() {
       conversationTokens = result.stats.totalTokens;
       updateTokenDisplay();
     }
-    setConnection(`${currentConnectionMode === "cloud" ? "云端 AI" : currentConnectionMode === "local" ? "本机 Claude" : "NAS"}已连接 · 会话已保存`, "connected");
+    setConnection(`${currentConnectionMode === "cloud" ? "云端 AI" : currentConnectionMode === "local" ? `本机 ${localEngineLabel()}` : "NAS"}已连接 · 会话已保存`, "connected");
     refreshConversationList();
   } catch (error) {
     answer.classList.remove("generating");
@@ -1085,11 +1139,13 @@ elements.form.addEventListener("submit", async (event) => {
 });
 document.querySelector("#test-connection").addEventListener("click", async () => {
   const mode = elements.form.elements.namedItem("connectionMode").value;
-  const modeLabel = mode === "cloud" ? "云端 AI" : mode === "local" ? "本机" : "SSH";
-  setStatus(mode === "cloud" ? "正在测试云端 AI 连接…" : mode === "local" ? "正在检查本机 Claude 命令…" : "正在连接并检查 Claude 命令…");
+  const engine = mode === "local" ? (elements.form.elements.namedItem("localEngine")?.value || "claude") : "claude";
+  const engineLabel = engine === "atomcode" ? "AtomCode daemon" : engine === "custom" ? "自定义命令" : "Claude CLI";
+  const modeLabel = mode === "cloud" ? "云端 AI" : mode === "local" ? `本机 ${engineLabel}` : "SSH";
+  setStatus(mode === "cloud" ? "正在测试云端 AI 连接…" : mode === "local" ? `正在检查本机 ${engineLabel}…` : "正在连接并检查 Claude 命令…");
   try {
     const version = await window.agentChatPro.testConnection(settingsFromForm());
-    setStatus(`${modeLabel}连接成功${mode === "cloud" ? "" : "：Claude Code " + version}`);
+    setStatus(`${modeLabel}连接成功${mode === "cloud" || engine !== "claude" ? `：${version}` : "：Claude Code " + version}`);
   } catch (error) {
     setStatus(error.message, true);
   }
@@ -1169,6 +1225,19 @@ document.querySelectorAll("[data-connection-mode]").forEach((button) => {
     elements.form.elements.namedItem("connectionMode").value = button.dataset.connectionMode;
     updateConnectionModeUI();
   });
+});
+// ── 本机引擎选择（v3.13.0） ──
+document.querySelectorAll("[data-local-engine]").forEach((button) => {
+  button.addEventListener("click", () => {
+    elements.form.elements.namedItem("localEngine").value = button.dataset.localEngine;
+    updateConnectionModeUI();
+  });
+});
+document.querySelector("#toggle-atomcode-token")?.addEventListener("click", () => {
+  const input = document.querySelector("#atomcode-token");
+  const showing = input.type === "text";
+  input.type = showing ? "password" : "text";
+  document.querySelector("#toggle-atomcode-token").textContent = showing ? "显示" : "隐藏";
 });
 
 // ── 云端 AI 设置事件（通用适配器） ──
@@ -1619,7 +1688,11 @@ window.agentChatPro.onChatEvent((event) => {
     setConnection(`正在上传 ${event.name} · ${Math.round(event.overall * 100)}%`, "");
   } else if (event.type === "connection") {
     const labels = currentConnectionMode === "local"
-      ? { "local-starting": "正在启动本机 Claude…", connected: "本机 Claude 正在处理…" }
+      ? (currentLocalEngine === "atomcode"
+        ? { "local-starting": "正在启动 AtomCode daemon…", connected: "AtomCode 正在处理…" }
+        : currentLocalEngine === "custom"
+        ? { "local-starting": "正在启动本机命令…", connected: "本机命令正在处理…" }
+        : { "local-starting": "正在启动本机 Claude…", connected: "本机 Claude 正在处理…" })
       : currentConnectionMode === "cloud"
       ? { connecting: "正在连接云端 AI…", connected: "云端 AI 正在处理…", stopping: "正在停止…" }
       : { connecting: "正在连接 NAS…", reconnecting: "连接中断，正在自动重连…", connected: "已连接，Claude 正在处理…", stopping: "Claude 已收到停止请求，正在结束当前操作…", stopped: "连接已被强制关闭，正在结束当前请求…" };
@@ -2370,7 +2443,13 @@ window.agentChatPro.getBrandConfig().then(config => {
   const conversations = await window.agentChatPro.listConversations();
   if (conversations.length) await loadConversation(conversations[0].id);
   else await createNewConversation();
-  if (!settings.wakeName || (settings.connectionMode !== "local" && (!settings.host || !settings.username || !settings.hasPassword))) openSettings();
+  // 启动必填检查（v3.13.0：非 Claude 本机引擎不依赖唤醒命令，自定义命令引擎要求命令模板）
+  const claudeEngine = settings.connectionMode !== "local" || String(settings.localEngine || "claude") === "claude";
+  if ((claudeEngine && !settings.wakeName)
+    || (settings.connectionMode !== "local" && (!settings.host || !settings.username || !settings.hasPassword))
+    || (settings.connectionMode === "local" && settings.localEngine === "custom" && !settings.customCliCommand)) {
+    openSettings();
+  }
 })();
 
 // ── 右键菜单 ──────────────────────────────────────────
