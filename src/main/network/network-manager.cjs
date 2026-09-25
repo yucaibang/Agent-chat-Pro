@@ -33,6 +33,14 @@ const STATES = {
 /** 降级优先级（外网模式） */
 const FALLBACK_ORDER = ["p2p-nat", "derp-relay", "frp-tunnel"];
 
+/** 设置页 externalMethod 下拉短名 → 传输类型全名（v3.15.4：修复显式选 N2N/DERP/FRP/P2P 时「未知的传输类型」崩溃；auto 走 FALLBACK_ORDER，全名历史配置原样兼容） */
+const METHOD_ALIASES = {
+  derp: "derp-relay",
+  frp: "frp-tunnel",
+  p2p: "p2p-nat",
+  n2n: "n2n-mesh"
+};
+
 /** 心跳间隔（毫秒） */
 const HEARTBEAT_INTERVAL_MS = 30_000;
 /** 心跳连续失败判定断线的阈值 */
@@ -148,7 +156,9 @@ class NetworkManager {
   // ── 外网模式（带降级链） ─────────────────────────
 
   async _connectExternal(config, onUnknownHost, onLog) {
-    const method = config.externalMethod || "auto";
+    // v3.15.4：设置页下拉存短名（derp/frp/p2p/n2n），先归一化为传输全名再分派；全名历史配置原样通过
+    const rawMethod = config.externalMethod || "auto";
+    const method = METHOD_ALIASES[rawMethod] || rawMethod;
     const attempts = method === "auto"
       ? FALLBACK_ORDER
       : [method];
@@ -307,4 +317,4 @@ class NetworkManager {
   }
 }
 
-module.exports = { NetworkManager, STATES, FALLBACK_ORDER };
+module.exports = { NetworkManager, STATES, FALLBACK_ORDER, METHOD_ALIASES };
