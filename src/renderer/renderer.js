@@ -490,6 +490,8 @@ function addMessage(kind, text = "") {
   item.append(content);
   // 右键菜单替代悬浮操作栏
   item.addEventListener("contextmenu", (event) => showMessageContextMenu(event, item, kind));
+  // v3.15.2 修复：v3.15.0 改智能滚动时误删了挂载行，消息从不进 DOM → 聊天区空白 + token 计数器上浮到 header（右上角假象）
+  elements.messages.append(item);
   // v3.15.0 智能滚动：自己发的消息（user）始终滚底；其他（assistant/工具卡出现）仅当用户已在底部附近才跟随
   if (kind.startsWith("user") || isNearBottom()) elements.messages.scrollTop = elements.messages.scrollHeight;
   return item;
