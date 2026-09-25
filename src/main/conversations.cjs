@@ -81,6 +81,7 @@ function listConversations() {
         updatedAt: conversation.updatedAt,
         sessionId: conversation.sessionId,
         archiveFile: conversation.archiveFile,
+        lastConnectionMode: conversation.lastConnectionMode || "",
         preview
       };
     });
@@ -165,7 +166,8 @@ function addAssistantMessage(id, text, sessionId, files = [], tools = [], reques
       if (field) conversation[field] = sessionId || conversation[field] || "";
     } else conversation.sshSessionId = sessionId || conversation.sshSessionId || conversation.sessionId || "";
     conversation.sessionId = sessionId || conversation.sessionId;
-    conversation.lastConnectionMode = connectionMode === "local" ? "local" : "ssh";
+    // v3.15.0：记录真实三值模式（ssh/cloud/local）——历史列表模式图标 + 切对话联动连接模式
+    conversation.lastConnectionMode = ["ssh", "cloud", "local"].includes(connectionMode) ? connectionMode : "ssh";
   });
 }
 
@@ -178,7 +180,8 @@ function saveConversationSession(id, sessionId, connectionMode = "ssh", engine =
       if (field) conversation[field] = nextSessionId;
     } else conversation.sshSessionId = nextSessionId;
     conversation.sessionId = nextSessionId;
-    conversation.lastConnectionMode = connectionMode === "local" ? "local" : "ssh";
+    // v3.15.0：真实三值模式（ssh/cloud/local）
+    conversation.lastConnectionMode = ["ssh", "cloud", "local"].includes(connectionMode) ? connectionMode : "ssh";
   });
 }
 
@@ -248,6 +251,7 @@ function searchConversations(query, limit = 20) {
           title: conversation.title,
           updatedAt: conversation.updatedAt,
           pinned: Boolean(conversation.pinned),
+          lastConnectionMode: conversation.lastConnectionMode || "",
           snippet,
           role: message.role
         });

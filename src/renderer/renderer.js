@@ -39,6 +39,12 @@ let hasCloudApiKey = false;
 let brandConfig = null;     // 云端品牌配置
 let brandVerified = false;  // 是否通过云端验证
 const messages = new Map();
+let streamingConversationId = "";  // 进行中任务所属对话（v3.15.0：切走后后台继续，切回无缝衔接）
+let streamingConnectionMode = "";  // 进行中任务发起时的连接模式（状态条文案用）
+
+// v3.15.0 功能2：历史列表模式图标（对话的 lastConnectionMode → 标题后徽标）
+const CONVERSATION_MODE_ICONS = { ssh: "🖥️", cloud: "☁️", local: "💻" };
+const CONVERSATION_MODE_LABELS = { ssh: "SSH 远程", cloud: "云端 AI", local: "本机" };
 
 // ── Token 计数器 ──
 let conversationTokens = 0;  // 当前对话累计 token 数
@@ -483,9 +489,15 @@ function addMessage(kind, text = "") {
   item.append(content);
   // 右键菜单替代悬浮操作栏
   item.addEventListener("contextmenu", (event) => showMessageContextMenu(event, item, kind));
-  elements.messages.append(item);
-  elements.messages.scrollTop = elements.messages.scrollHeight;
+  // v3.15.0 智能滚动：自己发的消息（user）始终滚底；其他（assistant/工具卡出现）仅当用户已在底部附近才跟随
+  if (kind.startsWith("user") || isNearBottom()) elements.messages.scrollTop = elements.messages.scrollHeight;
   return item;
+}
+
+/** 用户是否停在聊天区底部附近（v3.15.0：Agent 输出时只有贴底才自动跟随，上滚看历史不再被拉回） */
+function isNearBottom() {
+  const el = elements.messages;
+  return el.scrollHeight - el.scrollTop - el.clientHeight < 80;
 }
 
 async function renderAssistant(item, text) {
@@ -715,7 +727,18 @@ async function refreshConversationList() {
       row.className = "conversation-row" + (conv.id === conversationId ? " active" : "");
       const button = document.createElement("button");
       button.className = "conversation-item";
-      button.textContent = conv.title;
+      const titleSpan = document.createElement("span");
+      titleSpan.className = "conversation-title";
+      titleSpan.textContent = conv.title;
+      button.append(titleSpan);
+      const modeIcon = CONVERSATION_MODE_ICONS[conv.lastConnectionMode];
+      if (modeIcon) {
+        const badge = document.createElement("span");
+        badge.className = "conversation-mode-icon";
+        badge.textContent = modeIcon;
+        badge.title = `此对话使用${CONVERSATION_MODE_LABELS[conv.lastConnectionMode]}模式`;
+        button.append(badge);
+      }
       button.title = conv.title;
       button.addEventListener("click", () => loadConversation(conv.id));
       const menu = document.createElement("button");
@@ -748,7 +771,18 @@ async function refreshConversationList() {
       row.className = "conversation-row" + (conversation.id === conversationId ? " active" : "");
       const button = document.createElement("button");
       button.className = "conversation-item";
-      button.textContent = conversation.title;
+      const titleSpan = document.createElement("span");
+      titleSpan.className = "conversation-title";
+      titleSpan.textContent = conversation.title;
+      button.append(titleSpan);
+      const modeIcon = CONVERSATION_MODE_ICONS[conversation.lastConnectionMode];
+      if (modeIcon) {
+        const badge = document.createElement("span");
+        badge.className = "conversation-mode-icon";
+        badge.textContent = modeIcon;
+        badge.title = `此对话使用${CONVERSATION_MODE_LABELS[conversation.lastConnectionMode]}模式`;
+        button.append(badge);
+      }
       button.title = conversation.title;
       button.addEventListener("click", () => loadConversation(conversation.id));
       const menu = document.createElement("button");
@@ -812,9 +846,18 @@ function showConversationMenu(event, conversation) {
 }
 
 async function loadConversation(id) {
-  if (activeId) return;
+  // v3.15.0 bug1：Agent 工作中允许切换对话——进行中的任务在后台继续，切回无缝衔接
   const conversation = await window.agentChatPro.getConversation(id);
   if (!conversation) return;
+  // v3.15.0 功能2：切到另一模式的对话时，聊天界面模式跟着切换（同步持久化——main 侧 chat:send 读已保存设置）
+  const lastMode = conversation.lastConnectionMode || "";
+  if (lastMode && ["ssh", "cloud", "local"].includes(lastMode) && lastMode !== currentConnectionMode) {
+    elements.form.elements.namedItem("connectionMode").value = lastMode;
+    updateConnectionModeUI();
+    try {
+      await window.agentChatPro.saveSettings({ ...(await window.agentChatPro.loadSettings()), connectionMode: lastMode });
+    } catch {}
+  }
   conversationId = conversation.id;
   sessionId = conversation.sessionId || "";
   attachments = [];
@@ -830,7 +873,10 @@ async function loadConversation(id) {
   } catch {}
   renderAttachments();
   elements.messages.replaceChildren();
+  // v3.15.0 bug1：此对话正在后台处理中——最后一条 draft 是流式元素本体，跳过渲染，随后重新挂载流式元素
+  const streamingOngoing = Boolean(activeId && streamingConversationId === conversation.id);
   conversation.messages.forEach((message) => {
+    if (message.draft && streamingOngoing) return;
     const item = addMessage(message.role, message.text);
     if (message.role === "user") renderSentAttachments(item, [], message.attachmentNames || []);
     if (message.role === "assistant") {
@@ -847,8 +893,17 @@ async function loadConversation(id) {
       renderAssistant(item, message.text);
     }
   });
-  elements.empty.hidden = conversation.messages.length > 0;
-  setConnection(sessionId ? `已恢复${currentConnectionMode === "cloud" ? "云端 AI" : currentConnectionMode === "local" ? `本机 ${localEngineLabel()}` : " SSH"} 会话` : "新对话，等待发送", "connected");
+  // v3.15.0 bug1：切回正在处理的对话——把后台流式元素重新挂载（同一引用，后续 delta 无缝衔接）
+  if (streamingOngoing) {
+    const answer = messages.get(activeId);
+    if (answer && !answer.isConnected) elements.messages.append(answer);
+  }
+  elements.empty.hidden = conversation.messages.length > 0 || streamingOngoing;
+  if (streamingOngoing) {
+    setConnection(`${streamingConnectionMode === "cloud" ? "云端 AI" : streamingConnectionMode === "local" ? `本机 ${localEngineLabel()}` : " SSH"}仍在处理此对话，输出结束后自动完成`, "connected");
+  } else {
+    setConnection(sessionId ? `已恢复${currentConnectionMode === "cloud" ? "云端 AI" : currentConnectionMode === "local" ? `本机 ${localEngineLabel()}` : " SSH"} 会话` : "新对话，等待发送", "connected");
+  }
   // 从历史消息估算累计 token
   conversationTokens = 0;
   for (const msg of conversation.messages) {
@@ -860,7 +915,7 @@ async function loadConversation(id) {
 }
 
 async function createNewConversation() {
-  if (activeId) return;
+  // v3.15.0 bug1：Agent 工作中允许新建/切换对话——进行中的任务在后台继续
   const conversation = await window.agentChatPro.createConversation();
   await loadConversation(conversation.id);
   // 新对话重置 token 计数
@@ -948,6 +1003,8 @@ function forceClearActiveState(reason) {
   }
   messages.delete(activeId);
   activeId = "";
+  streamingConversationId = "";
+  streamingConnectionMode = "";
   setBusy(false);
   elements.send.classList.remove("stopping");
   requestAnimationFrame(() => focusPrompt());
@@ -999,6 +1056,9 @@ async function sendMessage() {
   const message = elements.prompt.value.trim();
   if ((!message && !attachments.length) || activeId) return;
   activeId = crypto.randomUUID();
+  // v3.15.0 bug1：记录进行中任务归属（对话+模式）——切走后后台继续，完成回调防串话
+  streamingConversationId = conversationId;
+  streamingConnectionMode = currentConnectionMode;
   const userItem = addMessage("user", message);
   renderSentAttachments(userItem, attachments);
   const answer = addMessage("assistant generating");
@@ -1048,10 +1108,11 @@ async function sendMessage() {
       // 停止时合并已产生的流式 token
       addConversationTokens(streamingTokens + confirmedTokens);
       resetStreamingTokens();
-      setConnection(`${currentConnectionMode === "cloud" ? "云端 AI" : currentConnectionMode === "local" ? "本机 Agent" : "NAS"}已停止当前任务 · 连接正常`, "connected");
+      setConnection(`${streamingConnectionMode === "cloud" ? "云端 AI" : streamingConnectionMode === "local" ? "本机 Agent" : "NAS"}已停止当前任务 · 连接正常`, "connected");
       return;
     }
-    sessionId = result.sessionId || sessionId;
+    // v3.15.0 bug1：仅当用户仍看着该对话才更新全局会话状态（切走后完成后防串到别的对话）
+    if (streamingConversationId === conversationId) sessionId = result.sessionId || sessionId;
     const content = answer.querySelector(".message-content");
     if (!content.textContent && result.text) content.textContent = result.text;
     await renderAssistant(answer, result.text || content.textContent);
@@ -1059,15 +1120,15 @@ async function sendMessage() {
     finalizeToolList(answer, result.tools || []);
     renderReturnedFiles(answer, result.files || []);
     answer.classList.remove("generating");
-    // 合并流式 token 到对话累计
-    addConversationTokens(streamingTokens + confirmedTokens);
+    // 合并流式 token 到对话累计（v3.15.0：切走后完成时不再累进当前对话的计数，切回时按消息重算）
+    if (streamingConversationId === conversationId) addConversationTokens(streamingTokens + confirmedTokens);
     resetStreamingTokens();
-    // 如果 result.stats 包含对话统计，更新 token 显示
-    if (result.stats && result.stats.totalTokens) {
+    // 如果 result.stats 包含对话统计，更新 token 显示（仅当用户仍看着该对话）
+    if (result.stats && result.stats.totalTokens && streamingConversationId === conversationId) {
       conversationTokens = result.stats.totalTokens;
       updateTokenDisplay();
     }
-    setConnection(`${currentConnectionMode === "cloud" ? "云端 AI" : currentConnectionMode === "local" ? `本机 ${localEngineLabel()}` : "NAS"}已连接 · 会话已保存`, "connected");
+    setConnection(`${streamingConnectionMode === "cloud" ? "云端 AI" : streamingConnectionMode === "local" ? `本机 ${localEngineLabel()}` : "NAS"}已完成本轮任务 · 连接正常`, "connected");
     refreshConversationList();
   } catch (error) {
     answer.classList.remove("generating");
@@ -1080,11 +1141,27 @@ async function sendMessage() {
   } finally {
     messages.delete(activeId);
     activeId = "";
+    streamingConversationId = "";
+    streamingConnectionMode = "";
     setBusy(false);
     elements.send.classList.remove("stopping");
     requestAnimationFrame(() => focusPrompt());
   }
 }
+
+// ── 侧边栏收缩（v3.15.0 功能1：豆包样式——完全收起、主区占满；localStorage 记忆跨启动）──
+const sidebarToggle = document.querySelector("#sidebar-toggle");
+function syncSidebarToggle() {
+  const collapsed = document.body.classList.contains("sidebar-collapsed");
+  sidebarToggle.title = collapsed ? "展开侧边栏" : "收起侧边栏";
+}
+if (localStorage.getItem("acp-sidebar-collapsed") === "1") document.body.classList.add("sidebar-collapsed");
+syncSidebarToggle();
+sidebarToggle.addEventListener("click", () => {
+  document.body.classList.toggle("sidebar-collapsed");
+  localStorage.setItem("acp-sidebar-collapsed", document.body.classList.contains("sidebar-collapsed") ? "1" : "0");
+  syncSidebarToggle();
+});
 
 document.querySelector("#show-settings").addEventListener("click", openSettings);
 document.querySelector("#header-appearance").addEventListener("click", openAppearanceDialog);
@@ -1690,7 +1767,8 @@ window.agentChatPro.onDelta(({ id, text }) => {
   const answer = messages.get(id);
   if (!answer) return;
   answer.querySelector(".message-content").textContent += text;
-  elements.messages.scrollTop = elements.messages.scrollHeight;
+  // v3.15.0 智能滚动：仅当用户停在底部附近才跟随，上滚看历史不再被拉回
+  if (isNearBottom()) elements.messages.scrollTop = elements.messages.scrollHeight;
   // 实时估算流式 token
   streamingTokens += estimateTokens(text);
   updateTokenDisplay();
@@ -1700,19 +1778,22 @@ window.agentChatPro.onChatEvent((event) => {
   if (event.type === "upload") {
     setConnection(`正在上传 ${event.name} · ${Math.round(event.overall * 100)}%`, "");
   } else if (event.type === "connection") {
-    const labels = currentConnectionMode === "local"
+    // v3.15.0：进行中任务的文案标签用发起时的模式（切到别的对话/模式后不再错标）
+    const modeLabel = activeId ? streamingConnectionMode : currentConnectionMode;
+    const labels = modeLabel === "local"
       ? (currentLocalEngine === "atomcode"
         ? { "local-starting": "正在启动 AtomCode daemon…", connected: "AtomCode 正在处理…" }
         : currentLocalEngine === "custom"
         ? { "local-starting": "正在启动本机命令…", connected: "本机命令正在处理…" }
         : { "local-starting": "正在启动本机 Claude…", connected: "本机 Claude 正在处理…" })
-      : currentConnectionMode === "cloud"
+      : modeLabel === "cloud"
       ? { connecting: "正在连接云端 AI…", connected: "云端 AI 正在处理…", stopping: "正在停止…" }
       : { connecting: "正在连接 NAS…", reconnecting: "连接中断，正在自动重连…", connected: "已连接，Claude 正在处理…", stopping: "Claude 已收到停止请求，正在结束当前操作…", stopped: "连接已被强制关闭，正在结束当前请求…" };
     setConnection(labels[event.status] || "正在处理…", event.status === "connected" ? "connected" : "");
   } else if (event.type === "tool" && answer) {
     renderTool(answer, event.tool);
-    elements.messages.scrollTop = elements.messages.scrollHeight;
+    // v3.15.0 智能滚动：仅当用户停在底部附近才跟随
+    if (isNearBottom()) elements.messages.scrollTop = elements.messages.scrollHeight;
   } else if (event.type === "usage") {
     // 处理 usage 事件：用实际 token 数据替换估算值
     if (event.usage) {

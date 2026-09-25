@@ -240,7 +240,9 @@ body.maximized .window-shell { border-radius: 0; border: 0; box-shadow: none; }
 .conversation-list { display: flex; flex-direction: column; gap: 3px; }
 .conversation-row { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) 28px; border-radius: 8px; }
 .conversation-row:hover, .conversation-row.active { background: var(--bg-hover); }
-.conversation-item { width: 100%; min-width: 0; border: 0; border-radius: 8px; padding: 8px 4px 8px 9px; color: var(--text-secondary); background: transparent; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; text-align: left; font-size: 13px; }
+.conversation-item { width: 100%; min-width: 0; border: 0; border-radius: 8px; padding: 8px 4px 8px 9px; color: var(--text-secondary); background: transparent; overflow: hidden; text-align: left; font-size: 13px; display: flex; align-items: center; gap: 4px; }
+.conversation-title { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.conversation-mode-icon { flex: none; font-size: 11px; line-height: 1; }
 .conversation-row:hover .conversation-item, .conversation-row.active .conversation-item { color: var(--text-primary); }
 .conversation-menu { visibility: hidden; border: 0; color: var(--text-tertiary); background: transparent; border-radius: 6px; font-size: 17px; }
 .conversation-row:hover .conversation-menu, .conversation-row.active .conversation-menu { visibility: visible; }
@@ -259,6 +261,10 @@ body.maximized .window-shell { border-radius: 0; border: 0; box-shadow: none; }
 .security-note { color: var(--text-muted); font-size: 12px; line-height: 1.45; padding: 0 8px; margin: 0; }
 
 .main { flex: 1 1 auto; width: min(980px, calc(100% - 260px)); height: 100%; min-width: 0; min-height: 0; overflow: hidden; margin: 0 auto; display: flex; flex-direction: column; padding: 18px 40px 10px; }
+/* v3.15.0 功能1：侧边栏收缩（豆包样式——完全收起、主区占满、左上角切换按钮） */
+body.sidebar-collapsed .sidebar { display: none; }
+body.sidebar-collapsed .main { width: min(980px, 100%); }
+#sidebar-toggle { align-self: center; font-size: 17px; flex: none; }
 header { display: flex; justify-content: space-between; align-items: center; min-height: 32px; border-bottom: 1px solid var(--border-sidebar); padding-bottom: 10px; }
 .chat-heading { display: flex; align-items: baseline; min-width: 0; gap: 10px; }
 h1 { flex: none; font-size: 20px; margin: 0; font-weight: 680; }
