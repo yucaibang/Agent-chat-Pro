@@ -471,13 +471,17 @@ function makeWorkdir() {
     assert.ok(indexSource.includes("⚠️ 开启后 AI 可在工作目录内执行任意命令"));
   });
 
-  await test("renderer.js：表单收集 + 回填接线", () => {
+  await test("renderer.js：表单收集 + 回填接线 + 安全声明条件文案（v3.14.1）", () => {
     assert.ok(rendererSource.includes("cloudToolsEnabled: document.querySelector(\"#cloud-tools-enabled\")?.checked || false"));
     assert.ok(rendererSource.includes("cloudRunCommandEnabled: document.querySelector(\"#cloud-run-command-enabled\")?.checked || false"));
     assert.ok(rendererSource.includes('cloudWorkingDirectory: document.querySelector("#cloud-working-directory")?.value || ""'));
     assert.ok(rendererSource.includes("cloudToolsEnabled.checked = Boolean(settings.cloudToolsEnabled)"));
     assert.ok(rendererSource.includes("cloudRunCommandEnabled.checked = Boolean(settings.cloudRunCommandEnabled)"));
     assert.ok(rendererSource.includes('cloudWorkingDirectory.value = settings.cloudWorkingDirectory || ""'));
+    // 安全声明随工具执行开关切换：开启后不再宣称「仅传输文本消息」
+    assert.ok(rendererSource.includes("云端模式已开启工具执行：AI 可在您配置的工作目录内读写文件（命令执行需单独开启）。API 密钥仅保存在本地。"));
+    assert.ok(rendererSource.includes("#cloud-tools-enabled\")?.checked\n      ? \"云端模式已开启工具执行"));
+    assert.ok(rendererSource.includes("云端模式仅传输文本消息，不执行任何本地或远程命令。API 密钥仅保存在本地。"), "未开启工具执行时保留原文案");
   });
 
   await test("cloud-chat.cjs：config.tools 透传到两个请求体构建", () => {
@@ -503,10 +507,12 @@ function makeWorkdir() {
 
   const obfuscateSource = fs.readFileSync(OBFUSCATE_PATH, "utf8");
 
-  await test("混淆清单登记 cloud-tools.cjs + 版本号 3.14.0", () => {
+  await test("混淆清单登记 cloud-tools.cjs + 版本号 ≥ 3.14.0", () => {
     assert.ok(obfuscateSource.includes('"main/cloud-tools.cjs"'));
     const pkg = JSON.parse(fs.readFileSync(PACKAGE_PATH, "utf8"));
-    assert.strictEqual(pkg.version, "3.14.0");
+    const [major, minor, patch] = pkg.version.split(".").map(Number);
+    const versionRank = (major * 10000) + (minor * 100) + patch;
+    assert.ok(versionRank >= 31400, `当前版本 ${pkg.version} 应不低于 3.14.0`);
   });
 
   console.log(`\n═══ 结果：${passed} 通过，${failed} 失败 ═══`);

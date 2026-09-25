@@ -264,7 +264,9 @@ function updateConnectionModeUI() {
     ? "输入消息后，客户端会调用本机 Agent 并保留聊天上下文。"
     : "输入消息后，客户端会连接 NAS 并保留本次聊天的上下文。";
   document.querySelector("#security-note").textContent = isCloud
-    ? "云端模式仅传输文本消息，不执行任何本地或远程命令。API 密钥仅保存在本地。"
+    ? (document.querySelector("#cloud-tools-enabled")?.checked
+      ? "云端模式已开启工具执行：AI 可在您配置的工作目录内读写文件（命令执行需单独开启）。API 密钥仅保存在本地。"
+      : "云端模式仅传输文本消息，不执行任何本地或远程命令。API 密钥仅保存在本地。")
     : isLocal
     ? (localEngine === "atomcode"
       ? "本机模式通过本机 daemon 接口通信；Token 仅保存在这台电脑的加密存储中。"
