@@ -30,6 +30,7 @@ const {
   saveAssistantDraft,
   searchConversations,
   sessionForMode,
+  truncateConversationMessages, // v3.15.5 修复2：删除单条及下方所有落库消息
   conversationStats
 } = require("./conversations.cjs");
 const { logPath, writeLog } = require("./logger.cjs");
@@ -41,6 +42,7 @@ const { NetworkManager, STATES } = require("./network/network-manager.cjs");
 const { LatencyMonitor } = require("./network/latency-monitor.cjs");
 const { sendCloudChat, buildMessages, verifyCloudConnection, testProxyConnectivity } = require("./cloud-chat.cjs");
 const { executeToolCall, toolDefinitions, MAX_TOOL_ROUNDS } = require("./cloud-tools.cjs");
+const { collapseRepetition } = require("./repetition-guard.cjs"); // v3.15.5 修复1：复读检测折叠
 const {
   auditToolDetails
 } = require("./status-event-normalizer.cjs");
@@ -575,6 +577,12 @@ app.whenReady().then(async () => {
   ipcMain.handle("conversations:clear-session", (_event, id) => clearConversationSession(id));
   ipcMain.handle("conversations:rename", (_event, id, title) => renameConversation(id, title));
   ipcMain.handle("conversations:set-pinned", (_event, id, pinned) => setConversationPinned(id, pinned));
+  // v3.15.5 修复2：删除单条及下方所有落库消息（右键菜单「删除此条及下方所有消息」同步删除）
+  ipcMain.handle("conversations:truncate", (_event, id, anchor) => {
+    const result = truncateConversationMessages(id, anchor || {});
+    writeLog("conversation_truncated", { conversationId: id, removed: result.removed });
+    return result;
+  });
   ipcMain.handle("conversations:delete", (_event, id) => deleteConversation(id));
   ipcMain.handle("conversations:search", (_event, query, limit) => searchConversations(query, limit));
   ipcMain.handle("file:preview", async (_event, file) => {
@@ -746,6 +754,14 @@ app.whenReady().then(async () => {
           sendWorkStatusSignal(event.sender, "chat:delta", { id, text });
           if (!draftTimer) draftTimer = setTimeout(persistDraft, 1000);
         },
+        // v3.15.5 修复3：工具循环跨轮分隔——每轮工具执行后插入分隔线，视觉区分各轮输出
+        //（不经 onDelta，避免 streamedText 二次累计；直接推 chat:delta 到前端）
+        emitRoundSeparator: () => {
+          if (!streamedText) return;
+          const separator = "\n\n---\n\n";
+          streamedText += separator;
+          sendWorkStatusSignal(event.sender, "chat:delta", { id, text: separator });
+        },
         onStatus: (status) => sendWorkStatusSignal(event.sender, "chat:event", { id, type: "connection", status }),
         onUsage: (usage) => sendWorkStatusSignal(event.sender, "chat:event", { id, type: "usage", usage }),
         onToolEvent: emitToolCard,
@@ -766,6 +782,8 @@ app.whenReady().then(async () => {
       const runCloudWithTools = async () => {
         let loopMessages = cloudMessages;
         for (let round = 0; round <= MAX_TOOL_ROUNDS; round += 1) {
+          // v3.15.5 修复3：round>0 时上一轮工具已执行完，插入跨轮分隔线（首轮不插）
+          if (round > 0 && cloudCallbacks.emitRoundSeparator) cloudCallbacks.emitRoundSeparator();
           const promise = requestOnce(loopMessages);
           activeRequests.set(id, { promise, cancel: () => { promise.cancel?.(); }, conversationId: input.conversationId });
           const result = await promise;
@@ -831,17 +849,30 @@ app.whenReady().then(async () => {
         if (draftTimer) clearTimeout(draftTimer);
         safeSignal("chain-complete", () => chatChain.complete({}));
         if (result.cancelled) {
-          addAssistantMessage(input.conversationId, streamedText || "已停止。", "", [], collectedTools, id, "cloud");
+          // v3.15.5 修复1：取消时同样折叠复读段落再落库
+          const cancelledRepetition = collapseRepetition(streamedText);
+          if (cancelledRepetition.collapsed) {
+            writeLog("cloud_repetition_collapsed", { requestId: id, conversationId: input.conversationId, collapsed: cancelledRepetition.collapsed, removed: cancelledRepetition.removed, originalLength: streamedText.length, phase: "cancelled" });
+          }
+          const cancelledText = (cancelledRepetition.collapsed ? cancelledRepetition.text : streamedText) || "已停止。";
+          addAssistantMessage(input.conversationId, cancelledText, "", [], collectedTools, id, "cloud");
           writeLog("work_status_signal", statusSignalEntry({ requestId: id, direction: "main-received", signal: "request-outcome", disposition: "cancelled", eventType: "lifecycle", eventStatus: "cancelled" }));
           sendWorkStatusSignal(event.sender, "chat:event", normalizeAndObserveStatusEvent({ id, type: "lifecycle", status: "cancelled" }, { connectionMode: "cloud" }));
-          return { id, cancelled: true, text: streamedText, sessionId: "", tools: collectedTools, files: [] };
+          return { id, cancelled: true, text: cancelledText, sessionId: "", tools: collectedTools, files: [] };
         }
-        addAssistantMessage(input.conversationId, streamedText || "（无输出）", "", [], collectedTools, id, "cloud");
+        // v3.15.5 修复1：复读检测折叠——模型陷入复读循环（同段复读 N 遍）时，落库与返回都走折叠后文本，
+        // 防止复读产物全量进入下轮上下文（滚雪球放大）
+        const repetition = collapseRepetition(streamedText);
+        if (repetition.collapsed) {
+          writeLog("cloud_repetition_collapsed", { requestId: id, conversationId: input.conversationId, collapsed: repetition.collapsed, removed: repetition.removed, originalLength: streamedText.length });
+        }
+        const finalText = repetition.collapsed ? repetition.text : streamedText;
+        addAssistantMessage(input.conversationId, finalText || "（无输出）", "", [], collectedTools, id, "cloud");
         const stats = conversationStats(getConversation(input.conversationId));
-        writeLog("chat_send_success", { requestId: id, conversationId: input.conversationId, textLength: streamedText.length, toolCallCount: collectedTools.length, connectionMode: "cloud" });
+        writeLog("chat_send_success", { requestId: id, conversationId: input.conversationId, textLength: finalText.length, toolCallCount: collectedTools.length, connectionMode: "cloud" });
         writeLog("work_status_signal", statusSignalEntry({ requestId: id, direction: "main-received", signal: "request-outcome", disposition: "completed", eventType: "lifecycle", eventStatus: "finished" }));
         sendWorkStatusSignal(event.sender, "chat:event", normalizeAndObserveStatusEvent({ id, type: "lifecycle", status: "finished" }, { connectionMode: "cloud" }));
-        return { id, text: streamedText, usage: result.usage, stopReason: result.stopReason, sessionId: "", tools: collectedTools, files: [], stats };
+        return { id, text: finalText, usage: result.usage, stopReason: result.stopReason, sessionId: "", tools: collectedTools, files: [], stats, repetition: { collapsed: repetition.collapsed, removed: repetition.removed } };
       } catch (error) {
         if (draftTimer) clearTimeout(draftTimer);
         persistDraft();

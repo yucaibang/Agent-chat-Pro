@@ -135,8 +135,10 @@ function deleteConversation(id) {
 
 function addUserMessage(id, text, attachmentNames = []) {
   return update(id, (conversation) => {
-    conversation.messages.push({ role: "user", text, attachmentNames, at: new Date().toISOString() });
+    const message = { mid: randomUUID(), role: "user", text, attachmentNames, at: new Date().toISOString() }; // v3.15.5 修复2：mid 删除锚点
+    conversation.messages.push(message);
     if (conversation.title === "新对话") conversation.title = makeTitle(text);
+    return message;
   });
 }
 
@@ -153,7 +155,7 @@ function addAssistantMessage(id, text, sessionId, files = [], tools = [], reques
     const draft = requestId
       ? conversation.messages.find((message) => message.role === "assistant" && message.requestId === requestId)
       : null;
-    const completed = { role: "assistant", text, files, tools, at: draft?.at || new Date().toISOString() };
+    const completed = { mid: draft?.mid || randomUUID(), role: "assistant", text, files, tools, at: draft?.at || new Date().toISOString() }; // v3.15.5 修复2：mid 删除锚点（draft 转正复用原 mid）
     if (usage) completed.usage = usage;
     if (Number.isFinite(Number(durationMs))) completed.durationMs = Math.max(0, Math.round(Number(durationMs)));
     if (draft) {
@@ -191,6 +193,7 @@ function saveAssistantDraft(id, requestId, text) {
     const existing = conversation.messages.find((message) => message.role === "assistant" && message.requestId === requestId);
     if (existing) existing.text = text;
     else conversation.messages.push({
+      mid: randomUUID(), // v3.15.5 修复2：mid 删除锚点
       role: "assistant",
       text,
       draft: true,
@@ -276,6 +279,28 @@ function update(id, mutate) {
   return conversation;
 }
 
+// v3.15.5 修复2：删除单条及下方所有落库消息（右键「删除此条及下方所有消息」同步落库，切走切回不再复活）。
+// 锚点：优先 mid（本轮起落库消息带 mid），旧数据按 at+role 兜底。
+// 注意：update() 的 mutate 回调返回值会被丢弃，删除计数用闭包变量传出。
+function truncateConversationMessages(id, anchor = {}) {
+  let removedCount = 0;
+  update(id, (conversation) => {
+    const messages = Array.isArray(conversation.messages) ? conversation.messages : [];
+    let index = -1;
+    const mid = String(anchor.mid || "").trim();
+    if (mid) index = messages.findIndex((message) => message.mid === mid);
+    if (index === -1) {
+      const at = String(anchor.at || "").trim();
+      const role = String(anchor.role || "").trim();
+      if (at && role) index = messages.findIndex((message) => message.at === at && message.role === role);
+    }
+    if (index === -1) throw new Error("找不到要删除的消息（对话内容可能已变化），请重新进入对话后重试。");
+    removedCount = messages.length - index;
+    conversation.messages = messages.slice(0, index);
+  });
+  return { removed: removedCount };
+}
+
 function ensureConversationArchives() {
   const all = read();
   let changed = false;
@@ -331,5 +356,6 @@ module.exports = {
   saveAssistantDraft,
   searchConversations,
   sessionForMode,
+  truncateConversationMessages,
   conversationStats
 };

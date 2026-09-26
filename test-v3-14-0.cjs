@@ -437,7 +437,8 @@ function makeWorkdir() {
     assert.ok(mainSource.includes("工具执行失败：${error.message}"));
     assert.ok(mainSource.includes("若当前服务商不支持工具调用，请在设置中关闭「工具执行」后重试"));
     assert.ok(mainSource.includes("collectedTools"));
-    assert.ok(mainSource.includes('addAssistantMessage(input.conversationId, streamedText || "（无输出）", "", [], collectedTools, id, "cloud")'));
+    // v3.15.5 起 tools 存档走折叠后文本（finalText = 折叠或原样 streamedText），断言跟随
+    assert.ok(mainSource.includes('addAssistantMessage(input.conversationId, finalText || "（无输出）", "", [], collectedTools, id, "cloud")'));
     assert.ok(mainSource.includes("cloud_tool_success"));
     assert.ok(mainSource.includes("cloud_tool_failed"));
   });

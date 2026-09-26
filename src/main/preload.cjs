@@ -38,6 +38,8 @@ contextBridge.exposeInMainWorld("agentChatPro", {
   clearConversationSession: (id) => ipcRenderer.invoke("conversations:clear-session", id),
   renameConversation: (id, title) => ipcRenderer.invoke("conversations:rename", id, title),
   setConversationPinned: (id, pinned) => ipcRenderer.invoke("conversations:set-pinned", id, pinned),
+  // v3.15.5 修复2：删除单条及下方所有落库消息（右键菜单同步删除）
+  truncateConversationMessages: (id, anchor) => ipcRenderer.invoke("conversations:truncate", id, anchor),
   deleteConversation: (id) => ipcRenderer.invoke("conversations:delete", id),
   searchConversations: (query, limit) => ipcRenderer.invoke("conversations:search", query, limit),
   // ── 聊天 IPC ──

@@ -881,6 +881,10 @@ async function loadConversation(id) {
   conversation.messages.forEach((message) => {
     if (message.draft && streamingOngoing) return;
     const item = addMessage(message.role, message.text);
+    // v3.15.5 修复2：写入落库锚点（mid/at/role）——右键「删除此条及下方所有消息」据此同步落库删除
+    item.dataset.msgId = message.mid || "";
+    item.dataset.msgAt = message.at || "";
+    item.dataset.msgRole = message.role;
     if (message.role === "user") renderSentAttachments(item, [], message.attachmentNames || []);
     if (message.role === "assistant") {
       if (message.draft) {
@@ -1130,6 +1134,19 @@ async function sendMessage() {
     if (result.stats && result.stats.totalTokens && streamingConversationId === conversationId) {
       conversationTokens = result.stats.totalTokens;
       updateTokenDisplay();
+    }
+    // v3.15.5 修复2：补落库锚点（mid）——本轮完成后回查落库记录补写 dataset，右键删除不再依赖「重新进入对话」
+    if (streamingConversationId === conversationId) {
+      try {
+        const stored = await window.agentChatPro.getConversation(conversationId);
+        const reversed = (stored?.messages || []).slice().reverse();
+        const lastUser = reversed.find((msg) => msg.role === "user");
+        const lastAssistant = reversed.find((msg) => msg.role === "assistant" && !msg.draft);
+        if (lastUser?.mid) userItem.dataset.msgId = lastUser.mid;
+        if (lastUser?.at) userItem.dataset.msgAt = lastUser.at;
+        if (lastAssistant?.mid) answer.dataset.msgId = lastAssistant.mid;
+        if (lastAssistant?.at) answer.dataset.msgAt = lastAssistant.at;
+      } catch {}
     }
     setConnection(`${streamingConnectionMode === "cloud" ? "云端 AI" : streamingConnectionMode === "local" ? `本机 ${localEngineLabel()}` : "NAS"}已完成本轮任务 · 连接正常`, "connected");
     refreshConversationList();
@@ -2604,10 +2621,25 @@ function showMessageContextMenu(event, item, kind) {
 
     content.append(createContextMenuSeparator());
 
-    const deleteItem = createContextMenuItem("🗑", "删除此条及下方所有消息", () => {
+    const deleteItem = createContextMenuItem("🗑", "删除此条及下方所有消息", async () => {
+      closeContextMenu();
+      // v3.15.5 修复2：先同步落库（truncate IPC）成功后再删 DOM——切走切回不再复活
+      const anchorId = item.dataset.msgId || "";
+      const anchorAt = item.dataset.msgAt || "";
+      const anchorRole = item.dataset.msgRole || "user";
+      if (!anchorId && !anchorAt) {
+        alert("本条消息还没有同步记录，请重新进入该对话后再删除。");
+        return;
+      }
+      try {
+        await window.agentChatPro.truncateConversationMessages(conversationId, { mid: anchorId, at: anchorAt, role: anchorRole });
+      } catch (error) {
+        alert("删除失败：" + (error.message || error));
+        return;
+      }
       const allMessages = Array.from(elements.messages.querySelectorAll(".message"));
       const startIndex = allMessages.indexOf(item);
-      if (startIndex === -1) { closeContextMenu(); return; }
+      if (startIndex === -1) return;
       // 删除当前及后续所有消息
       for (let i = allMessages.length - 1; i >= startIndex; i--) {
         allMessages[i].remove();
@@ -2616,7 +2648,15 @@ function showMessageContextMenu(event, item, kind) {
       if (!elements.messages.querySelector(".message")) {
         elements.empty.hidden = false;
       }
-      closeContextMenu();
+      // 按落库消息重算累计 token（删除的消息不再计入）
+      conversationTokens = 0;
+      try {
+        const stored = await window.agentChatPro.getConversation(conversationId);
+        for (const msg of stored?.messages || []) {
+          conversationTokens += estimateTokens(msg.text || "");
+        }
+      } catch {}
+      updateTokenDisplay();
     }, true);
     content.append(deleteItem);
   } else if (kind === "assistant") {
