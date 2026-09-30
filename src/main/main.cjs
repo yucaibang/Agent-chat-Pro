@@ -254,6 +254,43 @@ function createWindow() {
   window.on("unresponsive", () => writeLog("window_unresponsive"));
 }
 
+// ── v3.15.8 关于页彩蛋：跳跳龙小游戏（Chrome dino 同款，主角换成 Claude Code 吉祥物）──
+// 触发：设置中心·关于页点击「Agent Chat Pro」标题（renderer 接线）。单例窗口，无 preload（零 IPC 面）。
+let dinoGameWindow = null;
+function createDinoGameWindow() {
+  if (dinoGameWindow && !dinoGameWindow.isDestroyed()) {
+    if (dinoGameWindow.isMinimized()) dinoGameWindow.restore();
+    dinoGameWindow.focus();
+    writeLog("dino_game_opened", { reused: true });
+    return { reused: true };
+  }
+  dinoGameWindow = new BrowserWindow({
+    width: 960,
+    height: 340,
+    minWidth: 560,
+    minHeight: 280,
+    backgroundColor: "#00000000",
+    frame: false,
+    transparent: true,
+    resizable: true,
+    maximizable: false,
+    fullscreenable: false,
+    autoHideMenuBar: true,
+    webPreferences: {
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true
+    }
+  });
+  dinoGameWindow.setMenuBarVisibility(false);
+  // 游戏页无外链；兜底防子窗口（与主窗口 v3.15.7 防线同款）
+  dinoGameWindow.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+  dinoGameWindow.on("closed", () => { dinoGameWindow = null; });
+  dinoGameWindow.loadFile(path.join(__dirname, "../renderer/game/dino.html"));
+  writeLog("dino_game_opened", { reused: false });
+  return { reused: false };
+}
+
 app.whenReady().then(async () => {
   app.setAppUserModelId("com.jiang.agentChatPro");
   nativeTheme.themeSource = "dark";
@@ -1221,6 +1258,8 @@ app.whenReady().then(async () => {
   });
   // 关于页版本展示（v3.12.2）
   ipcMain.handle("app:version", () => app.getVersion());
+  // v3.15.8 关于页彩蛋：跳跳龙小游戏窗口
+  ipcMain.handle("app:open-dino-game", () => createDinoGameWindow());
   ipcMain.handle("cache:scan", async () => {
     try {
       const result = await scanSystemCaches();

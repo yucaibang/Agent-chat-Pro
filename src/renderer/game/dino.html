@@ -1,0 +1,354 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<title>Dino · Agent Chat Pro</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: transparent; }
+  body { border-radius: 10px; }
+  canvas { display: block; width: 100vw; height: 100vh; }
+  #close-btn {
+    position: fixed; top: 6px; right: 10px; z-index: 10;
+    width: 26px; height: 26px; line-height: 24px; text-align: center;
+    font: 14px/24px sans-serif; color: #A8A8A8; cursor: pointer;
+    background: #1C1C1C; border: 1px solid #333; border-radius: 6px; user-select: none;
+  }
+  #close-btn:hover { color: #D78787; border-color: #D78787; }
+</style>
+</head>
+<body>
+<div id="close-btn" title="关闭（Esc）">×</div>
+<canvas id="game"></canvas>
+<script>
+"use strict";
+/* ── Claude Code 吉祥物精灵（1:1 复刻自用户截图 102×50 像素画）──
+   . = 背景透明 / # = 主体 #D78787 / E = 眼睛 #000000（深底上呈镂空，与原作一致） */
+const SPRITE =/* 1:1 复刻自截图像素 */ [
+  "......................................................................................................",
+  "...................##########################################################.........................",
+  "...................##########################################################.........................",
+  "...................##########################################################.........................",
+  "...................##########################################################.........................",
+  "...................##########################################################.........................",
+  "...................##########################################################.........................",
+  "...................##########################################################.........................",
+  "...................##########################################################.........................",
+  "...................##########################################################.........................",
+  "...................##########################################################.........................",
+  "...................#########EEEE################################EEEE#########.........................",
+  "...................#########EEEE################################EEEE#########.........................",
+  "...................#########EEEE################################EEEE#########.........................",
+  "...................#########EEEE################################EEEE#########.........................",
+  "...................#########EEEE################################EEEE#########.........................",
+  "...................#########EEEE################################EEEE#########.........................",
+  "...................#########EEEE################################EEEE#########.........................",
+  "...................#########EEEE################################EEEE#########.........................",
+  "...................#########EEEE################################EEEE#########.........................",
+  "..........############################################################################................",
+  "..........############################################################################................",
+  "..........############################################################################................",
+  "..........############################################################################................",
+  "..........############################################################################................",
+  "..........############################################################################................",
+  "..........############################################################################................",
+  "..........############################################################################................",
+  "..........############################################################################................",
+  "..........############################################################################................",
+  "...................##########################################################.........................",
+  "...................##########################################################.........................",
+  "...................##########################################################.........................",
+  "...................##########################################################.........................",
+  "...................##########################################################.........................",
+  "...................##########################################################.........................",
+  "...................##########################################################.........................",
+  "...................##########################################################.........................",
+  "...................##########################################################.........................",
+  "............................####.....####..............####.....####..................................",
+  "............................####.....####..............####.....####..................................",
+  "............................####.....####..............####.....####..................................",
+  "............................####.....####..............####.....####..................................",
+  "............................####.....####..............####.....####..................................",
+  "............................####.....####..............####.....####..................................",
+  "............................####.....####..............####.....####..................................",
+  "............................####.....####..............####.....####..................................",
+  "............................####.....####..............####.....####..................................",
+  "............................####.....####..............####.....####..................................",
+  "......................................................................................................"
+];
+
+const MASCOT = "#D78787";      // 主体色（取自截图精确色值）
+const EYE = "#101010";         // 眼睛（镂空层）
+const BG = "#0C0C0C";          // 画布底色
+const GROUND = "#8A7E7E";      // 地面线
+const WAVE_1 = "rgba(215,135,135,0.30)";
+const WAVE_2 = "rgba(91,138,138,0.22)";
+const WAVE_TEXT = "user's word";
+
+const canvas = document.getElementById("game");
+const ctx = canvas.getContext("2d");
+let W = 0, H = 0, DPR = 1;
+
+function resize() {
+  DPR = window.devicePixelRatio || 1;
+  W = window.innerWidth; H = window.innerHeight;
+  canvas.width = W * DPR; canvas.height = H * DPR;
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  layout();
+}
+window.addEventListener("resize", resize);
+
+/* ── 几何布局（随窗口尺寸计算）── */
+const G = {
+  groundY: 0,      // 地面线 y
+  mascotScale: 0.8,
+  groundW: 0
+};
+function layout() {
+  G.groundY = Math.round(H * 0.78);
+  G.mascotScale = W < 520 ? 0.66 : 0.8;
+}
+
+/* ── 吉祥物绘制：sprite 每源像素 = scale 逻辑像素 ── */
+const SW = SPRITE[0].length, SH = SPRITE.length;
+function drawMascot(x, y, pose) {
+  // pose: "run-a" | "run-b" | "jump" | "dead"
+  const s = G.mascotScale;
+  const legTop = 39;                      // 腿区起始行
+  const legs = [28, 37, 56, 65];          // 四条腿的起始列
+  const lift = new Set();
+  if (pose === "run-a") lift.add(1), lift.add(2);
+  if (pose === "run-b") lift.add(0), lift.add(3);
+  if (pose === "jump") lift.add(0), lift.add(1), lift.add(2), lift.add(3);
+  for (let row = 0; row < SH; row++) {
+    const line = SPRITE[row];
+    for (let col = 0; col < SW; col++) {
+      const ch = line[col];
+      if (ch === ".") continue;
+      // 跑动帧：被抬起的腿只画 4 行（其余跳过，视觉=抬腿）
+      if (row >= legTop + 4) {
+        const li = legs.findIndex((l) => col >= l && col < l + 4);
+        if (li >= 0 && lift.has(li)) continue;
+      }
+      // 死亡帧：眼睛格改画 X（用主色小块拼成镂空叉）
+      ctx.fillStyle = ch === "E" ? EYE : MASCOT;
+      ctx.fillRect(x + col * s, y + row * s, s, s);
+      if (pose === "dead" && ch === "E" && (row === 14 || row === 16)) {
+        const sx = x + col * s;
+        ctx.fillStyle = MASCOT;
+        ctx.fillRect(sx, y + row * s, s, s);
+      }
+    }
+  }
+  if (pose === "dead") { // 罩住双眼画叉
+    ctx.save();
+    ctx.strokeStyle = MASCOT; ctx.lineWidth = Math.max(1.5, s);
+    [[25.5, 11], [65.5, 11]].forEach(([lx, ty]) => {
+      const cx = x + (lx + 2) * s, cy = y + (ty + 4) * s, r = 2.2 * s;
+      ctx.beginPath();
+      ctx.moveTo(cx - r, cy - r); ctx.lineTo(cx + r, cy + r);
+      ctx.moveTo(cx + r, cy - r); ctx.lineTo(cx - r, cy + r);
+      ctx.stroke();
+    });
+    ctx.restore();
+  }
+}
+
+/* ── 仙人掌障碍（像素风，两种）── */
+function drawCactus(x, base, h, w) {
+  const px = 3;
+  const bodyW = Math.round(w / px) * px || 3 * px;
+  ctx.fillStyle = MASCOT;
+  ctx.fillRect(x, base - h, bodyW, h);                          // 主干
+  ctx.fillRect(x - 2 * px, base - h * 0.62, 2 * px, h * 0.34);  // 左枝
+  ctx.fillRect(x - 2 * px, base - h * 0.62 - px, 3 * px, px);
+  ctx.fillRect(x + bodyW, base - h * 0.5, 2 * px, h * 0.36);    // 右枝
+  ctx.fillRect(x + bodyW - px, base - h * 0.62 - px, 3 * px, px);
+  ctx.fillStyle = BG; // 镂空横纹
+  for (let i = 1; i <= 3; i++) ctx.fillRect(x, base - h + i * (h / 4), bodyW, 1);
+}
+
+/* ── 地面（线 + 随机点）── */
+function drawGround(offset) {
+  ctx.fillStyle = GROUND;
+  ctx.fillRect(0, G.groundY, W, 2);
+  ctx.fillStyle = "rgba(138,126,126,0.55)";
+  for (let i = 0; i < G.groundDots.length; i++) {
+    const d = G.groundDots[i];
+    let x = (d.x - offset * (0.5 + d.depth)) % (W + 40);
+    if (x < -20) x += W + 40;
+    ctx.fillRect(x, G.groundY + 6 + d.dy, d.w, 2);
+    if (x + d.w > W) ctx.fillRect(x - (W + 40), G.groundY + 6 + d.dy, d.w, 2);
+  }
+}
+G.groundDots = [];
+for (let i = 0; i < 26; i++) {
+  G.groundDots.push({ x: Math.random() * 960, dy: Math.random() * 10 | 0, w: 2 + (Math.random() * 4 | 0), depth: Math.random() * 0.8 });
+}
+
+/* ── 背景海浪（两层视差 + 浮字）── */
+function drawWaves(t, speed) {
+  const base = G.groundY - 34;
+  drawWaveLayer(base - 4, 16, WAVE_1, t * speed * 0.55, 1.0);
+  drawWaveText(base - 10, t);
+  drawWaveLayer(base - 16, 12, WAVE_2, t * speed * 0.8 + 2.1, 1.4);
+}
+function drawWaveLayer(baseY, amp, color, phase, k) {
+  ctx.beginPath();
+  ctx.moveTo(0, baseY);
+  for (let x = 0; x <= W; x += 6) {
+    ctx.lineTo(x, baseY - Math.abs(Math.sin((x / W) * Math.PI * 3 + phase)) * amp * k);
+  }
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 2;
+  ctx.stroke();
+}
+function drawWaveText(baseY, t) {
+  ctx.save();
+  const drift = ((Date.now() / 90) % (W + 260)) - 130;
+  ctx.font = "600 12px 'Segoe UI Emoji', 'PingFang SC', monospace";
+  ctx.fillStyle = "rgba(215,135,135,0.5)";
+  ctx.fillText(WAVE_TEXT, drift, baseY - 8);
+  ctx.restore();
+}
+
+/* ── 游戏状态 ── */
+const state = {
+  mode: "ready",        // ready | run | over
+  y: 0, vy: 0,
+  onGround: true,
+  obstacles: [],
+  score: 0, hi: 0,
+  speed: 0, t: 0,
+  frame: 0, runT: 0,
+  flashT: 0
+};
+try { state.hi = parseInt(localStorage.getItem("acp-dino-hi") || "0", 10) || 0; } catch { state.hi = 0; }
+
+const GRAVITY = 2100, JUMP_V = -760;
+const MASCOT_W = SW * 0.8, MASCOT_H = SH * 0.8;
+
+function reset() {
+  state.mode = "run";
+  state.y = 0; state.vy = 0; state.onGround = true;
+  state.obstacles.length = 0;
+  state.score = 0; state.speed = 340; state.runT = 0;
+  state.nextIn = 60;
+}
+function jump() {
+  if (state.mode === "over") { reset(); return; }
+  if (!state.onGround) return;
+  state.vy = JUMP_V; state.onGround = false;
+}
+function gameOver() {
+  state.mode = "over";
+  if (state.score > state.hi) {
+    state.hi = state.score;
+    try { localStorage.setItem("acp-dino-hi", String(state.hi)); } catch { /* 忽略 */ }
+  }
+}
+
+/* ── 障碍生成 ── */
+function spawnObstacle() {
+  const roll = Math.random();
+  if (roll < 0.45) state.obstacles.push({ x: W + 40, h: 26, w: 10, n: 1 });
+  else if (roll < 0.8) state.obstacles.push({ x: W + 40, h: 40, w: 12, n: 1 });
+  else state.obstacles.push({ x: W + 40, h: 26, w: 10, n: 2 });
+  state.nextIn = 90 + Math.random() * 110 - Math.min(45, state.score * 0.4);
+}
+state.nextIn = 60;
+
+/* ── 主循环 ── */
+function loop(ts) {
+  const dt = 1 / 60;
+  state.t += dt;
+  ctx.clearRect(0, 0, W, H);
+  // 背景渐层
+  const grad = ctx.createLinearGradient(0, 0, 0, H);
+  grad.addColorStop(0, "#0C0C0C");
+  grad.addColorStop(1, "#171211");
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, W, H);
+
+  if (state.mode === "run") {
+    state.speed += dt * 3.2;                       // 渐加速
+    state.score = state.score + dt * state.speed * 0.12;
+    state.runT += dt * state.speed;
+    state.nextIn -= state.speed * dt;
+    if (state.nextIn <= 0) spawnObstacle();
+    for (const o of state.obstacles) o.x -= state.speed * dt;
+    state.obstacles = state.obstacles.filter((o) => o.x + o.w > -80);
+  }
+  // 跳跃物理
+  if (!state.onGround) {
+    state.vy += GRAVITY * dt;
+    state.y += state.vy * dt;
+    if (state.y >= 0) { state.y = 0; state.vy = 0; state.onGround = true; }
+  }
+  drawWaves(state.t, state.speed);
+  drawGround(state.t * state.speed);
+  // 障碍
+  for (const o of state.obstacles) {
+    for (let i = 0; i < o.n; i++) drawCactus(o.x + i * (o.w + 8), G.groundY - 2, o.h, o.w);
+  }
+  // 吉祥物
+  const mx = Math.min(W * 0.14, 120);
+  const my = G.groundY - SH * G.mascotScale + state.y;
+  if (state.mode !== "ready") {
+    const runFrame = Math.floor(state.runT / 40) % 2;
+    const pose = !state.onGround ? "jump" : state.mode === "over" ? "dead" : (runFrame ? "run-a" : "run-b");
+    drawMascot(mx, my, pose);
+  }
+  // 碰撞（障碍块 vs 主体简化盒）
+  if (state.mode === "run") {
+    const bx = mx + 24 * G.mascotScale, by = my + 6, bw = (SW - 36) * G.mascotScale, bh = (SH - 12) * G.mascotScale - 2;
+    for (const o of state.obstacles) {
+      const ow = o.w * o.n + (o.n - 1) * 8;
+      if (bx < o.x + ow && bx + bw > o.x && by + bh > G.groundY - 2 - o.h && by < G.groundY - 2) { gameOver(); break; }
+    }
+  }
+  // 分数
+  ctx.font = "700 15px Consolas, monospace";
+  ctx.fillStyle = "rgba(216,216,216,0.85)";
+  const scoreStr = String(Math.floor(state.score)).padStart(5, "0");
+  const hiStr = "HI " + String(state.hi).padStart(5, "0");
+  ctx.textAlign = "right";
+  ctx.fillText(hiStr + "   " + scoreStr, W - 46, 30);
+  ctx.textAlign = "left";
+  if (state.mode === "ready") {
+    ctx.font = "600 17px 'Segoe UI', 'PingFang SC', monospace";
+    ctx.fillStyle = "rgba(215,135,135,0.95)";
+    ctx.fillText("按 空格 / 点击 开始", W / 2 - 90, H * 0.42);
+    ctx.font = "400 12px Consolas, monospace";
+    ctx.fillStyle = "rgba(170,170,170,0.8)";
+    ctx.fillText("跳跳龙彩蛋 · Claude Code 吉祥物驾到", W / 2 - 100, H * 0.42 + 24);
+    drawMascot(mx, G.groundY - SH * G.mascotScale, "run-b");
+  }
+  if (state.mode === "over") {
+    ctx.textAlign = "center";
+    ctx.font = "700 22px Consolas, monospace";
+    ctx.fillStyle = MASCOT;
+    ctx.fillText("G A M E  O V E R", W / 2, H * 0.34);
+    ctx.font = "400 13px 'PingFang SC', monospace";
+    ctx.fillStyle = "rgba(200,200,200,0.9)";
+    ctx.fillText("按 空格 / 点击 重新开始", W / 2, H * 0.34 + 26);
+    ctx.textAlign = "left";
+  }
+  requestAnimationFrame(loop);
+}
+
+/* ── 输入 ── */
+function bindInput() {
+  window.addEventListener("keydown", (e) => {
+    if (e.code === "Space" || e.code === "ArrowUp" || e.code === "KeyW") { e.preventDefault(); if (state.mode === "ready") reset(); else jump(); }
+    if (e.code === "Escape") window.close();
+  });
+  canvas.addEventListener("pointerdown", () => { if (state.mode === "ready") reset(); else jump(); });
+  document.getElementById("close-btn").addEventListener("click", () => window.close());
+}
+bindInput();
+resize();
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>

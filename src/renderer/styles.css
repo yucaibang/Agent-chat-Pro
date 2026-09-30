@@ -493,7 +493,8 @@ dialog form { display: flex; flex-direction: column; gap: 15px; padding: 23px; }
 .settings-panel-heading p { margin: 0; color: var(--text-muted); font-size: 13px; }
 .about-hero { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 18px 0 6px; text-align: center; }
 .about-logo { font-size: 46px; line-height: 1; }
-.about-title { font-size: 22px; font-weight: 700; color: var(--text-primary); }
+.about-title { font-size: 22px; font-weight: 700; color: var(--text-primary); cursor: pointer; transition: color 0.15s ease; user-select: none; }
+.about-title:hover { color: var(--accent, #D78787); }
 .about-tagline { font-size: 13px; color: var(--text-muted); }
 .about-info { display: flex; flex-direction: column; gap: 10px; margin: 14px 0 0; padding: 15px; border: 1px solid var(--border-control); border-radius: 12px; background: var(--bg-deep); }
 .about-row { display: flex; justify-content: space-between; gap: 12px; font-size: 13px; }

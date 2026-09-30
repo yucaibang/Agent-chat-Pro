@@ -78,6 +78,8 @@ contextBridge.exposeInMainWorld("agentChatPro", {
   getConversationContext: (conversationId) => ipcRenderer.invoke("context:get", conversationId),
   // 关于页版本（v3.12.2）
   getAppVersion: () => ipcRenderer.invoke("app:version"),
+  // v3.15.8 关于页彩蛋：跳跳龙小游戏窗口
+  openDinoGame: () => ipcRenderer.invoke("app:open-dino-game"),
   // ── 缓存清理 IPC（v3.10.0）──
   scanSystemCaches: () => ipcRenderer.invoke("cache:scan"),
   cleanSystemCaches: (targets) => ipcRenderer.invoke("cache:clean", targets),

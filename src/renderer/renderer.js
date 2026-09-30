@@ -1249,6 +1249,11 @@ async function fillAboutVersion() {
 }
 fillAboutVersion();
 
+// ── v3.15.8 关于页彩蛋：点击「Agent Chat Pro」标题弹出跳跳龙小游戏 ──
+document.querySelector(".about-title")?.addEventListener("click", () => {
+  window.agentChatPro.openDinoGame().catch(() => {});
+});
+
 elements.dialog.addEventListener("close", async () => {
   try { populateSettings(await window.agentChatPro.loadSettings()); }
   catch (error) { setConnection("重新读取设置失败：" + error.message, "error"); }
