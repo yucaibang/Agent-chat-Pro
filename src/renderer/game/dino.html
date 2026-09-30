@@ -232,8 +232,8 @@ function reset() {
   state.mode = "run";
   state.y = 0; state.vy = 0; state.onGround = true;
   state.obstacles.length = 0;
-  state.score = 0; state.speed = 340; state.runT = 0;
-  state.nextIn = 60;
+  state.score = 0; state.speed = 250; state.runT = 0;
+  state.nextIn = 320;
 }
 function jump() {
   if (state.mode === "over") { reset(); return; }
@@ -254,9 +254,9 @@ function spawnObstacle() {
   if (roll < 0.45) state.obstacles.push({ x: W + 40, h: 26, w: 10, n: 1 });
   else if (roll < 0.8) state.obstacles.push({ x: W + 40, h: 40, w: 12, n: 1 });
   else state.obstacles.push({ x: W + 40, h: 26, w: 10, n: 2 });
-  state.nextIn = 90 + Math.random() * 110 - Math.min(45, state.score * 0.4);
+  state.nextIn = 150 + Math.random() * 160 - Math.min(70, state.score * 0.25); // v3.15.9 障碍间距放宽（90~200 → 150~310，压缩更缓）
 }
-state.nextIn = 60;
+state.nextIn = 320;
 
 /* ── 主循环 ── */
 function loop(ts) {
@@ -271,8 +271,8 @@ function loop(ts) {
   ctx.fillRect(0, 0, W, H);
 
   if (state.mode === "run") {
-    state.speed += dt * 3.2;                       // 渐加速
-    state.score = state.score + dt * state.speed * 0.12;
+    state.speed += dt * 1.6;                       // 渐加速（v3.15.9 用户反馈初版过快：340/3.2 → 250/1.6）
+    state.score = state.score + dt * state.speed * 0.1;
     state.runT += dt * state.speed;
     state.nextIn -= state.speed * dt;
     if (state.nextIn <= 0) spawnObstacle();
