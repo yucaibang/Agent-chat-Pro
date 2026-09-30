@@ -204,6 +204,22 @@ function createWindow() {
     }
   });
   Menu.setApplicationMenu(null);
+  // ── v3.15.7 窗口导航兜底 ──
+  // 背景：设置页密钥提示的服务商注册链接未接拦截，Electron 默认把主窗口整个导航到外链，UI
+  // 被替换且无返回键 → 用户只能关掉应用重开。主进程双兜底，未来任何渲染层漏接都不会再劫持窗口。
+  // ① target=_blank / window.open → 拒开子窗口，改走系统浏览器
+  window.webContents.setWindowOpenHandler(({ url }) => {
+    if (/^https?:/i.test(url)) shell.openExternal(url).catch(() => {});
+    return { action: "deny" };
+  });
+  // ② 主窗口内部导航拦外链（file:// 自身页面/锚点不受影响，loadFile 程序化加载不触发 will-navigate）
+  window.webContents.on("will-navigate", (event, url) => {
+    if (/^https?:/i.test(url)) {
+      event.preventDefault();
+      shell.openExternal(url).catch(() => {});
+      writeLog("external_link_intercepted", { source: "will-navigate" });
+    }
+  });
   window.loadFile(path.join(__dirname, "../renderer/index.html"));
   brandManager.setWindow(window);
   brandManager.setAppVersion(app.getVersion());

@@ -505,16 +505,28 @@ function isNearBottom() {
   return el.scrollHeight - el.scrollTop - el.clientHeight < 80;
 }
 
+/**
+ * v3.15.7 链接统一接管 — 防止主窗口被外链劫持（用户无返回键，被劫持后只能关掉应用重开）。
+ * 背景：设置页 #cloud-key-hint 的服务商注册链接（deepseek/智谱等）没接拦截，Electron 默认行为
+ * 是主窗口内部导航 → 整个聊天 UI 被替换成外部网站。此容器内所有 <a href> 一律 preventDefault
+ * + openLink（IPC → shell.openExternal 走系统浏览器）；href 为空或 "#" 只拦不放。
+ */
+function bindExternalLinks(container, onError) {
+  container?.querySelectorAll?.("a[href]").forEach((link) => {
+    const href = (link.getAttribute("href") || "").trim();
+    if (href === "" || href === "#") return; // 静态占位死链：拦截交给主进程兜底，不弹浏览器
+    link.addEventListener("click", (event) => {
+      event.preventDefault();
+      window.agentChatPro.openLink(link.getAttribute("href")).catch((error) => { if (onError) onError(error); });
+    });
+  });
+}
+
 async function renderAssistant(item, text) {
   const content = item.querySelector(".message-content");
   content.innerHTML = await window.agentChatPro.renderMarkdown(text);
   content.classList.add("rendered");
-  content.querySelectorAll("a[href]").forEach((link) => {
-    link.addEventListener("click", (event) => {
-      event.preventDefault();
-      window.agentChatPro.openLink(link.getAttribute("href")).catch((error) => alert(error.message));
-    });
-  });
+  bindExternalLinks(content, (error) => alert(error.message));
   content.querySelectorAll("pre").forEach((pre) => {
     const copy = document.createElement("button");
     copy.className = "copy-code";
@@ -1511,7 +1523,12 @@ document.querySelector("#cloud-provider")?.addEventListener("change", () => {
   else document.querySelector("#cloud-base-url").value = "";
   // 更新密钥提示
   if (keyHint) keyHint.innerHTML = config.hint;
+  // v3.15.7 注册链接接管——切服务商重写 hint 后重新绑定（否则点「点击注册 DeepSeek」等会把主窗口导航走）
+  bindExternalLinks(keyHint);
 });
+
+// v3.15.7 静态初始提示（页面加载时的智谱注册链接）同样接管
+bindExternalLinks(document.querySelector("#cloud-key-hint"));
 
 document.querySelector("#toggle-cloud-key")?.addEventListener("click", () => {
   const input = document.querySelector("#cloud-api-key");
@@ -2219,13 +2236,7 @@ function updateSystemPromptPreview() {
       const html = await window.agentChatPro.renderMarkdown(text);
       preview.innerHTML = html;
       preview.classList.add("rendered");
-      // 链接拦截
-      preview.querySelectorAll("a[href]").forEach((link) => {
-        link.addEventListener("click", (event) => {
-          event.preventDefault();
-          window.agentChatPro.openLink(link.getAttribute("href")).catch(() => {});
-        });
-      });
+      bindExternalLinks(preview); // v3.15.7 链接拦截收编到通用函数
     } catch {
       preview.textContent = text;
       preview.classList.remove("rendered");
