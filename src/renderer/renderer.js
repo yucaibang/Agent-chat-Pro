@@ -40,6 +40,8 @@ let brandConfig = null;     // 云端品牌配置
 let brandVerified = false;  // 是否通过云端验证
 const messages = new Map();
 let streamingConversationId = "";  // 进行中任务所属对话（v3.15.0：切走后后台继续，切回无缝衔接）
+// v3.15.6：输入框草稿按对话隔离——切走时保存（文本+附件），进入时恢复，新对话干净待发送
+const composerDrafts = new Map();  // conversationId → { text, attachments }
 let streamingConnectionMode = "";  // 进行中任务发起时的连接模式（状态条文案用）
 
 // v3.15.0 功能2：历史列表模式图标（对话的 lastConnectionMode → 标题后徽标）
@@ -849,6 +851,8 @@ function showConversationMenu(event, conversation) {
 }
 
 async function loadConversation(id) {
+  // v3.15.6：切走前先保存当前对话的输入框草稿（文本+附件），下方进入时恢复目标对话草稿
+  if (conversationId) composerDrafts.set(conversationId, { text: elements.prompt.value, attachments });
   // v3.15.0 bug1：Agent 工作中允许切换对话——进行中的任务在后台继续，切回无缝衔接
   const conversation = await window.agentChatPro.getConversation(id);
   if (!conversation) return;
@@ -863,7 +867,11 @@ async function loadConversation(id) {
   }
   conversationId = conversation.id;
   sessionId = conversation.sessionId || "";
-  attachments = [];
+  // v3.15.6：恢复该对话的输入框草稿（文本+附件）——不再粗暴清空丢字/丢附件，切换互不串扰
+  const composerDraft = composerDrafts.get(conversation.id) || { text: "", attachments: [] };
+  attachments = [...(composerDraft.attachments || [])];
+  elements.prompt.value = composerDraft.text || "";
+  adjustTextarea();
   resetContextBar(); // 切换对话时重置上下文进度条（新对话还没有 usage 数据）
   // 回填 main 侧记录的该对话上下文状态（v3.12.1：切回旧对话进度条不再归零）
   try {
@@ -911,6 +919,12 @@ async function loadConversation(id) {
   } else {
     setConnection(sessionId ? `已恢复${currentConnectionMode === "cloud" ? "云端 AI" : currentConnectionMode === "local" ? `本机 ${localEngineLabel()}` : " SSH"} 会话` : "新对话，等待发送", "connected");
   }
+  // v3.15.6：发送区忙碌样态跟随任务归属——进行中任务只属于本对话才显示忙碌/停止视觉，
+  // 切到无任务的对话恢复正常"待发送"样态（点发送与 Esc 同样按归属分派，见 sendMessage/submit/Esc）
+  elements.composer.classList.toggle("busy", streamingOngoing);
+  elements.composer.setAttribute("aria-busy", String(streamingOngoing));
+  elements.send.classList.toggle("busy", streamingOngoing);
+  elements.send.title = streamingOngoing ? "停止生成（Esc）" : "发送";
   // 从历史消息估算累计 token
   conversationTokens = 0;
   for (const msg of conversation.messages) {
@@ -1061,7 +1075,13 @@ async function openSettings() {
 
 async function sendMessage() {
   const message = elements.prompt.value.trim();
-  if ((!message && !attachments.length) || activeId) return;
+  if (!message && !attachments.length) return;
+  // v3.15.6：全局同一时间仅一个任务——被占用时不再静默拦截，按任务归属给出明确提示
+  if (activeId) {
+    if (streamingConversationId === conversationId) return; // 本对话已在处理中
+    setConnection(`正在处理其他对话的任务，完成后即可发送（同一时间仅支持一个任务）`, "connected");
+    return;
+  }
   activeId = crypto.randomUUID();
   // v3.15.0 bug1：记录进行中任务归属（对话+模式）——切走后后台继续，完成回调防串话
   streamingConversationId = conversationId;
@@ -1723,8 +1743,12 @@ document.querySelector("#open-archive").addEventListener("click", async () => {
 });
 elements.composer.addEventListener("submit", (event) => {
   event.preventDefault();
-  if (activeId) stopActiveMessage();
-  else sendMessage();
+  if (activeId) {
+    // v3.15.6：忙碌按钮语义按任务归属分派——进行中任务属于本对话才触发停止，
+    // 任务属于其他对话时走发送路径（sendMessage 内部给出明确提示，不再误停别人的任务）
+    if (streamingConversationId === conversationId) stopActiveMessage();
+    else sendMessage();
+  } else sendMessage();
 });
 elements.composer.addEventListener("click", (event) => {
   if (event.target === elements.composer) focusPrompt(true);
@@ -1785,7 +1809,14 @@ elements.filePicker.addEventListener("change", () => { addFiles(elements.filePic
 elements.composer.addEventListener("dragover", (event) => event.preventDefault());
 elements.composer.addEventListener("drop", (event) => { event.preventDefault(); addFiles(event.dataTransfer.files); });
 elements.prompt.addEventListener("keydown", (event) => {
-  if (event.key === "Enter" && !event.shiftKey && !activeId) { event.preventDefault(); sendMessage(); }
+  if (event.key === "Enter" && !event.shiftKey) {
+    // v3.15.6：Enter 与点击发送按钮语义一致——本对话任务进行中不动作（停止走按钮/Esc），
+    // 任务属于其他对话时进入 sendMessage 拿到明确提示（不再静默无反应）
+    if (!activeId || streamingConversationId !== conversationId) {
+      event.preventDefault();
+      sendMessage();
+    } else event.preventDefault();
+  }
 });
 window.addEventListener("focus", () => requestAnimationFrame(() => focusPrompt()));
 document.addEventListener("visibilitychange", () => {
@@ -1987,7 +2018,8 @@ document.addEventListener("keydown", (event) => {
   }
   if (event.key === "Escape") {
     closeAppMenus();
-    if (activeId) {
+    // v3.15.6：Esc 只停止当前正在查看对话的任务——任务属于其他对话时不误停
+    if (activeId && streamingConversationId === conversationId) {
       event.preventDefault();
       stopActiveMessage();
     }
