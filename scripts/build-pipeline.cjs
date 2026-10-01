@@ -42,6 +42,23 @@ const path = require("path");
 const PROJECT_ROOT = path.resolve(__dirname, "..");
 const DIST_DIR = path.join(PROJECT_ROOT, "dist");
 
+/** v3.16.0：发布包 SHA-256 清单——只覆盖本次构建版本，写 dist/SHA256SUMS.txt 随包交付 */
+function step7_checksums() {
+  const crypto = require("crypto");
+  const version = JSON.parse(fs.readFileSync(path.join(PROJECT_ROOT, "package.json"), "utf8")).version;
+  const installer = path.join(DIST_DIR, `Agent Chat Pro-${version}-Setup.exe`);
+  if (!fs.existsSync(installer)) throw new Error(`未找到安装包：${installer}`);
+  const buffer = fs.readFileSync(installer);
+  const digest = crypto.createHash("sha256").update(buffer).digest("hex");
+  const content = `# Agent Chat Pro ${version} · SHA-256 · 构建于 ${new Date().toISOString()}\n`
+    + `# 校验命令（Windows）：certutil -hashfile "Agent Chat Pro-${version}-Setup.exe" SHA256\n`
+    + `${digest}\n`
+    + `文件大小：${buffer.length} bytes\n`;
+  fs.writeFileSync(path.join(DIST_DIR, "SHA256SUMS.txt"), content, "utf8");
+  log("✅", `SHA-256 清单已写入 dist/SHA256SUMS.txt：${digest.slice(0, 32)}…`);
+  return `${digest}  ${path.basename(installer)}`;
+}
+
 // 需要编译为字节码的文件（核心防破解模块）
 const BYTECODE_FILES = [
   "src/main/cloud-brand.cjs",
@@ -404,6 +421,7 @@ async function main() {
     step5_restore();
     const verified = step6_verify();
     if (!verified) throw new Error("构建产物验证未通过（见上方 ❌ 项）");
+    step7_checksums(); // v3.16.0：SHA-256 发布清单
 
     const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
     console.log("");

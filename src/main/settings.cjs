@@ -59,12 +59,32 @@ function normalizeUserAvatar(value) {
   return USER_AVATARS.has(avatar) ? avatar : "user-male-1";
 }
 
+/** 配置结构版本（v3.16.0 数据迁移机制）：结构变化时在此推进版本并加迁移分支 */
+const SETTINGS_SCHEMA_VERSION = 1;
+
 function settingsPath() {
   return path.join(app.getPath("userData"), SETTINGS_FILE);
 }
 
 function legacySettingsPath() {
   return path.join(path.dirname(app.getPath("userData")), "claude-nas-chat", SETTINGS_FILE);
+}
+
+/**
+ * 配置结构迁移（v3.16.0）：读到旧版本（或无版本标）配置时——
+ * ① 整文件备份为 .schema-v{旧版本}.bak（固定名覆盖，幂等不堆积）
+ * ② 打上版本标并落盘（本会话后续读取短路零开销）
+ * 任何一步失败都不阻断读取（迁移失败可恢复 = 原文件未动）。
+ */
+function migrateSchema(raw) {
+  const from = Number(raw.schemaVersion) || 0;
+  if (from === SETTINGS_SCHEMA_VERSION) return raw;
+  const source = settingsPath();
+  const backup = `${source}.schema-v${from}.bak`;
+  try { fs.copyFileSync(source, backup); } catch { /* 首迁（legacy/新装）或源不存在：跳过备份 */ }
+  const migrated = { ...raw, schemaVersion: SETTINGS_SCHEMA_VERSION };
+  try { writeRaw(migrated); } catch { /* 版本标落盘失败不影响本次读取 */ }
+  return migrated;
 }
 
 function readRaw() {
@@ -77,10 +97,10 @@ function readRaw() {
         if (legacy.modelAdminPassword) current.modelAdminPassword = legacy.modelAdminPassword;
       } catch { /* 旧配置文件损坏不影响当前配置 */ }
     }
-    return current;
+    return migrateSchema(current);
   } catch (error) {
     if (error.code === "ENOENT") {
-      try { return JSON.parse(fs.readFileSync(legacySettingsPath(), "utf8")); }
+      try { return migrateSchema(JSON.parse(fs.readFileSync(legacySettingsPath(), "utf8"))); }
       catch { return {}; }
     }
     const source = settingsPath();
@@ -98,8 +118,9 @@ function readRaw() {
 function writeRaw(raw) {
   fs.mkdirSync(path.dirname(settingsPath()), { recursive: true });
   const temporary = `${settingsPath()}.tmp-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const stamped = { ...raw, schemaVersion: SETTINGS_SCHEMA_VERSION };
   try {
-    fs.writeFileSync(temporary, JSON.stringify(raw, null, 2), { mode: 0o600, flag: "wx" });
+    fs.writeFileSync(temporary, JSON.stringify(stamped, null, 2), { mode: 0o600, flag: "wx" });
     fs.renameSync(temporary, settingsPath());
   } catch (error) {
     try { fs.unlinkSync(temporary); } catch {}
