@@ -681,6 +681,24 @@ function renderReturnedFiles(item, files = []) {
     open.textContent = "打开";
     open.addEventListener("click", () => runFileAction(open, () => window.agentChatPro.openRemoteFile(file)));
     actions.append(save, open);
+    // v3.16.1 打印联动：AI 产物图片下方出现「打印」按钮（检测到本机 Agent print 打印终端时才显示）
+    if (file.isImage) {
+      window.agentChatPro.printDetect().then((present) => {
+        if (!present || actions.querySelector(".print-btn")) return;
+        const print = document.createElement("button");
+        print.type = "button";
+        print.className = "print-btn";
+        print.textContent = "打印";
+        print.title = "经 Agent print 送 HP-DJ1200-XiaoBaiBox 打印";
+        print.addEventListener("click", () => runFileAction(print, async () => {
+          // 点击时二次确认在场（应用可能刚被卸载/关闭协议失效）
+          const ok = await window.agentChatPro.printDetect();
+          if (!ok) throw new Error("未检测到 Agent print 打印终端——请先安装/打开 Agent print（共享盘 软件开发/Agent print/）。");
+          await window.agentChatPro.printSend(file);
+        }));
+        actions.append(print);
+      }).catch(() => { /* 检测异常 = 按钮不出现，不影响卡片其它动作 */ });
+    }
     card.append(details, actions);
     list.append(card);
   });

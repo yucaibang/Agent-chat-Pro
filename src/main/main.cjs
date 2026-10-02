@@ -4,6 +4,7 @@ const { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, shell } = requir
 const fs = require("fs");
 const path = require("path");
 const { randomUUID } = require("crypto");
+const { spawnSync } = require("child_process"); // v3.16.1 print:detect 调 reg/tasklist
 const { getConnection, getSettings, getAtomcodeToken, getSshConnection, getCloudAiConfig, sameSshTarget, saveSettings, setModelAdminPassword, trustHostFingerprint, verifyModelAdminPassword } = require("./settings.cjs");
 const { downloadRemoteFile, ensureDeviceControlKey, finalizeDeviceControl, getAgentSdkBridgeStatus, getClaudeModelStatus, installAgentSdkBridge, markDeviceControlDisabled, readRemoteFile, runClaude, uninstallAgentSdkBridge, updateClaudeModel, verifyConnection } = require("./ssh.cjs");
 const { copyLocalFile, getLocalClaudeModelStatus, readLocalFile, runLocalClaude, updateLocalClaudeModel, validatedWorkingDirectory: validatedLocalWorkdir, verifyLocalConnection } = require("./local.cjs");
@@ -668,6 +669,42 @@ app.whenReady().then(async () => {
     else await downloadRemoteFile(config, file.remotePath, localPath, (fingerprint) => trustHost(config, fingerprint), writeLog);
     const error = await shell.openPath(localPath);
     if (error) throw new Error("文件已下载，但无法打开：" + error);
+    return localPath;
+  });
+  // v3.16.1 打印联动（Agent print 生态闭环）：检测本机 Agent print 在场 → 图片卡片显示「打印」按钮
+  // 检测依据 = Agent print 首次启动用 setAsDefaultProtocolClient 注册的 agent-print:// 协议（HKCU 注册表），
+  // 兜底进程探测同名 exe（Agent print.exe，Setup 版）。
+  ipcMain.handle("print:detect", async () => {
+    try {
+      const out = spawnSync("reg", ["query", "HKCU\\Software\\Classes\\agent-print"], { encoding: "utf8", timeout: 5000 });
+      if (!out.error && out.status === 0 && String(out.stdout || "").includes("agent-print")) return true;
+    } catch (_) { /* reg 不存在/超时 → 走进程兜底 */ }
+    try {
+      const out = spawnSync("tasklist", ["/FI", "IMAGENAME eq Agent print.exe", "/NH"], { encoding: "utf8", timeout: 5000 });
+      return !out.error && String(out.stdout || "").toLowerCase().includes("agent print.exe");
+    } catch (_) { return false; }
+  });
+  // v3.16.1 「打印」点击：远程文件（SSH 产物）或本地文件落临时目录 → agent-print:// 唤起 Agent print（单实例锁接手）
+  ipcMain.handle("print:send", async (_event, file) => {
+    const directory = path.join(app.getPath("temp"), "Agent Chat Pro");
+    fs.mkdirSync(directory, { recursive: true });
+    // 顺手清 >24h 的历史 print-* 残留（Agent print 已 stageCopy 走自己的副本）
+    try {
+      const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+      for (const f of fs.readdirSync(directory)) {
+        if (!f.startsWith("print-")) continue;
+        const full = path.join(directory, f);
+        if (fs.statSync(full).mtimeMs < cutoff) fs.rmSync(full, { force: true });
+      }
+    } catch (_) { /* 清理失败不致命 */ }
+    const localPath = path.join(directory, `print-${randomUUID()}-${safeFileName(file?.name)}`);
+    const config = file?.localPath ? null : getSshConnection();
+    if (file?.localPath) copyLocalFile(file.localPath, localPath);
+    else await downloadRemoteFile(config, file.remotePath, localPath, (fingerprint) => trustHost(config, fingerprint), writeLog);
+    const url = "agent-print://print?p=" + encodeURIComponent(localPath)
+      + "&n=" + encodeURIComponent(file?.name || path.basename(localPath));
+    await shell.openExternal(url);
+    writeLog("file_sent_to_agent_print", { name: file?.name, staged: path.basename(localPath), size: file?.size, source: file?.localPath ? "local" : "ssh" });
     return localPath;
   });
   ipcMain.handle("chat:test-proxy", async (_event, proxyConfig) => {

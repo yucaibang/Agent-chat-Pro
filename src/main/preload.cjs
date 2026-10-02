@@ -120,6 +120,9 @@ contextBridge.exposeInMainWorld("agentChatPro", {
   previewRemoteFile: (file) => ipcRenderer.invoke("file:preview", file),
   saveRemoteFile: (file) => ipcRenderer.invoke("file:save", file),
   openRemoteFile: (file) => ipcRenderer.invoke("file:open", file),
+  // ── 打印联动（v3.16.1，Agent print 生态闭环）──
+  printDetect: () => ipcRenderer.invoke("print:detect"),
+  printSend: (file) => ipcRenderer.invoke("print:send", file),
   // ── 状态审计 IPC ──
   recordWorkStatus: (entry) => ipcRenderer.send("status:journal", entry),
   recordWorkStatusSignal: (entry) => ipcRenderer.send("status:signal", entry),
