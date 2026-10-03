@@ -207,8 +207,10 @@ async function runDinoTests() {
 
 // ── 7. 版本号 ─────────────────
 async function runVersionTests() {
-  await test("package.json 版本号 3.16.0", () => {
-    assert.strictEqual(pkg.version, "3.16.0");
+  await test("package.json 版本号 ≥ 3.16.0（跟随语义，v3.16.2 起）", () => {
+    const [major, minor, patch] = pkg.version.split(".").map(Number);
+    const [baseMajor, baseMinor, basePatch] = "3.16.0".split(".").map(Number);
+    assert.ok(major > baseMajor || (major === baseMajor && (minor > baseMinor || (minor === baseMinor && patch >= basePatch))), `版本 ${pkg.version} 应 ≥ 3.16.0`);
   });
 }
 

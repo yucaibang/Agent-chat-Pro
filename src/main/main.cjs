@@ -13,6 +13,7 @@ const { runCustomCli, verifyCustomCliConnection } = require("./custom-cli.cjs");
 const { contextTokensFromUsage } = require("./protocol.cjs");
 const { scanSystemCaches, cleanSystemCaches } = require("./cache-cleaner.cjs");
 const { getDeviceControlStatus, installDeviceControl, preferredAddress, uninstallDeviceControl } = require("./device-control.cjs");
+const { scanCoexistence, summarizeCoexistence } = require("./coexistence-scanner.cjs");
 const {
   addAssistantMessage,
   addUserMessage,
@@ -297,6 +298,13 @@ app.whenReady().then(async () => {
   nativeTheme.themeSource = "dark";
   writeLog("app_start", { version: app.getVersion(), platform: process.platform, arch: process.arch });
 
+  // v3.16.2 启动共存扫描：本机是否并存另一套 Agent 联动控件（Agent Orbit / Claude NAS 系）
+  try {
+    const scan = scanCoexistence();
+    if (scan.coexistence) writeLog("coexistence_scan_complete", { detected: true, otherFamilyInUse: scan.otherFamilyInUse, legacyOrphan: scan.legacyOrphan, conflicts: (scan.conflicts || []).map((c) => c.type), summary: summarizeCoexistence(scan) });
+    else writeLog("coexistence_scan_complete", { detected: false });
+  } catch (error) { writeLog("coexistence_scan_failed", { error: String(error && error.message || error) }); }
+
   // 运行时完整性自检 — 检测 Fuse/ASAR/调试/注入
   try {
     const integrityResults = await integrityGuard.performFullCheck();
@@ -451,11 +459,12 @@ app.whenReady().then(async () => {
     const targetPort = Number(input?.targetPort || initialStatus.targetPort || 22);
     const permissionMode = input?.permissionMode === "standard" ? "standard" : "administrator";
     const permissionText = permissionMode === "administrator" ? "完整管理（专用本地管理员）" : "标准管理（非管理员）";
+    const installCoexistenceNote = summarizeCoexistence(initialStatus.coexistence) || "";
     const answer = await dialog.showMessageBox(window, {
       type: "warning",
       title: "安装 Agent 联动控件",
       message: "允许管理 Agent 通过 SSH 公钥控制这台电脑？",
-      detail: `不会要求或保存员工的 Windows 密码。\n\n允许来源：${sourceAddress}\n本机被控地址：${targetAddress}:${targetPort}\n权限：${permissionText}\n\n安装时 Windows 会弹出一次管理员授权。管理员模式可执行系统级操作，请只在公司授权设备上启用。`,
+      detail: `不会要求或保存员工的 Windows 密码。\n\n允许来源：${sourceAddress}\n本机被控地址：${targetAddress}:${targetPort}\n权限：${permissionText}\n\n安装时 Windows 会弹出一次管理员授权。管理员模式可执行系统级操作，请只在公司授权设备上启用。` + (installCoexistenceNote ? `\n\n⚠ 共存扫描：${installCoexistenceNote}\n安装流程内如发现结构性冲突，Windows 会再弹出一次共存选择窗口。` : ""),
       buttons: ["取消", "继续安装"],
       defaultId: 0,
       cancelId: 0
@@ -483,7 +492,7 @@ app.whenReady().then(async () => {
         probe = { ok: false, error: error.message };
         writeLog("device_control_probe_failed", { deviceId, targetAddress, targetPort, error });
       }
-      writeLog("device_control_install_success", { deviceId, sourceAddress, targetAddress, permissionMode, serviceRunning: status.serviceRunning, probeOk: probe.ok });
+      writeLog("device_control_install_success", { deviceId, sourceAddress, targetAddress, permissionMode, serviceRunning: status.serviceRunning, probeOk: probe.ok, coexistenceChoice: status.coexistenceChoice || "none", coexistenceDetected: Boolean(status.coexistenceDetected) });
       return { ...status, probe };
     } catch (error) {
       writeLog("device_control_install_failed", { deviceId, sourceAddress, permissionMode, error });
@@ -491,17 +500,19 @@ app.whenReady().then(async () => {
     }
   });
   ipcMain.handle("device-control:uninstall", async () => {
+    const currentBeforeConfirm = getDeviceControlStatus();
+    const uninstallCoexistenceNote = summarizeCoexistence(currentBeforeConfirm.coexistence) || "";
     const answer = await dialog.showMessageBox(window, {
       type: "warning",
       title: "卸载 Agent 联动控件",
       message: "确定停止 Agent 对这台电脑的 SSH 联动控制吗？",
-      detail: "将撤销本机公钥、专用账号和专用防火墙规则；聊天记录和 NAS 上的 Claude 会话不受影响。",
+      detail: "将撤销本机公钥、专用账号和专用防火墙规则；聊天记录和 NAS 上的 Claude 会话不受影响。" + (uninstallCoexistenceNote ? `\n\n⚠ 共存扫描：${uninstallCoexistenceNote}\n卸载流程内 Windows 会弹出共存选择窗口，让你决定另一套控件的保留或清理方式。` : ""),
       buttons: ["取消", "卸载联动控件"],
       defaultId: 0,
       cancelId: 0
     });
-    if (answer.response !== 1) return { cancelled: true, ...getDeviceControlStatus() };
-    const previous = getDeviceControlStatus();
+    if (answer.response !== 1) return { cancelled: true, ...currentBeforeConfirm };
+    const previous = currentBeforeConfirm;
     let config;
     try { config = getConnection(); } catch {}
     writeLog("device_control_uninstall_start", { deviceId: previous.deviceId });
@@ -511,7 +522,7 @@ app.whenReady().then(async () => {
         try { await markDeviceControlDisabled(config, previous, (fingerprint) => trustHost(config, fingerprint), writeLog); }
         catch (error) { writeLog("device_control_registry_disable_failed", { deviceId: previous.deviceId, error }); }
       }
-      writeLog("device_control_uninstall_success");
+      writeLog("device_control_uninstall_success", { coexistenceChoice: status.coexistenceChoice || "none", coexistenceDetected: Boolean(status.coexistenceDetected) });
       return status;
     } catch (error) {
       writeLog("device_control_uninstall_failed", { error });

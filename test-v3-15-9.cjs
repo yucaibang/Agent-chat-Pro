@@ -36,14 +36,15 @@ async function runTests() {
     assert.ok(!dinoSrc.includes("dt * 3.2"), "旧加速率 3.2 不应残留");
   });
 
-  await test("首个障碍距离 60 → 320 px（开局缓冲）", () => {
+  await test("首个障碍距离：开局缓冲（v3.15.9 为 320，v3.16.0 起放宽至 480）", () => {
     assert.ok(!dinoSrc.includes("state.nextIn = 60;"), "旧值 60 不应残留");
-    assert.ok((dinoSrc.match(/state\.nextIn = 320;/g) || []).length === 2, "reset 与初始两处均应 320");
+    assert.ok((dinoSrc.match(/state\.nextIn = 480;/g) || []).length === 2, "reset 与初始两处均应 480（v3.16.0 起值）");
   });
 
-  await test("障碍间距 90~200 → 150~310 px，随分数压缩更缓", () => {
-    assert.ok(dinoSrc.includes("150 + Math.random() * 160 - Math.min(70, state.score * 0.25)"), "间距公式应放宽");
-    assert.ok(!dinoSrc.includes("90 + Math.random() * 110"), "旧间距不应残留");
+  await test("障碍间距放宽到 220~420 px，随分数压缩更缓（v3.16.0 起值）", () => {
+    assert.ok(dinoSrc.includes("220 + Math.random() * 200 - Math.min(90, state.score * 0.25)"), "间距公式应为 v3.16.0 版（220~420）");
+    assert.ok(!dinoSrc.includes("150 + Math.random() * 160"), "v3.15.9 旧间距不应残留");
+    assert.ok(!dinoSrc.includes("90 + Math.random() * 110"), "初版旧间距不应残留");
   });
 
   await test("计分速率微调 0.12 → 0.1", () => {

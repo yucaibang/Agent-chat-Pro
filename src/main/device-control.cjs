@@ -4,6 +4,7 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const { spawn } = require("child_process");
+const { scanCoexistence } = require("./coexistence-scanner.cjs");
 
 const ACCOUNT_NAME = "AgentChatProControl";
 const FIREWALL_RULE = "AgentChatPro-Agent-Control";
@@ -73,6 +74,8 @@ function getDeviceControlStatus() {
   try { state = JSON.parse(fs.readFileSync(statePath(), "utf8")); } catch {}
   const windowsDirectory = process.env.WINDIR || "C:\\Windows";
   const opensshPath = path.join(windowsDirectory, "System32", "OpenSSH", "sshd.exe");
+  let coexistence = null;
+  try { coexistence = scanCoexistence(); } catch { coexistence = null; }
   return {
     supported: true,
     installed: Boolean(state.installed),
@@ -88,7 +91,8 @@ function getDeviceControlStatus() {
     hostname: os.hostname(),
     localAddresses: localAddresses(),
     windowsRelease: os.release(),
-    existingBroadFirewallWarning: Boolean(state.existingBroadFirewallWarning)
+    existingBroadFirewallWarning: Boolean(state.existingBroadFirewallWarning),
+    coexistence
   };
 }
 
@@ -113,16 +117,19 @@ async function installDeviceControl(input) {
     managementKeyPath: String(input.managementKeyPath || "").slice(0, 500)
   };
   if (!config.deviceId) throw new Error("无法创建联动设备编号。");
-  await runElevated(config);
+  const elevated = await runElevated(config);
   const status = getDeviceControlStatus();
   if (!status.installed || !status.serviceRunning) throw new Error("联动控件没有成功启动，请打开诊断日志查看原因。");
+  if (elevated && elevated.coexistence) { status.coexistenceChoice = elevated.coexistence.choice; status.coexistenceDetected = elevated.coexistence.detected; }
   return status;
 }
 
 async function uninstallDeviceControl() {
   if (process.platform !== "win32") throw new Error("联动控件只能在 Windows 上卸载。");
-  await runElevated({ action: "Uninstall" });
-  return getDeviceControlStatus();
+  const elevated = await runElevated({ action: "Uninstall" });
+  const status = getDeviceControlStatus();
+  if (elevated && elevated.coexistence) { status.coexistenceChoice = elevated.coexistence.choice; status.coexistenceDetected = elevated.coexistence.detected; }
+  return status;
 }
 
 function runElevated(config) {
@@ -149,9 +156,14 @@ function runElevated(config) {
     child.once("error", finishError);
     child.once("close", (code) => {
       let elevatedError = "";
-      try { elevatedError = fs.readFileSync(resultPath, "utf8").trim(); } catch {}
+      let successPayload = null;
+      try {
+        const resultText = fs.readFileSync(resultPath, "utf8").trim();
+        elevatedError = resultText;
+        if (resultText.startsWith("{")) successPayload = JSON.parse(resultText);
+      } catch {}
       cleanup();
-      if (code === 0) resolve(true);
+      if (code === 0) resolve({ ok: true, coexistence: (successPayload && successPayload.coexistence) || null });
       else if (code === 1223 || /canceled by the user/i.test(stderr)) reject(new Error("已取消 Windows 管理员授权，未安装联动控件。"));
       else if (isUacFailureCode(code)) {
         const detail = elevatedError || stderr.trim();

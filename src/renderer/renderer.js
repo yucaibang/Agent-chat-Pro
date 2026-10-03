@@ -293,6 +293,7 @@ function renderDeviceControlStatus(status) {
   const target = document.querySelector("#device-control-target");
   const targetPort = document.querySelector("#device-control-port");
   const permission = document.querySelector("#device-control-permission");
+  renderDeviceControlCoexistence(status.coexistence);
   if (!status.supported) {
     title.textContent = "当前系统不支持";
     detail.textContent = status.reason || "仅支持 Windows 10/11";
@@ -330,6 +331,26 @@ function renderDeviceControlStatus(status) {
       target.value = (prefix && status.localAddresses.find((address) => address.startsWith(prefix + "."))) || status.localAddresses[0];
     }
   }
+}
+
+// ── v3.16.2 双控件共存扫描结果渲染（使用时扫描的可视面） ──
+function renderDeviceControlCoexistence(coexistence) {
+  const box = document.querySelector("#device-control-coexistence");
+  if (!box) return;
+  box.classList.remove("conflict");
+  if (!coexistence || !coexistence.coexistence) { box.hidden = true; box.textContent = ""; return; }
+  const lines = [];
+  const other = (coexistence.families || []).find((family) => family.id === "claude-nas-line");
+  if (coexistence.otherFamilyInUse && other) {
+    lines.push(`检测到另一套联动控件在使用中：${other.label}（账号 ${other.account}${other.installedAt ? `，安装于 ${String(other.installedAt).slice(0, 10)}` : ""}）。双方已互相隔离：本应用的安装/卸载流程不会删改对方资源。`);
+  } else if (coexistence.legacyOrphan && other) {
+    lines.push(`检测到旧版联动控件遗留：${other.label}（无人认领）。下次卸载本应用控件时，Windows 弹窗里可选择是否连带清理。`);
+  }
+  for (const conflict of coexistence.conflicts || []) lines.push(`⚠ ${conflict.message}`);
+  if (!lines.length) { box.hidden = true; box.textContent = ""; return; }
+  box.textContent = lines.join("\n");
+  box.hidden = false;
+  if (coexistence.conflicts && coexistence.conflicts.length) box.classList.add("conflict");
 }
 
 async function refreshDeviceControlStatus() {
@@ -1257,6 +1278,8 @@ function switchSettingsTab(tab) {
     panel.classList.toggle("active", active);
     panel.hidden = !active;
   });
+  // v3.16.2 使用时扫描：切到设备联动页即刷新状态（status 内含双控件共存扫描结果）
+  if (tab === "device" && currentConnectionMode === "ssh") refreshDeviceControlStatus();
 }
 document.querySelectorAll("[data-settings-tab]").forEach((item) => {
   item.addEventListener("click", () => switchSettingsTab(item.dataset.settingsTab));

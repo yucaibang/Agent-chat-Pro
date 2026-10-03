@@ -1,4 +1,4 @@
-param(
+﻿param(
   [Parameter(Mandatory = $true)][string]$ConfigPath,
   [Parameter(Mandatory = $true)][string]$ResultPath
 )
@@ -12,6 +12,14 @@ $markerStart = "# BEGIN AGENT CHAT PRO CONTROL"
 $markerEnd = "# END AGENT CHAT PRO CONTROL"
 $accountName = "AgentChatProControl"
 $firewallRule = "AgentChatPro-Agent-Control"
+
+# ── 共存隔离（v3.16.2）：同机可能并存另一套 Agent 联动控件（Agent Orbit / Claude NAS 系）。
+# 铁律：本脚本永远只触碰自家资源；对方 install-state.json 在用（installed=true）时，一个字节都不动。
+# 仅当对方无人认领（无 state 或 installed!=true）时，卸载流程才可选清理其遗留。
+$managedFamilies = [ordered]@{
+  "agent-chat-pro" = [ordered]@{ folder = "AgentChatProAgent"; account = "AgentChatProControl"; firewallRule = "AgentChatPro-Agent-Control"; markerFamily = "AGENT CHAT PRO CONTROL" }
+  "claude-nas-line" = [ordered]@{ folder = "ClaudeNasAgent"; account = "ClaudeAgentControl"; firewallRule = "ClaudeNAS-Agent-Control"; markerFamily = "CLAUDE NAS AGENT CONTROL"; listenerMarkerFamily = "CLAUDE NAS AGENT LISTENER" }
+}
 
 function Assert-Administrator {
   $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
@@ -72,7 +80,185 @@ function Remove-AgentBlock([string]$content) {
   return [regex]::Replace($content, $pattern, "")
 }
 
-function Set-AgentBlock([string]$authorizedKeysFile) {
+# ── 共存扫描（v3.16.2）───────────────────────────────────────────────
+# 扫描 sshd_config 中全部 Agent marker 区间（字符 offset 定位），供冲突判定与安全插入共用。
+
+function Get-AgentMarkerRegions([string]$content) {
+  $regions = @()
+  $beginRegex = '(?m)^\s*#\s*BEGIN\s+([A-Z][A-Z ]+?)\s+(CONTROL|LISTENER)[ \t]*$'
+  $endRegex = '(?m)^\s*#\s*END\s+([A-Z][A-Z ]+?)\s+(CONTROL|LISTENER)[ \t]*$'
+  $begins = [regex]::Matches($content, $beginRegex)
+  $ends = [regex]::Matches($content, $endRegex)
+  $consumedEnds = @{}
+  foreach ($begin in $begins) {
+    $family = ($begin.Groups[1].Value + " " + $begin.Groups[2].Value);
+    $regionEnd = -1
+    # 找 BEGIN 之后第一个同名 END（防交错错配）
+    foreach ($end in $ends) {
+      $endFamily = ($end.Groups[1].Value + " " + $end.Groups[2].Value)
+      if ($end.Index -gt $begin.Index -and -not $consumedEnds.ContainsKey($end.Index) -and $endFamily -eq $family) {
+        $regionEnd = $end.Index + $end.Length
+        $consumedEnds[$end.Index] = $true
+        break
+      }
+    }
+    $regions += [pscustomobject]@{
+      markerFamily = $family
+      start = $begin.Index
+      end = $regionEnd
+      unclosed = ($regionEnd -lt 0)
+    }
+  }
+  return $regions
+}
+
+function Find-AgentConflicts([string]$content) {
+  $regions = Get-AgentMarkerRegions $content
+  $conflicts = @()
+  foreach ($region in $regions) {
+    if ($region.unclosed) {
+      $conflicts += [pscustomobject]@{ type = "unclosed"; markerFamily = $region.markerFamily; start = $region.start; end = $region.end; message = "SSH 配置中「$($region.markerFamily)」区块缺少结束标记（配置可能被破坏）" }
+      continue
+    }
+    # 嵌套检测：本区间内部是否含另一家族的完整 BEGIN…END
+    foreach ($other in $regions) {
+      if ($other.markerFamily -eq $region.markerFamily) { continue }
+      if ($other.start -gt $region.start -and $other.end -gt 0 -and $other.end -le $region.end) {
+        $conflicts += [pscustomobject]@{ type = "nested"; markerFamily = $region.markerFamily; nestedFamily = $other.markerFamily; start = $region.start; end = $region.end; message = "SSH 配置中「$($other.markerFamily)」区块嵌进了「$($region.markerFamily)」区块内部（卸载任一方会连带删掉另一方，导致联动反复失效）" }
+      }
+    }
+  }
+  # 同名 marker 区间重复（重复写入）
+  $families = $regions | Group-Object markerFamily
+  foreach ($group in $families) {
+    if ($group.Count -gt 1) {
+      $conflicts += [pscustomobject]@{ type = "duplicate"; markerFamily = $group.Name; start = -1; end = -1; message = "SSH 配置中出现 $($group.Count) 处「$($group.Name)」区块（重复写入）" }
+    }
+  }
+  return [pscustomobject]@{ regions = $regions; conflicts = $conflicts }
+}
+
+function Test-ClaudeNasControlInUse {
+  # 另一套（Agent Orbit / Claude NAS 系）是否仍在被认领使用
+  try {
+    $legacyAgentRoot = Join-Path $env:ProgramData "ClaudeNasAgent"
+    $legacyStatePath = Join-Path $legacyAgentRoot "install-state.json"
+    if (-not (Test-Path $legacyStatePath)) { return $false }
+    $legacyState = Get-Content -Raw -LiteralPath $legacyStatePath | ConvertFrom-Json
+    return [bool]($legacyState -and $legacyState.installed)
+  } catch { return $false }
+}
+
+function Test-LegacyOrphan {
+  # Claude NAS 系资源在机上但无人认领（无 state 或 installed!=true）——可选清理的遗留
+  try {
+    $legacyAgentRoot = Join-Path $env:ProgramData "ClaudeNasAgent"
+    if (-not (Test-Path $legacyAgentRoot)) { return $false }
+    $legacyStatePath = Join-Path $legacyAgentRoot "install-state.json"
+    if (-not (Test-Path $legacyStatePath)) { return $true }
+    $legacyState = Get-Content -Raw -LiteralPath $legacyStatePath | ConvertFrom-Json
+    return -not [bool]($legacyState -and $legacyState.installed)
+  } catch { return $false }
+}
+
+# 把嵌进自家区间内的另一家族完整区块搬出到安全位置（平级化），幂等。
+# 只挪异族完整区块文本，不改动任何区块内部内容；无嵌套时原样返回。
+function Repair-NestedAgents([string]$content) {
+  for ($pass = 0; $pass -lt 4; $pass++) {
+    $report = Find-AgentConflicts $content
+    $nested = $report.conflicts | Where-Object { $_.type -eq "nested" } | Select-Object -First 1
+    if (-not $nested) { break }
+    $content = Move-RegionToSafePosition $content $nested.nestedFamily
+  }
+  return $content
+}
+
+function Move-RegionToSafePosition([string]$content, [string]$nestedFamily) {
+  $regions = Get-AgentMarkerRegions $content
+  $target = $regions | Where-Object { $_.markerFamily -eq $nestedFamily -and -not $_.unclosed } | Select-Object -First 1
+  if (-not $target) { return $content }
+  $regionText = $content.Substring($target.start, $target.end - $target.start)
+  $moved = $content.Remove($target.start, $target.end - $target.start).TrimEnd()
+  # 在摊平后的内容中找第一个区间外的 Match 行，插到它之前；找不到则文件尾
+  $insertAt = Find-SafeInsertOffset $moved
+  $blockText = "`r`n" + $regionText.TrimEnd() + "`r`n`r`n"
+  if ($insertAt -ge 0) { return $moved.Insert($insertAt, $blockText) }
+  return $moved + "`r`n`r`n" + $blockText + "`r`n"
+}
+
+# 找「不属于任何 Agent marker 区间内部」的第一个 Match 行 offset；返回 -1 表示全部被区间包裹。
+function Find-SafeInsertOffset([string]$content) {
+  $regions = Get-AgentMarkerRegions $content
+  foreach ($matchLine in [regex]::Matches($content, "(?im)^[ \t]*Match\s+")) {
+    $pos = $matchLine.Index
+    $inside = $false
+    foreach ($region in $regions) {
+      if ($region.end -ge 0) { if ($pos -gt $region.start -and $pos -lt $region.end) { $inside = $true } }
+      else { if ($pos -gt $region.start) { $inside = $true } }  # 未闭合区间：其后全部视为危险
+    }
+    if (-not $inside) { return $pos }
+  }
+  return -1
+}
+
+function Show-ConflictWindow([object]$conflictReport, [string]$operation, [bool]$legacyOrphan) {
+  Add-Type -AssemblyName System.Windows.Forms | Out-Null
+  $lines = @()
+  foreach ($c in $conflictReport.conflicts) { $lines += ("• " + $c.message) }
+  $claudeInUse = Test-ClaudeNasControlInUse
+  foreach ($f in Get-CoexistingFamilies) {
+    if ($f.id -eq "agent-chat-pro") { continue }
+    if ($f.installed) { $lines += ("• 另一套联动控件在使用中：$($f.folder)（账号 $($f.account)）") }
+  }
+  if ($legacyOrphan) { $lines += "• 另发现旧版联动控件遗留（无人认领）" }
+  $detailText = if ($lines.Count -gt 0) { ($lines -join "`n") } else { "本机存在多套 Agent 联动控件资源，未发现结构性错误。" }
+
+  if ($operation -eq "Uninstall") {
+    if ($claudeInUse) {
+      $message = "检测到另一套 Agent 联动控件（Agent Orbit / Claude NAS 系）仍在使用中。`n`n$detailText`n`n本次卸载 Agent Chat Pro 联动控件时，另一套将原样保留（互不删改）。要继续卸载本应用的联动控件吗？"
+      $choice = [System.Windows.Forms.MessageBox]::Show($message, "Agent 联动控件共存扫描", [System.Windows.Forms.MessageBoxButtons]::YesNo, [System.Windows.Forms.MessageBoxIcon]::Warning, [System.Windows.Forms.MessageBoxDefaultButton]::Button1, [System.Windows.Forms.MessageBoxOptions]262144)
+      if ($choice -eq [System.Windows.Forms.DialogResult]::Yes) { return "keep-both-uninstall-self" }
+      return "cancelled"
+    }
+    if ($legacyOrphan) {
+      $message = "将卸载 Agent Chat Pro 联动控件。`n`n$detailText`n`n旧版遗留怎么处理？"
+      $choice = [System.Windows.Forms.MessageBox]::Show($message, "Agent 联动控件共存扫描", [System.Windows.Forms.MessageBoxButtons]::YesNoCancel, [System.Windows.Forms.MessageBoxIcon]::Warning, [System.Windows.Forms.MessageBoxDefaultButton]::Button1, [System.Windows.Forms.MessageBoxOptions]262144)
+      if ($choice -eq [System.Windows.Forms.DialogResult]::Yes) { return "keep-both-uninstall-self" }
+      if ($choice -eq [System.Windows.Forms.DialogResult]::No) { return "clean-legacy-orphan" }
+      return "cancelled"
+    }
+  }
+
+  # Install / 更新场景：结构修复 + 保留双方
+  $message = "检测到本机可能并存另一套 Agent 联动控件（如 Agent Orbit / Claude NAS 系），双方将互相隔离、都保留。`n`n$detailText`n`n本次「$operation」如何处理？"
+  $choice = [System.Windows.Forms.MessageBox]::Show($message, "Agent 联动控件共存扫描", [System.Windows.Forms.MessageBoxButtons]::YesNoCancel, [System.Windows.Forms.MessageBoxIcon]::Warning, [System.Windows.Forms.MessageBoxDefaultButton]::Button1, [System.Windows.Forms.MessageBoxOptions]262144)
+  if ($choice -eq [System.Windows.Forms.DialogResult]::Yes) { return "repair-coexist" }
+  if ($choice -eq [System.Windows.Forms.DialogResult]::No) { return "keep-structure" }
+  return "cancelled"
+}
+
+function Get-CoexistingFamilies {
+  $result = @()
+  foreach ($key in $managedFamilies.Keys) {
+    $family = $managedFamilies[$key]
+    $familyFolder = Join-Path $env:ProgramData $family.folder
+    $familyState = $null
+    if (Test-Path (Join-Path $familyFolder "install-state.json")) {
+      try { $familyState = Get-Content -Raw -LiteralPath (Join-Path $familyFolder "install-state.json") | ConvertFrom-Json } catch {}
+    }
+    $result += [pscustomobject]@{
+      id = $key
+      folderPresent = (Test-Path $familyFolder)
+      installed = [bool]($familyState -and $familyState.installed)
+      account = $family.account
+      accountPresent = [bool](Get-LocalUser -Name $family.account -ErrorAction SilentlyContinue)
+      firewallRulePresent = [bool](Get-NetFirewallRule -Name $family.firewallRule -ErrorAction SilentlyContinue)
+    }
+  }
+  return $result
+}
+
+function Set-AgentBlock([string]$authorizedKeysFile, [switch]$KeepStructure) {
   $content = if (Test-Path $sshdConfig) { Get-Content -Raw -LiteralPath $sshdConfig } else { "" }
   $content = Remove-AgentBlock $content
   $keyPath = $authorizedKeysFile.Replace("\", "/")
@@ -84,11 +270,23 @@ Match User agentchatprocontrol
 $markerEnd
 
 "@
-  $firstMatch = [regex]::Match($content, "(?im)^\s*Match\s+")
-  if ($firstMatch.Success) {
-    $content = $content.Insert($firstMatch.Index, $block)
+  # v3.16.2 安全插入位：绝不插进任何 Agent marker 区间内部（v3.16.1 之前按「第一个 Match 行」
+  # 插入，另一套控件先装机时会把本方区块嵌进对方区块内部——任一方卸载即连带删掉另一方）。
+  if ($KeepStructure) {
+    # 「保持现状」选择：按旧行为插入，不重排既有结构（用户在共存弹窗里明确选择时）
+    $firstMatch = [regex]::Match($content, "(?im)^\s*Match\s+")
+    if ($firstMatch.Success) {
+      $content = $content.Insert($firstMatch.Index, $block)
+    } else {
+      $content = $content.TrimEnd() + "`r`n`r`n" + $block
+    }
   } else {
-    $content = $content.TrimEnd() + "`r`n`r`n" + $block
+    $safeOffset = Find-SafeInsertOffset $content
+    if ($safeOffset -ge 0) {
+      $content = $content.Insert($safeOffset, $block)
+    } else {
+      $content = $content.TrimEnd() + "`r`n`r`n" + $block + "`r`n"
+    }
   }
   [IO.File]::WriteAllText($sshdConfig, $content, (New-Object Text.UTF8Encoding($false)))
 }
@@ -191,6 +389,34 @@ function Install-Control($config) {
     throw "The management SSH public key is invalid."
   }
 
+  # ── v3.16.2 共存扫描：安装/更新前必扫。结构冲突必弹窗（Windows 原生 MessageBox）让用户选择；
+  # 干净共存首次弹一次告知（install-state 里 coexistenceAcked 记录后再弹会打扰），之后自动隔离共存。
+  $script:stage = "scan-coexistence"
+  $script:coexistenceChoice = "none"
+  $script:coexistenceDetected = $false
+  $configText = if (Test-Path $sshdConfig) { Get-Content -Raw -LiteralPath $sshdConfig } else { "" }
+  $script:coexistenceReport = Find-AgentConflicts $configText
+  $claudeInUse = Test-ClaudeNasControlInUse
+  $legacyOrphan = Test-LegacyOrphan
+  $otherFamilyPresent = $claudeInUse -or $legacyOrphan
+  $hasStructuralConflicts = @($script:coexistenceReport.conflicts).Count -gt 0
+  $ackedBefore = $false
+  if (Test-Path $statePath) {
+    try { $ackedBefore = [bool]((Get-Content -Raw -LiteralPath $statePath | ConvertFrom-Json).coexistenceAcked) } catch { $ackedBefore = $false }
+  }
+  $script:coexistenceDetected = ($otherFamilyPresent -or $hasStructuralConflicts)
+  if ($claudeInUse) { $script:coexistenceDetected = $true }
+  $shouldPrompt = $hasStructuralConflicts -or ($otherFamilyPresent -and -not $ackedBefore)
+  if ($shouldPrompt) {
+    $script:stage = "coexistence-prompt"
+    $script:coexistenceChoice = Show-ConflictWindow $script:coexistenceReport "Install" $legacyOrphan
+    if ($script:coexistenceChoice -eq "cancelled") {
+      throw "User cancelled the device-control install after the coexistence scan. Nothing was changed."
+    }
+  }
+  $repairStructure = ($script:coexistenceChoice -eq "repair-coexist") -or ($hasStructuralConflicts -and $script:coexistenceChoice -ne "keep-structure")
+  if (-not $script:coexistenceDetected) { $script:coexistenceChoice = "clean" }
+
   $script:stage = "check-openssh-server"
   New-Item -ItemType Directory -Force -Path $agentRoot | Out-Null
   $capability = Get-OpenSshCapability
@@ -215,6 +441,7 @@ function Install-Control($config) {
     Stop-Service sshd
   }
   $currentConfig = Get-Content -Raw -LiteralPath $sshdConfig
+  if ($repairStructure) { $currentConfig = Repair-NestedAgents $currentConfig }
   $originalConfig = Remove-AgentBlock $currentConfig
   $accountCreated = $false
   $autoLogonProtection = [ordered]@{ preserved = $false; reason = "not-run" }
@@ -233,7 +460,7 @@ function Install-Control($config) {
     if ($LASTEXITCODE -ne 0) { throw "Failed to set permissions on the device-control key directory." }
 
     $script:stage = "validate-sshd-config"
-    Set-AgentBlock $authorizedKeys
+    if ($script:coexistenceChoice -eq "keep-structure") { Set-AgentBlock $authorizedKeys -KeepStructure } else { Set-AgentBlock $authorizedKeys }
     Assert-SshdConfig $authorizedKeys
     $script:stage = "configure-firewall"
     Remove-NetFirewallRule -Name $firewallRule -ErrorAction SilentlyContinue
@@ -275,6 +502,9 @@ function Install-Control($config) {
     defaultFirewallWasEnabled = $defaultRuleWasEnabled
     existingBroadFirewallWarning = $capabilityWasInstalled -and $defaultRuleWasEnabled
     autoLogonProtection = $autoLogonProtection
+    coexistenceAcked = $true
+    coexistenceChoice = $script:coexistenceChoice
+    coexistenceDetected = $script:coexistenceDetected
   }
   $script:stage = "save-install-state"
   [IO.File]::WriteAllText($statePath, ($state | ConvertTo-Json -Depth 4), (New-Object Text.UTF8Encoding($false)))
@@ -289,26 +519,51 @@ function Uninstall-Control {
   $legacyAccountName = "ClaudeAgentControl"
   $legacyAgentRoot = Join-Path $env:ProgramData "ClaudeNasAgent"
   $legacyStatePath = Join-Path $legacyAgentRoot "install-state.json"
-  $legacyState = if (Test-Path $legacyStatePath) { Get-Content -Raw -LiteralPath $legacyStatePath | ConvertFrom-Json } else { $null }
+  # ── v3.16.2 共存扫描：卸载前必扫。另一套（Agent Orbit / Claude NAS 系）在用 = 一个字节都不碰；
+  # 无人认领的遗留 = Windows 弹窗让用户选「保留 / 连带清理 / 取消」。
+  $script:stage = "scan-coexistence"
+  $script:coexistenceChoice = "none"
+  $script:coexistenceDetected = $false
+  $claudeInUse = Test-ClaudeNasControlInUse
+  $legacyOrphan = Test-LegacyOrphan
+  $configText = if (Test-Path $sshdConfig) { Get-Content -Raw -LiteralPath $sshdConfig } else { "" }
+  $script:coexistenceReport = Find-AgentConflicts $configText
+  $hasStructuralConflicts = @($script:coexistenceReport.conflicts).Count -gt 0
+  $script:coexistenceDetected = ($claudeInUse -or $legacyOrphan -or $hasStructuralConflicts)
+  $cleanLegacy = $false
+  if ($claudeInUse -or $legacyOrphan) {
+    $script:stage = "coexistence-prompt"
+    $script:coexistenceChoice = Show-ConflictWindow $script:coexistenceReport "Uninstall" $legacyOrphan
+    if ($script:coexistenceChoice -eq "cancelled") {
+      throw "User cancelled the device-control uninstall after the coexistence scan. Nothing was changed."
+    }
+    $cleanLegacy = ($script:coexistenceChoice -eq "clean-legacy-orphan")
+  }
   if (Test-Path $sshdConfig) {
-    $content = Remove-AgentBlock (Get-Content -Raw -LiteralPath $sshdConfig)
-    # Also remove legacy marker block if present
-    $legacyPattern = "(?ms)^" + [regex]::Escape($legacyMarkerStart) + ".*?^" + [regex]::Escape($legacyMarkerEnd) + "\s*"
-    $content = [regex]::Replace($content, $legacyPattern, "")
+    # 先摊平嵌套（AO 区间若嵌在本方区间内，卸载本方时先把对方完整搬出，内容不变），再删本方区间
+    $content = Repair-NestedAgents (Get-Content -Raw -LiteralPath $sshdConfig)
+    $content = Remove-AgentBlock $content
+    if ($cleanLegacy) {
+      # Only when the user explicitly chose to clean the unclaimed legacy is the old marker block touched
+      $legacyPattern = "(?ms)^" + [regex]::Escape($legacyMarkerStart) + ".*?^" + [regex]::Escape($legacyMarkerEnd) + "\s*"
+      $content = [regex]::Replace($content, $legacyPattern, "")
+    }
     [IO.File]::WriteAllText($sshdConfig, $content, (New-Object Text.UTF8Encoding($false)))
   }
   Remove-NetFirewallRule -Name $firewallRule -ErrorAction SilentlyContinue
-  Remove-NetFirewallRule -Name $legacyFirewallRule -ErrorAction SilentlyContinue
+  if ($cleanLegacy) { Remove-NetFirewallRule -Name $legacyFirewallRule -ErrorAction SilentlyContinue }
   $managedUser = Get-LocalUser -Name $accountName -ErrorAction SilentlyContinue
-  $legacyUser = Get-LocalUser -Name $legacyAccountName -ErrorAction SilentlyContinue
   if ($managedUser -and (($state -and $state.accountCreated) -or $managedUser.Description -in @("Agent CLI Control; SSH key only", "Claude NAS Agent; SSH key only"))) {
     Remove-LocalUser -Name $accountName
   } else {
     Disable-LocalUser -Name $accountName -ErrorAction SilentlyContinue
   }
-  # Clean up legacy account if it exists from prior version
-  if ($legacyUser -and $legacyUser.Description -in @("Agent CLI Control; SSH key only", "Claude NAS Agent; SSH key only")) {
-    Remove-LocalUser -Name $legacyAccountName -ErrorAction SilentlyContinue
+  # Legacy account cleanup only when the user chose to clean the unclaimed legacy orphan
+  if ($cleanLegacy) {
+    $legacyUser = Get-LocalUser -Name $legacyAccountName -ErrorAction SilentlyContinue
+    if ($legacyUser -and $legacyUser.Description -in @("Agent CLI Control; SSH key only", "Claude NAS Agent; SSH key only")) {
+      Remove-LocalUser -Name $legacyAccountName -ErrorAction SilentlyContinue
+    }
   }
   if (Get-Service -Name sshd -ErrorAction SilentlyContinue) {
     if ($state -and -not $state.serviceWasRunning) { Stop-Service sshd -Force -ErrorAction SilentlyContinue }
@@ -321,8 +576,8 @@ function Uninstall-Control {
   }
   Remove-Item -LiteralPath $statePath -Force -ErrorAction SilentlyContinue
   Remove-Item -LiteralPath (Join-Path $agentRoot "authorized_keys") -Force -ErrorAction SilentlyContinue
-  # Clean up legacy state directory if it exists from prior version
-  if (Test-Path $legacyAgentRoot) { Remove-Item -LiteralPath $legacyAgentRoot -Recurse -Force -ErrorAction SilentlyContinue }
+  # Legacy directory cleanup only when the user chose to clean the unclaimed legacy orphan
+  if ($cleanLegacy -and (Test-Path $legacyAgentRoot)) { Remove-Item -LiteralPath $legacyAgentRoot -Recurse -Force -ErrorAction SilentlyContinue }
 }
 
 $config = $null
@@ -334,6 +589,22 @@ try {
   if ($config.action -eq "Install") { Install-Control $config }
   elseif ($config.action -eq "Uninstall") { Uninstall-Control }
   else { throw "Unknown device-control action." }
+  # Success path: report the coexistence scan outcome back to the client as JSON.
+  # (Error path keeps the legacy plain-text "[stage] message" format for localizedInstallerError.)
+  $conflictTypes = @()
+  if ($script:coexistenceReport) { $conflictTypes = @($script:coexistenceReport.conflicts | ForEach-Object { $_.type }) }
+  $resultPayload = [ordered]@{
+    ok = $true
+    action = $config.action
+    completedAt = [DateTime]::UtcNow.ToString("o")
+    coexistence = [ordered]@{
+      detected = [bool]$script:coexistenceDetected
+      choice = $script:coexistenceChoice
+      conflicts = $conflictTypes
+      families = @(Get-CoexistingFamilies)
+    }
+  }
+  [IO.File]::WriteAllText($ResultPath, ($resultPayload | ConvertTo-Json -Depth 5), (New-Object Text.UTF8Encoding($false)))
 } catch {
   $message = "[$stage] " + $_.Exception.Message
   [IO.File]::WriteAllText($ResultPath, $message, (New-Object Text.UTF8Encoding($false)))

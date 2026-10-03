@@ -502,6 +502,8 @@ dialog form { display: flex; flex-direction: column; gap: 15px; padding: 23px; }
 .about-row dd { margin: 0; color: var(--text-primary); text-align: right; }
 .about-desc, .about-history { color: var(--text-muted); font-size: 12px; line-height: 1.6; margin: 12px 0 0; }
 [data-theme="light"] .settings-nav-item.active { color: #fff; }
+[data-theme="light"] .coexistence-note { border-color: #d7dce3; background: #eef1f4; color: #374151; }
+[data-theme="light"] .coexistence-note.conflict { border-color: #d8b26a; background: #fdf3e0; color: #92600a; }
 .dialog-heading { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 4px; }
 .dialog-heading h2 { margin: 0 0 5px; font-size: 20px; }
 label { display: flex; flex-direction: column; gap: 7px; color: var(--text-tertiary); font-size: 13px; }
@@ -534,6 +536,10 @@ summary { cursor: pointer; font-size: 13px; margin-bottom: 12px; }
 .device-control-heading small { color: var(--text-muted); }
 .control-badge { flex: none; padding: 4px 8px; border-radius: 999px; background: var(--bg-control-badge); color: var(--text-tertiary); font-size: 11px; }
 .control-badge.installed { color: #9dd7a8; background: #20362a; }
+
+/* v3.16.2 双控件共存扫描状态区（设备联动页） */
+.coexistence-note { margin: 10px 0 0; padding: 10px 12px; border: 1px solid #4b5560; border-radius: 8px; background: #232a30; color: var(--text-secondary); font-size: 12px; line-height: 1.6; white-space: pre-line; }
+.coexistence-note.conflict { border-color: #6b5335; background: #33291c; color: var(--warning); }
 .device-control-actions { display: flex; justify-content: flex-end; gap: 8px; }
 .danger-button { color: #ef9f95; border-color: #67443f; }
 
