@@ -6,6 +6,10 @@ const path = require("path");
 const MAX_BYTES = 2 * 1024 * 1024;
 const PRIVATE_KEYS = /password|secret|token|prompt|message|content|data|apiKey|authKey|key|community|credential/i;
 const CREDENTIAL_IN_URL = /\/\/[^/:]+:[^/@]+@/;
+// v3.16.3 日志降噪：同一事件串（序列化后完全相同）在 800ms 窗口内重复提交时只落盘一次。
+// 背景：信号链在 SSH 流事件上存在同毫秒双写回环，逐 token 全量落盘导致日志 2MB/天灌满轮转。
+let _lastLogPayload = "";
+let _lastLogAt = 0;
 
 function logPath() {
   const { app } = require("electron");
@@ -14,14 +18,17 @@ function logPath() {
 
 function writeLog(event, details = {}) {
   try {
+    const body = { event, ...sanitize(details) };
+    // v3.16.3 降噪：800ms 内与上一条完全相同的串只落盘一次（payload 不含 time，保证判重可比）
+    const payload = JSON.stringify(body);
+    const now = Date.now();
+    if (payload === _lastLogPayload && now - _lastLogAt < 800) return;
+    _lastLogPayload = payload;
+    _lastLogAt = now;
     const target = logPath();
     fs.mkdirSync(path.dirname(target), { recursive: true });
     rotateIfNeeded(target);
-    fs.appendFileSync(target, JSON.stringify({
-      time: new Date().toISOString(),
-      event,
-      ...sanitize(details)
-    }) + "\n", "utf8");
+    fs.appendFileSync(target, JSON.stringify({ time: new Date().toISOString(), ...body }) + "\n", "utf8");
   } catch (error) {
     console.error("Diagnostic logging failed:", error);
   }

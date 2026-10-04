@@ -72,12 +72,38 @@ class IntegrityGuard {
    * 检查1: Fuse 状态验证
    * 读取自身 exe 的 Fuse sentinel，验证关键 Fuse 是否正确烧录
    */
+  /**
+   * v3.16.3 启动提速：只读 fuse sentinel 的预估窗口段（79% 相对位置起 10MB）。
+   * 命中返回窗口 Buffer，未命中/读取异常返回 null（由调用方回退全文件扫描）。
+   */
+  _readFuseWindow(exePath, fileSize, sentinel) {
+    try {
+      const start = Math.max(0, Math.floor(fileSize * 0.79));
+      const length = Math.min(10 * 1024 * 1024, fileSize - start);
+      if (length < sentinel.length + 16) return null;
+      const fd = fs.openSync(exePath, "r");
+      try {
+        const buf = Buffer.alloc(length);
+        const read = fs.readSync(fd, buf, 0, length, start);
+        if (read < length) return buf.subarray(0, read).indexOf(sentinel) === -1 ? null : buf.subarray(0, read);
+        return buf.indexOf(sentinel) === -1 ? null : buf;
+      } finally {
+        fs.closeSync(fd);
+      }
+    } catch (error) {
+      return null;
+    }
+  }
+
   _checkFuses() {
     try {
       const exePath = process.execPath;
-      const data = fs.readFileSync(exePath);
-
+      // v3.16.3 启动性能修复：fuse sentinel 实测位于 exe 固定相对位置（v3.16.2 实测 201233408 字节 exe、
+      // 偏移 165194160 ≈ 82%）。改为只读 79% 起 10MB 窗口（约 5% 覆盖带，留 Electron 版本漂移余量），
+      // 窗口未命中时回退原全文件扫描——防破解语义与检出能力完全不变，启动 IO 从 201MB 降至 ~10MB。
+      const stat = fs.statSync(exePath);
       const sentinel = Buffer.from("dL7pKGdnNz796PbbjQWNKmHXBZaB9tsX");
+      const data = this._readFuseWindow(exePath, stat.size, sentinel) || fs.readFileSync(exePath);
       const pos = data.indexOf(sentinel);
 
       if (pos === -1) {
