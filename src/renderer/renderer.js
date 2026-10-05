@@ -333,6 +333,33 @@ function renderDeviceControlStatus(status) {
   }
 }
 
+// ── v3.17.0 IP 追踪状态卡（读 NAS 侧 ip-track.log，重定位记录可视化） ──
+function renderDeviceControlIpTrack(result) {
+  const box = document.querySelector("#device-control-ip-track");
+  if (!box) return;
+  if (!result || !Array.isArray(result.entries)) { box.hidden = true; box.textContent = ""; return; }
+  const lines = [];
+  if (!result.entries.length) {
+    lines.push("IP 追踪已随 v3.17.0 部署：NAS 侧连接本机失败且错误属网络类时，会自动扫描网段并用 SSH 主机键指纹定位新 IP 后重连一次（公钥链路不变，只动「去哪找」）。尚未发生重定位，故无记录。");
+  } else {
+    lines.push("最近 IP 重定位（最多显示 5 条，公钥链路未变更）：");
+    for (const entry of result.entries) {
+      const time = String(entry.time || "").replace("T", " ").slice(0, 19);
+      lines.push(`${time} · ${entry.from || "?"} → ${entry.to || "?"} · 指纹 ${String(entry.fingerprint || "").replace("SHA256:", "").slice(0, 16)}…`);
+    }
+  }
+  box.textContent = lines.join("\n");
+  box.hidden = false;
+}
+
+function refreshDeviceControlIpTrack(deviceId) {
+  const box = document.querySelector("#device-control-ip-track");
+  if (!box || !deviceId) return;
+  window.agentChatPro.readDeviceControlIpTrack(deviceId)
+    .then((result) => renderDeviceControlIpTrack(result))
+    .catch(() => { box.hidden = true; box.textContent = ""; });
+}
+
 // ── v3.16.2 双控件共存扫描结果渲染（使用时扫描的可视面） ──
 function renderDeviceControlCoexistence(coexistence) {
   const box = document.querySelector("#device-control-coexistence");
@@ -354,8 +381,11 @@ function renderDeviceControlCoexistence(coexistence) {
 }
 
 async function refreshDeviceControlStatus() {
-  try { renderDeviceControlStatus(await window.agentChatPro.getDeviceControlStatus()); }
-  catch (error) { document.querySelector("#device-control-info").textContent = "状态检查失败：" + error.message; }
+  let status = null;
+  try { status = await window.agentChatPro.getDeviceControlStatus(); renderDeviceControlStatus(status); }
+  catch (error) { document.querySelector("#device-control-info").textContent = "状态检查失败：" + error.message; return; }
+  // v3.17.0 IP 追踪卡：异步加载不阻塞状态渲染（需读 NAS 远程日志，较慢；失败静默收起）
+  if (status && status.supported && status.deviceId) refreshDeviceControlIpTrack(status.deviceId);
 }
 
 function renderBridgeStatus(status) {
@@ -1390,6 +1420,7 @@ document.querySelector("#install-device-control").addEventListener("click", asyn
     if (status.cancelled) setStatus("已取消安装，电脑没有被启用远程控制。", true);
     else {
       renderDeviceControlStatus(status);
+      refreshDeviceControlIpTrack(status.deviceId);
       setStatus(status.probe?.ok
         ? "联动控件已安装，NAS 已使用专属密钥回连成功；员工不需要设置 Windows 密码。"
         : `联动控件已安装，但 NAS 回连测试失败：${status.probe?.error || "未知原因"}`, !status.probe?.ok);

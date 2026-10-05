@@ -107,6 +107,7 @@ contextBridge.exposeInMainWorld("agentChatPro", {
   // ── 设备控制 IPC ──
   getDeviceControlStatus: () => ipcRenderer.invoke("device-control:status"),
   installDeviceControl: (options) => ipcRenderer.invoke("device-control:install", options),
+  readDeviceControlIpTrack: (deviceId) => ipcRenderer.invoke("device-control:ip-track", deviceId),
   uninstallDeviceControl: () => ipcRenderer.invoke("device-control:uninstall"),
   // ── 存储目录 IPC ──
   chooseStorageDirectory: () => ipcRenderer.invoke("storage:choose"),

@@ -6,7 +6,7 @@ const path = require("path");
 const { randomUUID } = require("crypto");
 const { spawnSync } = require("child_process"); // v3.16.1 print:detect 调 reg/tasklist
 const { getConnection, getSettings, getAtomcodeToken, getSshConnection, getCloudAiConfig, sameSshTarget, saveSettings, setModelAdminPassword, trustHostFingerprint, verifyModelAdminPassword } = require("./settings.cjs");
-const { downloadRemoteFile, ensureDeviceControlKey, finalizeDeviceControl, getAgentSdkBridgeStatus, getClaudeModelStatus, installAgentSdkBridge, markDeviceControlDisabled, readRemoteFile, runClaude, uninstallAgentSdkBridge, updateClaudeModel, verifyConnection } = require("./ssh.cjs");
+const { downloadRemoteFile, ensureDeviceControlKey, finalizeDeviceControl, getAgentSdkBridgeStatus, getClaudeModelStatus, installAgentSdkBridge, markDeviceControlDisabled, readDeviceControlIpTrack, readRemoteFile, runClaude, uninstallAgentSdkBridge, updateClaudeModel, verifyConnection } = require("./ssh.cjs");
 const { copyLocalFile, getLocalClaudeModelStatus, readLocalFile, runLocalClaude, updateLocalClaudeModel, validatedWorkingDirectory: validatedLocalWorkdir, verifyLocalConnection } = require("./local.cjs");
 const { runAtomCodeChat, verifyAtomCodeConnection } = require("./daemon-chat.cjs");
 const { runCustomCli, verifyCustomCliConnection } = require("./custom-cli.cjs");
@@ -498,6 +498,11 @@ app.whenReady().then(async () => {
       writeLog("device_control_install_failed", { deviceId, sourceAddress, permissionMode, error });
       throw error;
     }
+  });
+  ipcMain.handle("device-control:ip-track", async (_event, deviceId) => {
+    const config = getSshConnection();
+    const result = await readDeviceControlIpTrack(config, deviceId, (fingerprint) => trustHost(config, fingerprint), writeLog);
+    return result;
   });
   ipcMain.handle("device-control:uninstall", async () => {
     const currentBeforeConfirm = getDeviceControlStatus();

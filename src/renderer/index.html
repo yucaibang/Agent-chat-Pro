@@ -460,6 +460,7 @@
             <p id="device-control-info" class="hint">点击安装后，NAS 为本机生成独立密钥，Windows 弹出一次 UAC 授权；以后 Agent 使用公钥连接，不使用员工密码。</p>
             <p id="device-control-autologon-note" class="hint">⚠ 安装过程包含一个仅保护性质的阶段：若本机已配置「无密码自动登录」，脚本会在确认该用户的密码确为空之后，重新登记该自动登录配置（避免配对破坏你原有的开机登录方式）。脚本不读取、不存储、不修改任何密码；未开启自动登录的机器不会因安装产生自动登录。</p>
             <div id="device-control-coexistence" class="coexistence-note" hidden></div>
+            <div id="device-control-ip-track" class="ip-track-note" hidden></div>
             <div class="device-control-actions">
               <button type="button" id="refresh-device-control" class="secondary">刷新状态</button>
               <button type="button" id="uninstall-device-control" class="secondary danger-button" hidden>卸载联动控件</button>

@@ -221,10 +221,17 @@ async function finalizeDeviceControl(config, key, metadata, onUnknownHost, onLog
     if (probe.code !== 0 || !probe.stdout.includes("AGENT_CHAT_PRO_READY")) {
       throw new Error(probe.stderr.trim() || "NAS 使用专属密钥回连 Windows 失败。");
     }
-    const script = `#!/bin/sh\nexec ssh ${sshArguments} \"$@\"\n`;
+    // v3.17.0 IP 追踪产品化：connect.sh 模板化为钩子版（metadata 注释行 = 单一事实来源；
+    // 失败钩子网络类错误才触发 → resolve-ip.sh 指纹重定位 → 新 IP 重试一次），同时把
+    // resolve-ip.sh 作为部署物落到 device-control 通用根目录（幂等覆盖即升级）。
+    const resolvePath = `${directory.replace(/\/[^/]+$/, "")}/resolve-ip.sh`;
+    const script = buildDeviceConnectScript({ targetUser: "AgentChatProControl", targetPort, targetAddress: target, directory, resolvePath });
     const sftp = await openSftp(client);
-    try { await writeSftp(sftp, connectScript, Buffer.from(script, "utf8")); } finally { closeSftp(sftp); }
-    await exec(client, `chmod 700 ${shellQuote(connectScript)}`);
+    try {
+      await writeSftp(sftp, connectScript, Buffer.from(script, "utf8"));
+      await writeSftp(sftp, resolvePath, Buffer.from(loadDeviceTemplate("resolve-ip.sh"), "utf8"));
+    } finally { closeSftp(sftp); }
+    await exec(client, `chmod 700 ${shellQuote(connectScript)} ${shellQuote(resolvePath)}`);
     await writeRemoteJson(client, `${directory}/device.json`, {
       deviceId: key.deviceId,
       hostname: String(metadata?.hostname || ""),
@@ -266,6 +273,48 @@ async function writeRemoteJson(client, remotePath, value) {
   const sftp = await openSftp(client);
   try { await writeSftp(sftp, remotePath, Buffer.from(JSON.stringify(value, null, 2) + "\n", "utf8")); }
   finally { closeSftp(sftp); }
+}
+
+// ── v3.17.0 IP 追踪产品化（F1）────────────────────────────────────────────
+// 模板文件进 asar（build.files = src/**）；占位符替换后经 SFTP 写到 NAS。
+// 模板内容为静态部署数据（非敏感逻辑），刻意不进混淆清单——保证写到远端脚本逐字节稳定。
+
+function loadDeviceTemplate(name) {
+  return fs.readFileSync(path.join(__dirname, "templates", name), "utf8");
+}
+
+function buildDeviceConnectScript({ targetUser, targetPort, targetAddress, directory, resolvePath }) {
+  let script = loadDeviceTemplate("connect.sh.tpl");
+  const values = {
+    TARGET_USER: targetUser || "AgentChatProControl",
+    TARGET_PORT: Number(targetPort || 22),
+    TARGET_IP: String(targetAddress || ""),
+    DEV_DIR: String(directory || ""),
+    RESOLVE_PATH: String(resolvePath || "")
+  };
+  for (const [key, value] of Object.entries(values)) {
+    script = script.split(`{{${key}}}`).join(String(value));
+  }
+  return script;
+}
+
+async function readDeviceControlIpTrack(config, deviceId, onUnknownHost, onLog) {
+  const safeId = String(deviceId || "").replace(/[^a-zA-Z0-9-]/g, "").slice(0, 80);
+  if (!safeId) throw new Error("无法识别联动设备编号。");
+  const client = await connectWithRetry(config, onUnknownHost, onLog);
+  try {
+    const home = (await exec(client, 'printf %s "$HOME"', { label: "IP 追踪：解析主目录" })).stdout.trim();
+    if (!home) throw new Error("无法确定 NAS 的 SSH 主目录。");
+    const logPath = `${home}/.agent-orbit/device-control/${safeId}/ip-track.log`;
+    const result = await exec(client, `test -f ${shellQuote(logPath)} && tail -n 5 -- ${shellQuote(logPath)} || true`, { label: "IP 追踪记录", timeoutMs: 20_000 });
+    const entries = [];
+    for (const line of String(result.stdout || "").split("\n")) {
+      const text = line.trim();
+      if (!text) continue;
+      try { entries.push(JSON.parse(text)); } catch { /* 非法行跳过，不影响其余条目 */ }
+    }
+    return { deviceId: safeId, logPath, entries };
+  } finally { client.end(); }
 }
 
 async function getAgentSdkBridgeStatus(config, onUnknownHost, onLog) {
@@ -1096,4 +1145,4 @@ function cleanError(value) {
   return value.replace(/\x1B\[[0-?]*[ -/]*[@-~]/g, "").trim();
 }
 
-module.exports = { buildAttachmentNote, cleanupRemoteAttachments, downloadRemoteFile, ensureDeviceControlKey, finalizeDeviceControl, getAgentSdkBridgeStatus, getClaudeModelStatus, handleToolPayload, installAgentSdkBridge, markDeviceControlDisabled, mimeFromPath, readRemoteFile, runClaude, safeRemoteFileName, uninstallAgentSdkBridge, updateClaudeModel, verifyConnection, withTimeout, writeSftp };
+module.exports = { buildAttachmentNote, buildDeviceConnectScript, cleanupRemoteAttachments, downloadRemoteFile, ensureDeviceControlKey, finalizeDeviceControl, getAgentSdkBridgeStatus, getClaudeModelStatus, handleToolPayload, installAgentSdkBridge, loadDeviceTemplate, markDeviceControlDisabled, mimeFromPath, readDeviceControlIpTrack, readRemoteFile, runClaude, safeRemoteFileName, uninstallAgentSdkBridge, updateClaudeModel, verifyConnection, withTimeout, writeSftp };
