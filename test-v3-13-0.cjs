@@ -412,9 +412,9 @@ async function main() {
     assert.ok(mainSrc.includes("local-stdio") === false && mainSrc.includes("`local-${localEngine}`"), "transport 日志未升级");
   });
   await test("main.cjs 会话/落库带 engine 参数", () => {
-    assert.ok(/sessionForMode\(conversation, config\.connectionMode, localEngine(?:, taskProfile)?\)/.test(mainSrc), "sessionForMode 未传引擎；v3.18.0 起允许尾参 taskProfile");
-    assert.ok(/saveConversationSession\(input\.conversationId, sessionId, config\.connectionMode, localEngine(?:, taskProfile)?\)/.test(mainSrc), "saveConversationSession 未传引擎；v3.18.0 起允许尾参 taskProfile");
-    assert.ok(/addAssistantMessage\([^\n]+localEngine(?:, taskProfile)?\);/.test(mainSrc), "addAssistantMessage 未传引擎；v3.18.0 起允许尾参 taskProfile");
+    assert.ok(/sessionForMode\(conversation, config\.connectionMode, localEngine(?:, taskProfile)?(?:, taskRemoteAdapter)?\)/.test(mainSrc), "sessionForMode 未传引擎；v3.18.0 起允许尾参 taskProfile");
+    assert.ok(/saveConversationSession\(input\.conversationId, sessionId, config\.connectionMode, localEngine(?:, taskProfile)?(?:, taskRemoteAdapter)?\)/.test(mainSrc), "saveConversationSession 未传引擎；v3.18.0 起允许尾参 taskProfile");
+    assert.ok(/addAssistantMessage\([^\n]+localEngine(?:, taskProfile)?(?:, taskRemoteAdapter)?\);/.test(mainSrc), "addAssistantMessage 未传引擎；v3.18.0 起允许尾参 taskProfile");
   });
   await test("main.cjs 非 claude 引擎禁用压缩 + model 管理", () => {
     assert.ok(mainSrc.includes("当前本机引擎不支持上下文压缩"), "压缩守卫缺失");
@@ -451,8 +451,8 @@ async function main() {
     assert.ok(conversationsSrc.includes("function localSessionField"), "缺少 localSessionField");
     assert.ok(conversationsSrc.includes('localSessionId_${name'), "引擎后缀字段缺失");
     assert.ok(conversationsSrc.includes('if (name === "custom") return "";'), "custom 引擎应无会话字段");
-    assert.ok(/sessionForMode\(conversation, connectionMode, engine = "claude"(?:, profileId = "")?\)/.test(conversationsSrc), "sessionForMode 未加 engine 参数；v3.18.0 起允许尾参 profileId");
-    assert.ok(/saveConversationSession\(id, sessionId, connectionMode = "ssh", engine = "claude"(?:, profileId = "")?\)/.test(conversationsSrc), "saveConversationSession 未加 engine 参数；v3.18.0 起允许尾参 profileId");
+    assert.ok(/sessionForMode\(conversation, connectionMode, engine = "claude"(?:, profileId = "")?(?:, remoteAdapter = "claude")?\)/.test(conversationsSrc), "sessionForMode 未加 engine 参数；v3.18.0 起允许尾参 profileId（v3.19.0 再叠 remoteAdapter）");
+    assert.ok(/saveConversationSession\(id, sessionId, connectionMode = "ssh", engine = "claude"(?:, profileId = "")?(?:, remoteAdapter = "claude")?\)/.test(conversationsSrc), "saveConversationSession 未加 engine 参数；v3.18.0 起允许尾参 profileId（v3.19.0 再叠 remoteAdapter）");
   });
   await test("conversations.cjs 清会话覆盖引擎后缀字段", () => {
     assert.ok(conversationsSrc.includes("key.startsWith(\"localSessionId_\")"), "清会话未覆盖引擎字段");

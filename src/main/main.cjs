@@ -6,9 +6,13 @@ const path = require("path");
 const { randomUUID } = require("crypto");
 const { spawnSync } = require("child_process"); // v3.16.1 print:detect 调 reg/tasklist
 const { getConnection, getSettings, getAtomcodeToken, getSshConnection, getCloudAiConfig, sameSshTarget, saveSettings, setModelAdminPassword, switchSshProfile, trustHostFingerprint, verifyModelAdminPassword } = require("./settings.cjs");
-const { downloadRemoteFile, ensureDeviceControlKey, finalizeDeviceControl, getAgentSdkBridgeStatus, getClaudeModelStatus, installAgentSdkBridge, markDeviceControlDisabled, readDeviceControlIpTrack, readRemoteFile, runClaude, uninstallAgentSdkBridge, updateClaudeAutoCompactWindow, updateClaudeModel, updateClaudeModelEntry, verifyConnection } = require("./ssh.cjs");
+const { connectWithRetry, downloadRemoteFile, ensureDeviceControlKey, exec, finalizeDeviceControl, getAgentSdkBridgeStatus, getClaudeModelStatus, installAgentSdkBridge, markDeviceControlDisabled, readDeviceControlIpTrack, readRemoteFile, runClaude, uninstallAgentSdkBridge, updateClaudeAutoCompactWindow, updateClaudeModel, updateClaudeModelEntry, verifyConnection } = require("./ssh.cjs");
 const { copyLocalFile, getLocalClaudeModelStatus, readLocalFile, runLocalClaude, updateLocalAutoCompactWindow, updateLocalClaudeModel, updateLocalClaudeModelEntry, validatedWorkingDirectory: validatedLocalWorkdir, verifyLocalConnection } = require("./local.cjs");
 const { runAtomCodeChat, verifyAtomCodeConnection } = require("./daemon-chat.cjs");
+// v3.19.0 F3：SSH 远程适配器（qwen/codex/hermes 三家远端 CLI 跑法）
+const { runQwenCli } = require("./adapters/qwen-cli.cjs");
+const { runCodexCli } = require("./adapters/codex-cli.cjs");
+const { runHermesCli } = require("./adapters/hermes-cli.cjs");
 const { runCustomCli, verifyCustomCliConnection } = require("./custom-cli.cjs");
 const { contextTokensFromUsage } = require("./protocol.cjs");
 const { scanSystemCaches, cleanSystemCaches } = require("./cache-cleaner.cjs");
@@ -462,6 +466,52 @@ app.whenReady().then(async () => {
   });
   // v3.18.0 F4：切换 SSH 卡槽（目标槽整套参数物化为活跃连接；密码/指纹随槽走；
   // 运行中任务在开始时已捕获 config+taskProfile，切槽不杀也不串会话——拍板「任务跟原连接走」）
+  // v3.19.0 F3：SSH 远程适配器在场检测——单次 SSH 连接探测全部远端 CLI（claude/atomcode 内置直接返回）
+  ipcMain.handle("settings:detect-ssh-adapter", async (_event, payload = {}) => {
+    const requested = String(payload?.adapter || "").trim();
+    const config = getConnection();
+    if (config.connectionMode !== "ssh") throw new Error("适配器检测仅在 SSH 连接模式下可用（本机模式无需远端 CLI）。");
+    const remote = [
+      { key: "qwen", cli: "qwen", installHint: "在 NAS 上执行：npm install -g @qwen-code/qwen-code" },
+      { key: "codex", cli: "codex", installHint: "在 NAS 上执行：npm install -g @openai/codex" },
+      { key: "hermes", cli: "hermes", installHint: "官方脚本安装（hermes-agent.nousresearch.com）" }
+    ];
+    const builtin = [
+      { key: "claude", detail: "内置 agent-sdk-bridge / direct-cli 双链，无需额外安装" },
+      { key: "atomcode", detail: "通过 NAS 侧 atomcode daemon 调用（连接设置里已配置），无需远端 CLI" }
+    ];
+    const results = [];
+    if (!requested || remote.some((item) => item.key === requested)) {
+      const probed = remote.filter((item) => !requested || item.key === requested);
+      const client = await connectWithRetry(config, () => {}, writeLog, undefined);
+      try {
+        const list = probed.map((item) => item.cli).join(" ");
+        const script = `for c in ${list}; do p=$(command -v -- "$c" 2>/dev/null) && echo "OK:$c:$p" || echo "MISS:$c"; done`;
+        const probe = await exec(client, script);
+        const found = {};
+        for (const line of probe.stdout.split("\n")) {
+          const match = /^(OK|MISS):([^:]+)(?::(.*))?$/.exec(line.trim());
+          if (match) found[match[2]] = match[1] === "OK" ? (match[3] || "").trim() : "";
+        }
+        for (const item of probed) {
+          results.push({
+            key: item.key,
+            status: found[item.cli] ? "installed" : "missing",
+            path: found[item.cli] || "",
+            installHint: found[item.cli] ? "" : item.installHint
+          });
+        }
+      } finally {
+        try { client.end(); } catch { /* 已断开 */ }
+      }
+    }
+    for (const item of builtin) {
+      if (requested && item.key !== requested) continue;
+      results.push({ key: item.key, status: "builtin", path: "", installHint: "", detail: item.detail });
+    }
+    writeLog("ssh_adapter_detect", { requested: requested || "all", installed: results.filter((r) => r.status === "installed").length });
+    return { results };
+  });
   ipcMain.handle("settings:switch-ssh-profile", (_event, profileId) => {
     const next = switchSshProfile(profileId);
     writeLog("settings_ssh_profile_switched", { profileId: next.activeSshProfile, host: next.host || "" });
@@ -922,6 +972,7 @@ app.whenReady().then(async () => {
         sendWorkStatusSignal(event.sender, "chat:event", normalized);
       };
       const cloudCallbacks = {
+        advanced: getCloudAiConfig().advancedEffective, // v3.19.0 F3：云端超时/重试参数随行
         onDelta: (text) => {
           streamedText += text;
           sendWorkStatusSignal(event.sender, "chat:delta", { id, text });
@@ -954,7 +1005,12 @@ app.whenReady().then(async () => {
       // 工具循环（agent loop）：tool_calls → 本机执行 → 结果回填 → 再请求，直到纯文本回复或达轮数上限
       const runCloudWithTools = async () => {
         let loopMessages = cloudMessages;
-        for (let round = 0; round <= MAX_TOOL_ROUNDS; round += 1) {
+        // v3.19.0 F3：工具循环轮数上限可配（advanced.cloud.maxToolRounds，5~50 默认 25）
+        const advancedCloud = config.advancedEffective?.cloud || {};
+        const maxToolRounds = Number.isInteger(Number(advancedCloud.maxToolRounds))
+          && Number(advancedCloud.maxToolRounds) >= 5 && Number(advancedCloud.maxToolRounds) <= 50
+          ? Number(advancedCloud.maxToolRounds) : MAX_TOOL_ROUNDS;
+        for (let round = 0; round <= maxToolRounds; round += 1) {
           // v3.15.5 修复3：round>0 时上一轮工具已执行完，插入跨轮分隔线（首轮不插）
           if (round > 0 && cloudCallbacks.emitRoundSeparator) cloudCallbacks.emitRoundSeparator();
           const promise = requestOnce(loopMessages);
@@ -1070,7 +1126,9 @@ app.whenReady().then(async () => {
     const agentMessage = `${message}${message ? "\n\n" : ""}[来源电脑：${config.clientLabel}]`;
     const conversation = getConversation(input.conversationId);
     const taskProfile = activeSshProfileOf(config); // v3.18.0 F4：任务开始时锁定卡槽维度——切槽不杀任务也不串会话
-    const activeSessionId = sessionForMode(conversation, config.connectionMode, localEngine, taskProfile);
+    // v3.19.0 F3：任务开始时同样锁定适配器维度（advanced.adapter；仅 SSH 模式有第二语义）
+    const taskRemoteAdapter = config.connectionMode === "ssh" ? String(config.advancedEffective?.adapter || "claude") : "claude";
+    const activeSessionId = sessionForMode(conversation, config.connectionMode, localEngine, taskProfile, taskRemoteAdapter);
     let streamedText = "";
     let streamedTurnText = "";
     let completedTurnCount = 0;
@@ -1141,8 +1199,8 @@ app.whenReady().then(async () => {
       onSessionId: (sessionId) => {
         latestSessionId = sessionId || latestSessionId;
         try {
-          saveConversationSession(input.conversationId, sessionId, config.connectionMode, localEngine, taskProfile);
-          writeLog("chat_session_checkpointed", { requestId: id, conversationId: input.conversationId, sessionId, connectionMode: config.connectionMode });
+          saveConversationSession(input.conversationId, sessionId, config.connectionMode, localEngine, taskProfile, taskRemoteAdapter);
+          writeLog("chat_session_checkpointed", { requestId: id, conversationId: input.conversationId, sessionId, connectionMode: config.connectionMode, remoteAdapter: taskRemoteAdapter });
         } catch (error) {
           writeLog("chat_session_checkpoint_failed", { requestId: id, conversationId: input.conversationId, error });
         }
@@ -1153,7 +1211,7 @@ app.whenReady().then(async () => {
         const completedText = String(text || streamedTurnText || "");
         if (completedText) {
           saveAssistantDraft(input.conversationId, id, completedText);
-          addAssistantMessage(input.conversationId, completedText, turnSessionId || latestSessionId, [], [], id, config.connectionMode, turnUsage, undefined, undefined, taskProfile);
+          addAssistantMessage(input.conversationId, completedText, turnSessionId || latestSessionId, [], [], id, config.connectionMode, turnUsage, undefined, undefined, taskProfile, taskRemoteAdapter);
           completedTurnCount += 1;
         }
         streamedTurnText = "";
@@ -1201,7 +1259,29 @@ app.whenReady().then(async () => {
     } else if (config.connectionMode === "local") {
       operation = runLocalClaude(config, agentMessage, activeSessionId, attachments, callbacks);
     } else {
-      operation = runClaude(config, agentMessage, activeSessionId, attachments, callbacks);
+      // v3.19.0 F3：SSH 远程适配器分派——claude=现有 bridge/direct 链不动；
+      // qwen/codex/hermes=远端 CLI 直跑；atomcode=NAS 侧 daemon HTTP（daemon 换 NAS IP，零新代码）。
+      const remoteAdapter = String(config.advancedEffective?.adapter || "claude");
+      const cliRunners = { qwen: runQwenCli, codex: runCodexCli, hermes: runHermesCli };
+      const runner = cliRunners[remoteAdapter];
+      if (remoteAdapter === "atomcode") {
+        // atomcode daemon 跑在 NAS 上：SSH 模式把 daemon 地址换成 NAS 连接地址（其余全走既有 daemon HTTP 链）
+        config.atomcodeHost = String(config.host || "").trim() || String(config.atomcodeHost || "127.0.0.1");
+        config.atomcodeToken = getAtomcodeToken() || config.atomcodeToken;
+        callbacks.onLog?.("ssh_adapter_dispatch", { adapter: "atomcode", daemonHost: config.atomcodeHost });
+        operation = runAtomCodeChat(config, agentMessage, activeSessionId, attachments, callbacks);
+      } else if (runner) {
+        callbacks.onLog?.("ssh_adapter_dispatch", { adapter: remoteAdapter });
+        // 命令行模型的沙箱/服务商参数从高级设置透传（qwen -m / codex --sandbox / hermes --model --provider）
+        if (config.advancedEffective?.adapterOptions) {
+          config.remoteAdapterModel = config.advancedEffective.adapterOptions.model || config.remoteAdapterModel;
+          config.remoteAdapterSandbox = config.advancedEffective.adapterOptions.sandbox || config.remoteAdapterSandbox;
+          config.remoteAdapterProvider = config.advancedEffective.adapterOptions.provider || config.remoteAdapterProvider;
+        }
+        operation = runner(config, agentMessage, activeSessionId, attachments, callbacks);
+      } else {
+        operation = runClaude(config, agentMessage, activeSessionId, attachments, callbacks);
+      }
     }
     writeLog("work_status_signal", statusSignalEntry({ requestId: id, direction: "main-received", signal: "request-outcome", disposition: "started", eventType: "lifecycle", eventStatus: "started", transport: config.connectionMode === "local" ? `local-${localEngine}` : "ssh" }));
     activeRequests.set(id, { operation, conversationId: input.conversationId });
@@ -1214,7 +1294,7 @@ app.whenReady().then(async () => {
       if (draftTimer) clearTimeout(draftTimer);
       safeSignal("chain-complete", () => chatChain.complete({}));
       if (!completedTurnCount) {
-        addAssistantMessage(input.conversationId, result.text, result.sessionId, result.files, result.tools, id, config.connectionMode, result.usage, Date.now() - startedAt, localEngine, taskProfile);
+        addAssistantMessage(input.conversationId, result.text, result.sessionId, result.files, result.tools, id, config.connectionMode, result.usage, Date.now() - startedAt, localEngine, taskProfile, taskRemoteAdapter);
       }
       const stats = conversationStats(getConversation(input.conversationId));
       writeLog("chat_send_success", { requestId: id, conversationId: input.conversationId, sessionId: result.sessionId, textLength: result.text.length });

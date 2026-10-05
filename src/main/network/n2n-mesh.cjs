@@ -69,12 +69,18 @@ class N2nMeshTransport extends Transport {
     onLog?.("n2n_mesh_connect_start", { supernodeAddr, supernodePort, community: "[REDACTED]" });
 
     // Step 1+2: 建立虚拟网络（UDP 自动兼容降级 TCP）
+    // v3.19.0 F3：高级设置手动面（-A 加密方式 / -z 压缩 / -H 头加密 / 手动协议不探测）
+    const tunables = config?.advancedEffective?.external?.n2n || {};
     try {
       await this._establishN2nNetwork({
         supernodeAddr,
         supernodePort,
         community,
-        key
+        key,
+        cipher: String(tunables.cipher || ""),
+        compression: String(tunables.compression || ""),
+        headerEncryption: Boolean(tunables.headerEncryption),
+        manualProtocol: tunables.protocol === "udp" || tunables.protocol === "tcp" ? tunables.protocol : ""
       }, targetHost, targetPort, onLog);
     } catch (error) {
       this._cleanup();
@@ -108,7 +114,8 @@ class N2nMeshTransport extends Transport {
   async _establishN2nNetwork(edgeOptions, targetHost, targetPort, onLog) {
     const modeKey = `${edgeOptions.supernodeAddr}:${edgeOptions.supernodePort}`;
     const cached = MODE_CACHE.get(modeKey);
-    const modes = cached === "tcp" ? ["tcp"] : ["udp", "tcp"];
+    // v3.19.0 F3：手动协议=固定模式不探测（udp/tcp）；自动=UDP 失败降级 TCP（tcp 缓存命中则直连 tcp）
+    const modes = edgeOptions.manualProtocol ? [edgeOptions.manualProtocol] : (cached === "tcp" ? ["tcp"] : ["udp", "tcp"]);
 
     let lastError = null;
     for (const mode of modes) {
@@ -198,6 +205,13 @@ class N2nMeshTransport extends Transport {
       if (options.key) {
         args.push("-k", options.key);
       }
+      // v3.19.0 F3：手动加密方式 / 压缩 / 头加密（空值=n2n 默认行为，不带参数）
+      if (options.cipher && /^A[2-5]$/.test(options.cipher)) {
+        args.push(`-A${options.cipher}`);
+      }
+      if (options.compression === "lzo1x") args.push("-z1");
+      if (options.compression === "zstd") args.push("-z2");
+      if (options.headerEncryption) args.push("-H");
 
       const timeout = setTimeout(() => {
         reject(new Error("N2N edge 启动超时，请确保已安装 n2n（edge 命令）。"));

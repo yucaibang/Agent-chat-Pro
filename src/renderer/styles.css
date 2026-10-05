@@ -802,3 +802,27 @@ textarea { resize: vertical; min-height: 60px; }
 [data-theme="light"] .cache-risk-badge.admin { color: #b91c1c; }
 [data-theme="light"] .cache-clean-result.ok { color: #15803d; }
 [data-theme="light"] .cache-clean-result.fail { color: #b91c1c; }
+
+/* ── v3.19.0 F3：高级设置（网络 / 云端 / SSH 连接适配器） ── */
+.adv-panel { border: 1px solid var(--border-control); border-radius: 12px; background: var(--bg-deep); padding: 0 14px; margin: 0 0 14px; }
+.adv-panel > summary { display: flex; align-items: center; gap: 10px; padding: 14px 2px; cursor: pointer; list-style: none; user-select: none; }
+.adv-summary-title { font-size: 14px; font-weight: 650; color: var(--text-primary); flex: 1; }
+.adv-badge { font-size: 11px; padding: 3px 10px; border-radius: 999px; background: var(--bg-mode-switch); color: var(--text-muted); border: 1px solid var(--border-control); white-space: nowrap; }
+.adv-badge.is-manual { color: var(--accent); border-color: var(--accent); }
+.adv-body { border-top: 1px solid var(--border-divider); padding: 12px 2px 10px; display: flex; flex-direction: column; gap: 10px; }
+.adv-sub { border-top: 1px solid var(--border-divider); padding: 10px 0 4px; }
+.adv-sub > summary { cursor: pointer; margin: 0 0 8px; color: var(--text-secondary); user-select: none; display: flex; flex-direction: column; gap: 2px; }
+.adv-sub .adv-summary-title { font-size: 13px; }
+.adv-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px 16px; }
+.adv-grid label { min-width: 0; }
+.adv-grid input { min-width: 0; }
+.toggle-row { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text-muted); }
+.toggle-row input[type="checkbox"] { width: auto; }
+.adv-notes { margin: 6px 0 0; padding-left: 18px; display: flex; flex-direction: column; gap: 5px; font-size: 11px; color: var(--text-muted); line-height: 1.5; }
+.adv-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.adv-actions .primary, .adv-actions .secondary { min-width: 108px; }
+.adapter-switch { grid-template-columns: repeat(5, 1fr); font-size: 12px; }
+.adapter-switch button { padding: 9px 4px; }
+.adv-detect-result { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; border: 1px dashed var(--border-control); border-radius: 8px; }
+.adv-detect-row { display: flex; align-items: center; gap: 10px; font-size: 12px; color: var(--text-secondary); flex-wrap: wrap; }
+.adv-detect-row strong { color: var(--text-primary); font-weight: 600; white-space: nowrap; }

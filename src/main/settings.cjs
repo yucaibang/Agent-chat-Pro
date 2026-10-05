@@ -54,14 +54,153 @@ function mergeNetworkConfig(input, previous, type) {
   return merged;
 }
 
+// ─────────────────────────────────────────────────────────────────────
+// 高级设置（v3.19.0 F3）：自动/手动两态
+//   分组值 null = 自动识别（行为 = 代码内默认值，零字段暴露）
+//   分组值 = 对象时为手动（字段逐个白名单钳制，非法即整组回自动）
+//   adapter 不参与两态：SSH 远程适配器显式五选一（claude 内置，其余需远端安装）
+// 默认值表 = 现状硬编码实锤（与 ssh.cjs / cloud-chat.cjs / cloud-tools.cjs 常量逐一对应）
+// ─────────────────────────────────────────────────────────────────────
+const ADVANCED_ADAPTERS = ["claude", "atomcode", "qwen", "codex", "hermes"];
+
+const ADVANCED_DEFAULTS = {
+  ssh: { requestTimeoutMin: 30, connectTimeoutSec: 15, sftpTimeoutSec: 30, reconnectAttempts: 3, reconnectBaseMs: 600, keepaliveSec: 15, debugLog: false },
+  cloud: { connectTimeoutSec: 120, streamIdleTimeoutSec: 300, maxRetries: 0, maxToolRounds: 25 }
+};
+
+const ADVANCED_CLAMPS = {
+  ssh: {
+    requestTimeoutMin: [10, 120],   // 单次请求超时（分钟）；现状 MAX_REQUEST_MS 30
+    connectTimeoutSec: [5, 60],     // SSH ready 超时（秒）；现状 SSH_READY_TIMEOUT_MS 15
+    sftpTimeoutSec: [10, 300],      // SFTP/探针/步进超时（秒）；现状 SFTP_OPERATION_TIMEOUT_MS 30
+    reconnectAttempts: [0, 10],     // 连接重试次数；现状 MAX_CONNECT_ATTEMPTS 3
+    reconnectBaseMs: [100, 30000],  // 指数退避基数（毫秒）；现状 600起步封顶15s
+    keepaliveSec: [10, 120]         // SSH keepalive 间隔（秒）；现状 SSH_KEEPALIVE_INTERVAL_MS 15
+  },
+  cloud: {
+    connectTimeoutSec: [10, 300],       // 云端连接超时（秒）；现状 req.setTimeout 120
+    streamIdleTimeoutSec: [60, 1800],   // 流式空闲超时（秒）；现状响应级 300000ms
+    maxRetries: [0, 3],                 // 失败自动重试（仅幂等码 429/5xx）；现状 0
+    maxToolRounds: [5, 50]              // 工具循环轮数上限；现状 MAX_TOOL_ROUNDS 25
+  }
+};
+
+const N2N_CIPHER_OPTIONS = ["", "A2", "A3", "A4", "A5"]; // edge -A 加密方式（空=n2n 默认；A5 Speck-CTR 走 -A5）
+const N2N_COMPRESSION_OPTIONS = ["", "lzo1x", "zstd"];   // -z1 / -z2
+const N2N_PROTOCOL_OPTIONS = ["", "udp", "tcp"];          // 空=自动（UDP 失败降级 TCP）；手动=固定模式不探测
+const FRP_PROTOCOL_OPTIONS = ["", "tcp", "kcp", "quic", "websocket", "wss"]; // frpc transport.protocol（服务端 toml，客户端仅标注）
+
+function normalizeRemoteAdapter(value) {
+  const adapter = String(value || "").trim();
+  return ADVANCED_ADAPTERS.includes(adapter) ? adapter : "claude";
+}
+
+function clampAdvancedInt(value, min, max) {
+  const n = Number(value);
+  if (!Number.isInteger(n) || n < min || n > max) return null;
+  return n;
+}
+
+/** 手动组逐字段钳制：任一字段非法 → 整组回自动（null），绝不静默改值 */
+function sanitizeAdvancedNumericGroup(group, clamps) {
+  if (!group || typeof group !== "object") return null;
+  const out = {};
+  for (const [field, [min, max]] of Object.entries(clamps)) {
+    const value = clampAdvancedInt(group[field], min, max);
+    if (value === null) return null;
+    out[field] = value;
+  }
+  return out;
+}
+
+/** SSH 手动组 = 数字六参数（钳制） + debugLog 布尔开关：任一数字非法整组回自动 */
+function sanitizeSshAdvanced(group) {
+  const numeric = sanitizeAdvancedNumericGroup(group, ADVANCED_CLAMPS.ssh);
+  if (!numeric) return null;
+  return { ...numeric, debugLog: Boolean(group.debugLog) };
+}
+
+function sanitizeN2nAdvanced(group) {
+  // external 分组带方式子键（v3.19.0 本轮只实做 n2n 的可消费参数；frp/derp/p2p 为 NAS 侧或明文标注无客户端字段）
+  const n2n = group?.n2n && typeof group.n2n === "object" ? group.n2n : null;
+  if (!n2n) return null;
+  const cipher = String(n2n.cipher ?? "");
+  const compression = String(n2n.compression ?? "");
+  const protocol = String(n2n.protocol ?? "").toLowerCase();
+  if (!N2N_CIPHER_OPTIONS.includes(cipher)) return null;
+  if (!N2N_COMPRESSION_OPTIONS.includes(compression)) return null;
+  if (!N2N_PROTOCOL_OPTIONS.includes(protocol)) return null;
+  return {
+    n2n: {
+      cipher: cipher || "",
+      compression: compression || "",
+      protocol: protocol || "",
+      headerEncryption: Boolean(n2n.headerEncryption) // edge -H 头加密（要求 supernode 固定社区名）
+    }
+  };
+}
+
+/**
+ * advanced 分组合并：input 带 advanced 时整体接管（UI 每次 save 全量提交）；
+ * 否则继承 previous。null 分组 = 自动。
+ */
+function sanitizeAdvanced(input, previous) {
+  const source = input !== undefined && input !== null && typeof input === "object" ? input : (previous || {});
+  const rawSsh = source.ssh === undefined ? null : source.ssh;
+  const rawExternal = source.external === undefined ? null : source.external;
+  const rawCloud = source.cloud === undefined ? null : source.cloud;
+  return {
+    ssh: sanitizeSshAdvanced(rawSsh),
+    external: sanitizeN2nAdvanced(rawExternal),
+    cloud: sanitizeAdvancedNumericGroup(rawCloud, ADVANCED_CLAMPS.cloud),
+    adapter: normalizeRemoteAdapter(source.adapter),
+    // 适配器附加参数（v3.19.0 F3）：qwen -m / codex --sandbox / hermes --model --provider；宽松 trim
+    adapterOptions: sanitizeAdapterOptions(source.adapterOptions)
+  };
+}
+
+/** 适配器附加参数：全部可选，非法/缺失回空串（三家 runner 空值即不带参） */
+function sanitizeAdapterOptions(value) {
+  const source = value && typeof value === "object" ? value : {};
+  const sandbox = String(source.sandbox || "").trim();
+  return {
+    model: String(source.model || "").trim(),
+    sandbox: sandbox === "read-only" ? "read-only" : sandbox === "workspace-write" ? "workspace-write" : "",
+    provider: String(source.provider || "").trim()
+  };
+}
+
+/** 合并实值：null 分组展开为默认值表，消费端（ssh.cjs/cloud-chat/main）直接读取 */
+function advancedEffective(advanced) {
+  return {
+    ssh: { ...ADVANCED_DEFAULTS.ssh, ...(advanced?.ssh || {}) },
+    cloud: { ...ADVANCED_DEFAULTS.cloud, ...(advanced?.cloud || {}) },
+    external: {
+      n2n: {
+        cipher: advanced?.external?.n2n?.cipher || "",
+        compression: advanced?.external?.n2n?.compression || "",
+        protocol: advanced?.external?.n2n?.protocol || "",
+        headerEncryption: Boolean(advanced?.external?.n2n?.headerEncryption)
+      }
+    },
+    adapter: normalizeRemoteAdapter(advanced?.adapter),
+    adapterOptions: {
+      model: String(advanced?.adapterOptions?.model || "").trim(),
+      sandbox: advanced?.adapterOptions?.sandbox === "read-only" ? "read-only" : "",
+      provider: String(advanced?.adapterOptions?.provider || "").trim()
+    }
+  };
+}
+
 function normalizeUserAvatar(value) {
   const avatar = String(value || "");
   return USER_AVATARS.has(avatar) ? avatar : "user-male-1";
 }
 
 /** 配置结构版本（v3.16.0 数据迁移机制）：结构变化时在此推进版本并加迁移分支 */
-// v3.18.0 F4：升到 2（触发 .schema-v1.bak 备份 + 打版本标；SSH 多卡槽字段由此起步）
-const SETTINGS_SCHEMA_VERSION = 2;
+// v3.18.0 F4：升到 2（SSH 多卡槽字段起步）
+// v3.19.0 F3：升到 3（advanced 高级设置分组起步——自动/手动两态 + SSH 适配器 remoteAdapter）
+const SETTINGS_SCHEMA_VERSION = 3;
 
 function settingsPath() {
   return path.join(app.getPath("userData"), SETTINGS_FILE);
@@ -247,6 +386,7 @@ function getSettings() {
   const slot = activeSshProfileSlot(raw);
   const profiles = ensureSshProfiles(raw);
   const activeProfile = normalizeSshProfileId(raw.activeSshProfile);
+  const advancedState = sanitizeAdvanced(undefined, raw.advanced);
   return {
     connectionMode: raw.connectionMode === "local" ? "local" : raw.connectionMode === "cloud" ? "cloud" : "ssh",
     activeSshProfile: activeProfile,
@@ -314,6 +454,9 @@ function getSettings() {
     proxyUsername: raw.proxyUsername || "",
     hasProxyPassword: Boolean(raw.proxyPasswordEncrypted || raw.proxyPassword),
     // 主题
+    // 高级设置（v3.19.0 F3）：null 分组=自动识别；adapter=SSH 远程适配器五选一
+    advanced: advancedState,
+    advancedEffective: advancedEffective(advancedState),
     // 主题
     theme: raw.theme || "dark",
     // 背景设置
@@ -404,6 +547,8 @@ function getCloudAiConfig() {
     runCommandEnabled: Boolean(raw.cloudRunCommandEnabled),
     workingDirectory: String(raw.cloudWorkingDirectory || "").trim(),
     maxTokens: raw.cloudAiMaxTokens || 4096,
+    // v3.19.0 F3：高级设置（云端超时/重试/轮次）与 SSH 适配器选择随行
+    advancedEffective: advancedEffective(sanitizeAdvanced(undefined, raw.advanced)),
     proxy: {
       enabled: Boolean(raw.proxyEnabled),
       type: raw.proxyType === "socks5" ? "socks5" : "http",
@@ -480,6 +625,8 @@ function saveSettings(input) {
     proxyUsername: String(input.proxyUsername || "").trim(),
     proxyPasswordEncrypted: previous.proxyPasswordEncrypted || "",
     proxyPassword: "",
+    // 高级设置（v3.19.0 F3）：input 带时整体接管，无则继承 previous（sanitize 幂等）
+    advanced: sanitizeAdvanced(input.advanced !== undefined ? input.advanced : previous.advanced),
     // 主题
     theme: input.theme || previous.theme || "dark",
     // 背景

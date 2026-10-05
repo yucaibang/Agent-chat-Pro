@@ -218,10 +218,171 @@ function populateSettings(settings) {
   if (customCliCommand) customCliCommand.value = settings.customCliCommand || "";
   // v3.18.0 F4：SSH 卡槽回填（活跃槽高亮 + 名称 + 两槽配置状态行）
   renderSshProfiles(settings);
+  // v3.19.0 F3：高级设置三卡回填（自动/手动徽章 + 实值 + 适配器选中态）
+  renderAdvancedPanels(settings);
 }
 
 // ── v3.18.0 F4：SSH 多卡槽（AO 0.9.6 同构 + ACP 切槽即落库语义） ──
 const DEFAULT_SSH_PROFILE_NAMES = { "ssh-1": "卡槽 1", "ssh-2": "卡槽 2" };
+
+// ── v3.19.0 F3：高级设置（网络/云端自动·手动两态 + SSH 连接适配器五选一） ──
+const ADV_ADAPTER_META = {
+  claude: { label: "Claude", note: "内置 agent-sdk-bridge / direct-cli 双链，无需在 NAS 上额外安装；模型页配置对它生效。" },
+  atomcode: { label: "AtomCode", note: "通过 NAS 侧 atomcode daemon 调用（daemon 地址自动取当前 SSH 连接的 NAS IP），无需远端 CLI。" },
+  qwen: { label: "Qwen Code", note: "NAS 需安装：npm install -g @qwen-code/qwen-code；附加参数可指定 -m 模型。" },
+  codex: { label: "Codex", note: "NAS 需安装：npm install -g @openai/codex；附加参数可切沙箱（workspace-write / read-only）。" },
+  hermes: { label: "Hermes", note: "NAS 需安装 hermes CLI（官方脚本或 NAS 容器内挂 PATH）；附加参数支持 --model 与 --provider。" }
+};
+
+let pendingAdapterKey = "claude";
+let advancedSaving = false;
+
+function setAdvBadge(panel, text, manual) {
+  const badge = document.querySelector(`[data-adv-badge="${panel}"]`);
+  if (!badge) return;
+  badge.textContent = text;
+  badge.classList.toggle("is-manual", Boolean(manual));
+}
+
+function advFieldValue(id, fallback) {
+  const input = document.querySelector(id);
+  if (!input || String(input.value ?? "").trim() === "") return fallback;
+  const value = Number(input.value);
+  return Number.isFinite(value) ? value : fallback;
+}
+
+function advNetworkPatch() {
+  return {
+    ssh: {
+      requestTimeoutMin: advFieldValue("#adv-ssh-request-timeout", 30),
+      connectTimeoutSec: advFieldValue("#adv-ssh-connect-timeout", 15),
+      sftpTimeoutSec: advFieldValue("#adv-ssh-sftp-timeout", 30),
+      reconnectAttempts: advFieldValue("#adv-ssh-reconnect-attempts", 3),
+      reconnectBaseMs: advFieldValue("#adv-ssh-reconnect-base", 600),
+      keepaliveSec: advFieldValue("#adv-ssh-keepalive", 15),
+      debugLog: Boolean(document.querySelector("#adv-ssh-debug-log")?.checked)
+    },
+    external: {
+      n2n: {
+        cipher: document.querySelector("#adv-n2n-cipher")?.value || "",
+        compression: document.querySelector("#adv-n2n-compression")?.value || "",
+        protocol: document.querySelector("#adv-n2n-protocol")?.value || "",
+        headerEncryption: Boolean(document.querySelector("#adv-n2n-header-encryption")?.checked)
+      }
+    }
+  };
+}
+
+function advCloudPatch() {
+  return {
+    cloud: {
+      connectTimeoutSec: advFieldValue("#adv-cloud-connect-timeout", 120),
+      streamIdleTimeoutSec: advFieldValue("#adv-cloud-stream-idle", 300),
+      maxRetries: advFieldValue("#adv-cloud-max-retries", 0),
+      maxToolRounds: advFieldValue("#adv-cloud-tool-rounds", 25)
+    }
+  };
+}
+
+async function saveAdvancedGroup(patch, successText) {
+  if (advancedSaving) return;
+  advancedSaving = true;
+  try {
+    const latest = await window.agentChatPro.loadSettings();
+    const baseAdvanced = latest.advanced && typeof latest.advanced === "object" ? latest.advanced : {};
+    const settings = await window.agentChatPro.saveSettings({ ...latest, advanced: { ...baseAdvanced, ...patch } });
+    populateSettings(settings);
+    const advanced = settings.advanced && typeof settings.advanced === "object" ? settings.advanced : {};
+    const rolled = [];
+    if (patch.ssh && !advanced.ssh) rolled.push("SSH 连接");
+    if (patch.external && !advanced.external) rolled.push("外网传输");
+    if (patch.cloud && !advanced.cloud) rolled.push("云端模型");
+    setStatus(rolled.length
+      ? `已保存；但 ${rolled.join("、")} 所填值不合法，已整组回退自动识别。`
+      : successText, rolled.length > 0);
+  } catch (error) {
+    setStatus(error.message, true);
+  } finally {
+    advancedSaving = false;
+  }
+}
+
+function renderAdapterCard(adapterOptions = {}) {
+  document.querySelectorAll("#adv-panel-adapter [data-adapter-key]").forEach((button) => {
+    button.classList.toggle("active", button.dataset.adapterKey === pendingAdapterKey);
+  });
+  const meta = ADV_ADAPTER_META[pendingAdapterKey] || { label: pendingAdapterKey, note: "" };
+  document.querySelector("#adapter-note").textContent = meta.note || "";
+  const showModel = pendingAdapterKey === "qwen" || pendingAdapterKey === "hermes";
+  const showSandbox = pendingAdapterKey === "codex";
+  const showProvider = pendingAdapterKey === "hermes";
+  document.querySelectorAll("#adapter-options [data-adapter-opt]").forEach((field) => {
+    const kind = field.dataset.adapterOpt;
+    field.hidden = kind === "model" ? !showModel : kind === "sandbox" ? !showSandbox : !showProvider;
+  });
+  document.querySelector("#adapter-options").hidden = !(showModel || showSandbox || showProvider);
+  const modelValue = typeof adapterOptions.model === "string" ? adapterOptions.model : "";
+  document.querySelector("#adapter-opt-model").value = modelValue;
+  document.querySelector("#adapter-opt-sandbox").value = adapterOptions.sandbox === "read-only" ? "read-only" : "";
+  document.querySelector("#adapter-opt-provider").value = typeof adapterOptions.provider === "string" ? adapterOptions.provider : "";
+}
+
+function renderAdvancedPanels(settings) {
+  const advanced = settings.advanced && typeof settings.advanced === "object" ? settings.advanced : {};
+  const effective = settings.advancedEffective || {};
+  const effSsh = effective.ssh || {};
+  document.querySelector("#adv-ssh-request-timeout").value = adv.ssh?.requestTimeoutMin ?? effSsh.requestTimeoutMin ?? 30;
+  document.querySelector("#adv-ssh-connect-timeout").value = adv.ssh?.connectTimeoutSec ?? effSsh.connectTimeoutSec ?? 15;
+  document.querySelector("#adv-ssh-sftp-timeout").value = adv.ssh?.sftpTimeoutSec ?? effSsh.sftpTimeoutSec ?? 30;
+  document.querySelector("#adv-ssh-reconnect-attempts").value = adv.ssh?.reconnectAttempts ?? effSsh.reconnectAttempts ?? 3;
+  document.querySelector("#adv-ssh-reconnect-base").value = adv.ssh?.reconnectBaseMs ?? effSsh.reconnectBaseMs ?? 600;
+  document.querySelector("#adv-ssh-keepalive").value = adv.ssh?.keepaliveSec ?? effSsh.keepaliveSec ?? 15;
+  document.querySelector("#adv-ssh-debug-log").checked = Boolean(adv.ssh?.debugLog ?? effSsh.debugLog);
+  const effN2n = effective.external?.n2n || {};
+  document.querySelector("#adv-n2n-cipher").value = adv.external?.n2n?.cipher ?? effN2n.cipher ?? "";
+  document.querySelector("#adv-n2n-compression").value = adv.external?.n2n?.compression ?? effN2n.compression ?? "";
+  document.querySelector("#adv-n2n-protocol").value = adv.external?.n2n?.protocol ?? effN2n.protocol ?? "";
+  document.querySelector("#adv-n2n-header-encryption").checked = Boolean(adv.external?.n2n?.headerEncryption ?? effN2n.headerEncryption);
+  setAdvBadge("network", advanced.ssh || advanced.external ? "手动" : "自动识别", Boolean(advanced.ssh || advanced.external));
+
+  const effCloud = effective.cloud || {};
+  document.querySelector("#adv-cloud-connect-timeout").value = advanced.cloud?.connectTimeoutSec ?? effCloud.connectTimeoutSec ?? 120;
+  document.querySelector("#adv-cloud-stream-idle").value = advanced.cloud?.streamIdleTimeoutSec ?? effCloud.streamIdleTimeoutSec ?? 300;
+  document.querySelector("#adv-cloud-max-retries").value = advanced.cloud?.maxRetries ?? effCloud.maxRetries ?? 0;
+  document.querySelector("#adv-cloud-tool-rounds").value = advanced.cloud?.maxToolRounds ?? effCloud.maxToolRounds ?? 25;
+  setAdvBadge("cloud", advanced.cloud ? "手动" : "自动识别", Boolean(advanced.cloud));
+
+  const adapter = String(advanced.adapter || effective.adapter || "claude");
+  pendingAdapterKey = ["claude", "atomcode", "qwen", "codex", "hermes"].includes(adapter) ? adapter : "claude";
+  renderAdapterCard(effective.adapterOptions || {});
+  setAdvBadge("adapter", `${(ADV_ADAPTER_META[pendingAdapterKey] || { label: pendingAdapterKey }).label}${advanced.adapter ? "（手动选择）" : "（内置默认）"}`, Boolean(advanced.adapter));
+}
+
+function renderAdapterDetect(results) {
+  const box = document.querySelector("#adapter-detect-result");
+  if (!Array.isArray(results) || !results.length) { box.hidden = true; box.textContent = ""; return; }
+  const rows = [];
+  for (const item of results) {
+    const meta = ADV_ADAPTER_META[item.key] || { label: item.key };
+    const row = document.createElement("div");
+    row.className = "adv-detect-row";
+    const name = document.createElement("span");
+    name.textContent = meta.label;
+    const state = document.createElement("strong");
+    state.textContent = item.status === "builtin" ? "✅ 内置" : item.status === "installed" ? "✅ 已安装" : "❌ 未安装";
+    row.append(name, state);
+    const hint = item.status === "missing" ? item.installHint : item.status === "builtin" ? item.detail : item.path ? `路径：${item.path}` : "";
+    if (hint) {
+      const note = document.createElement("span");
+      note.className = "field-hint";
+      note.textContent = hint;
+      row.append(note);
+    }
+    rows.push(row);
+  }
+  box.replaceChildren(...rows);
+  box.hidden = false;
+}
 
 function slotProfileLabel(slot) {
   if (!slot?.configured) return `${DEFAULT_SSH_PROFILE_NAMES[slot?.id] || slot?.id}：未配置`;
@@ -1421,6 +1582,64 @@ elements.form.addEventListener("submit", async (event) => {
     saveButton.textContent = originalText;
   }
 });
+// ── v3.19.0 F3：高级设置事件绑定 ──
+document.querySelector("#adv-network-manual").addEventListener("click", async () => {
+  const latest = await window.agentChatPro.loadSettings();
+  const effective = latest.advancedEffective || {};
+  await saveAdvancedGroup(
+    { ssh: { ...(effective.ssh || {}) }, external: { n2n: { ...(effective.external?.n2n || {}) } } },
+    "网络设置已切换为手动（按当前实值落底，行为不变）。"
+  );
+});
+document.querySelector("#adv-network-auto").addEventListener("click", () => saveAdvancedGroup({ ssh: null, external: null }, "网络设置已恢复自动识别。"));
+document.querySelector("#adv-network-save").addEventListener("click", () => saveAdvancedGroup(advNetworkPatch(), "网络设置已保存，下一次请求/建隧道生效。"));
+document.querySelector("#adv-cloud-manual").addEventListener("click", async () => {
+  const latest = await window.agentChatPro.loadSettings();
+  const effective = latest.advancedEffective || {};
+  await saveAdvancedGroup({ cloud: { ...(effective.cloud || {}) } }, "云端模型设置已切换为手动（按当前实值落底，行为不变）。");
+});
+document.querySelector("#adv-cloud-auto").addEventListener("click", () => saveAdvancedGroup({ cloud: null }, "云端模型设置已恢复自动识别。"));
+document.querySelector("#adv-cloud-save").addEventListener("click", () => saveAdvancedGroup(advCloudPatch(), "云端模型设置已保存。"));
+
+document.querySelectorAll("#adv-panel-adapter [data-adapter-key]").forEach((button) => {
+  button.addEventListener("click", () => {
+    pendingAdapterKey = button.dataset.adapterKey;
+    // 切换选择时保留已填的附加参数值（回读输入框构造展示态）
+    const adapterOptions = {
+      model: document.querySelector("#adapter-opt-model").value.trim(),
+      sandbox: document.querySelector("#adapter-opt-sandbox").value,
+      provider: document.querySelector("#adapter-opt-provider").value.trim()
+    };
+    renderAdapterCard(adapterOptions);
+  });
+});
+document.querySelector("#adapter-apply").addEventListener("click", async () => {
+  const adapterOptions = {
+    model: document.querySelector("#adapter-opt-model").value.trim(),
+    sandbox: document.querySelector("#adapter-opt-sandbox").value,
+    provider: document.querySelector("#adapter-opt-provider").value.trim()
+  };
+  const label = (ADV_ADAPTER_META[pendingAdapterKey] || { label: pendingAdapterKey }).label;
+  await saveAdvancedGroup({ adapter: pendingAdapterKey, adapterOptions },
+    pendingAdapterKey === "claude"
+      ? "SSH 连接适配器已切回 Claude（内置），下一次发消息生效。"
+      : `SSH 连接适配器已切到 ${label}，下一次发消息生效（各适配器会话已隔离）。`);
+});
+document.querySelector("#adapter-detect").addEventListener("click", async () => {
+  const button = document.querySelector("#adapter-detect");
+  button.disabled = true;
+  setStatus("正在通过 SSH 检测 NAS 上的远端 CLI…");
+  try {
+    const result = await window.agentChatPro.detectSshAdapter({});
+    renderAdapterDetect(result.results || []);
+    setStatus("远端适配器检测完成。");
+  } catch (error) {
+    setStatus(error.message, true);
+  } finally {
+    button.disabled = false;
+  }
+});
+
 document.querySelector("#test-connection").addEventListener("click", async () => {
   const mode = elements.form.elements.namedItem("connectionMode").value;
   const engine = mode === "local" ? (elements.form.elements.namedItem("localEngine")?.value || "claude") : "claude";

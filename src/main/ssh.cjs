@@ -28,6 +28,36 @@ const SSH_KEEPALIVE_COUNT_MAX = 3;
 const MAX_CONNECT_ATTEMPTS = 3;
 const SFTP_OPERATION_TIMEOUT_MS = 30_000;
 
+// ── v3.19.0 F3：SSH 阈值参数化（advanced.ssh 分组，null=自动即以下默认值）──
+// 取值路径：getSettings().advancedEffective.ssh（合并默认后的实值）随 getConnection() 返回对象自带；
+// 未带的调用方（设备控制/部署流程/直接构造 config）安全回退现状默认。
+let TUNABLES = {
+  requestTimeoutMs: MAX_REQUEST_MS,          // 单次请求超时（30 分钟）
+  connectTimeoutMs: SSH_READY_TIMEOUT_MS,    // SSH ready 超时（15s）
+  keepaliveIntervalMs: SSH_KEEPALIVE_INTERVAL_MS, // keepalive 间隔（15s）
+  keepaliveCountMax: SSH_KEEPALIVE_COUNT_MAX,     // keepalive 失败判定断线阈值（3）
+  reconnectAttempts: MAX_CONNECT_ATTEMPTS,   // 连接重试次数（3）
+  reconnectBaseMs: 600,                      // 指数退避基数（600ms 起步封顶 15s）
+  sftpTimeoutMs: SFTP_OPERATION_TIMEOUT_MS,  // SFTP/探针/步进超时（30s）
+  debugLog: false                            // SSH 流逐事件审计开关（默认关）
+};
+
+function applySshTunables(config) {
+  const group = config?.advancedEffective?.ssh && typeof config.advancedEffective.ssh === "object" ? config.advancedEffective.ssh : {};
+  const num = (value, fallback) => { const n = Number(value); return Number.isFinite(n) && n > 0 ? n : fallback; };
+  TUNABLES = {
+    requestTimeoutMs: num(group.requestTimeoutMin, MAX_REQUEST_MS / 60000) * 60_000,
+    connectTimeoutMs: num(group.connectTimeoutSec, SSH_READY_TIMEOUT_MS / 1000) * 1000,
+    keepaliveIntervalMs: num(group.keepaliveSec, SSH_KEEPALIVE_INTERVAL_MS / 1000) * 1000,
+    keepaliveCountMax: SSH_KEEPALIVE_COUNT_MAX,
+    reconnectAttempts: Number.isInteger(Number(group.reconnectAttempts)) && Number(group.reconnectAttempts) >= 0 && Number(group.reconnectAttempts) <= 10 ? Number(group.reconnectAttempts) : MAX_CONNECT_ATTEMPTS,
+    reconnectBaseMs: Number.isFinite(Number(group.reconnectBaseMs)) && Number(group.reconnectBaseMs) >= 100 && Number(group.reconnectBaseMs) <= 30000 ? Number(group.reconnectBaseMs) : 600,
+    sftpTimeoutMs: num(group.sftpTimeoutSec, SFTP_OPERATION_TIMEOUT_MS / 1000) * 1000,
+    debugLog: Boolean(group.debugLog)
+  };
+  return TUNABLES;
+}
+
 function auditTransportItem(onAudit, item, transport) {
   const payload = item?.value;
   const content = Array.isArray(payload?.message?.content) ? payload.message.content : [];
@@ -49,7 +79,7 @@ function connect(config, onUnknownHost, onLog = () => {}) {
       client.end();
       onLog("ssh_connect_timeout", { host: config.host, port: config.port });
       reject(new Error("SSH 连接超时，请检查地址、端口和 NAS 是否在线。"));
-    }, SSH_READY_TIMEOUT_MS);
+    }, TUNABLES.connectTimeoutMs);
 
     client.once("ready", () => {
       clearTimeout(timeout);
@@ -69,9 +99,9 @@ function connect(config, onUnknownHost, onLog = () => {}) {
       port: config.port,
       username: config.username,
       password: config.password,
-      readyTimeout: SSH_READY_TIMEOUT_MS,
-      keepaliveInterval: SSH_KEEPALIVE_INTERVAL_MS,
-      keepaliveCountMax: SSH_KEEPALIVE_COUNT_MAX,
+      readyTimeout: TUNABLES.connectTimeoutMs,
+      keepaliveInterval: TUNABLES.keepaliveIntervalMs,
+      keepaliveCountMax: TUNABLES.keepaliveCountMax,
       hostHash: "sha256",
       hostVerifier: (key) => {
         const fingerprint = `SHA256:${Buffer.from(key, "hex").toString("base64").replace(/=+$/, "")}`;
@@ -383,7 +413,7 @@ async function readDeviceControlIpTrack(config, deviceId, onUnknownHost, onLog) 
 
 async function getAgentSdkBridgeStatus(config, onUnknownHost, onLog) {
   const client = await connectWithRetry(config, onUnknownHost, onLog);
-  const runProbe = (command) => exec(client, command, { label: "增强 Bridge 状态检查", timeoutMs: 30_000 });
+  const runProbe = (command) => exec(client, command, { label: "增强 Bridge 状态检查", timeoutMs: TUNABLES.sftpTimeoutMs });
   try {
     const home = (await runProbe("printf %s \"$HOME\"")).stdout.trim();
     if (!home) throw new Error("无法确定 NAS 的 SSH 主目录。");
@@ -414,7 +444,7 @@ async function getAgentSdkBridgeStatus(config, onUnknownHost, onLog) {
 async function installAgentSdkBridge(config, files, onUnknownHost, onLog) {
   const safeFiles = normalizeBridgeFiles(files);
   const client = await connectWithRetry(config, onUnknownHost, onLog);
-  const runStep = async (stage, command, timeoutMs = 30_000) => {
+  const runStep = async (stage, command, timeoutMs = TUNABLES.sftpTimeoutMs) => {
     onLog?.("agent_sdk_bridge_install_stage", { host: config.host, stage });
     return exec(client, command, { label: `增强 Bridge：${stage}`, timeoutMs });
   };
@@ -475,6 +505,8 @@ function normalizeBridgeFiles(files) {
 }
 
 function runClaude(config, message, sessionId, attachments = [], callbacks = {}) {
+  // v3.19.0 F3：从 config.advanced（main.cjs 注入 advancedEffective）刷新本轮超时/重连/keepalive
+  applySshTunables(config);
   let client;
   let channel;
   let cancelled = false;
@@ -597,8 +629,8 @@ function runClaude(config, message, sessionId, attachments = [], callbacks = {})
   const operation = (async () => {
     requestTimer = setTimeout(() => interruptRemote(
       "request_timeout",
-      "本次请求已运行 30 分钟，客户端为防止无限消耗已自动停止。"
-    ), MAX_REQUEST_MS);
+      `本次请求已运行 ${Math.round(TUNABLES.requestTimeoutMs / 60000)} 分钟，客户端为防止无限消耗已自动停止。`
+    ), TUNABLES.requestTimeoutMs);
     requestTimer.unref?.();
     callbacks.onStatus?.("connecting");
     client = await connectWithRetry(config, callbacks.onUnknownHost, callbacks.onLog, callbacks.onStatus);
@@ -682,7 +714,7 @@ function runClaude(config, message, sessionId, attachments = [], callbacks = {})
 
     function handleEvents(events) {
       for (const item of events) {
-        auditTransportItem(callbacks.onAudit, item, bridgeMode ? "ssh-bridge" : "ssh-direct");
+        if (TUNABLES.debugLog) auditTransportItem(callbacks.onAudit, item, bridgeMode ? "ssh-bridge" : "ssh-direct");
         if (!item.value) continue;
         if (item.value.type === "bridge_ready") continue;
         if (bridgeCloseTimer && !cancelled && ["assistant", "system"].includes(item.value.type)) {
@@ -926,13 +958,13 @@ async function cleanupRemoteAttachments(client, uploaded) {
 }
 
 function openSftp(client) {
-  return withTimeout("SFTP 连接", SFTP_OPERATION_TIMEOUT_MS,
+  return withTimeout("SFTP 连接", TUNABLES.sftpTimeoutMs,
     () => new Promise((resolve, reject) => client.sftp((error, sftp) => error ? reject(error) : resolve(sftp))),
     () => client.end());
 }
 
 function writeSftp(sftp, remotePath, data, onProgress) {
-  return withTimeout("SFTP 上传", SFTP_OPERATION_TIMEOUT_MS, () => new Promise((resolve, reject) => {
+  return withTimeout("SFTP 上传", TUNABLES.sftpTimeoutMs, () => new Promise((resolve, reject) => {
     const stream = sftp.createWriteStream(remotePath, { mode: 0o600 });
     stream.once("error", reject);
     stream.once("close", resolve);
@@ -953,15 +985,15 @@ function writeSftp(sftp, remotePath, data, onProgress) {
 
 async function connectWithRetry(config, onUnknownHost, onLog, onStatus) {
   let lastError;
-  for (let attempt = 1; attempt <= MAX_CONNECT_ATTEMPTS; attempt += 1) {
+  for (let attempt = 1; attempt <= TUNABLES.reconnectAttempts; attempt += 1) {
     try {
       return await connect(config, onUnknownHost, onLog);
     } catch (error) {
       lastError = error;
-      if (!isTransientConnectionError(error) || attempt === MAX_CONNECT_ATTEMPTS) throw error;
-      const maximumDelayMs = Math.min(15_000, 600 * (2 ** (attempt - 1)));
+      if (!isTransientConnectionError(error) || attempt === TUNABLES.reconnectAttempts) throw error;
+      const maximumDelayMs = Math.min(15_000, TUNABLES.reconnectBaseMs * (2 ** (attempt - 1)));
       const delayMs = Math.floor(Math.random() * (maximumDelayMs + 1));
-      onLog?.("ssh_reconnect_attempt", { host: config.host, attempt: attempt + 1, maxAttempts: MAX_CONNECT_ATTEMPTS, delayMs, error: error.message });
+      onLog?.("ssh_reconnect_attempt", { host: config.host, attempt: attempt + 1, maxAttempts: TUNABLES.reconnectAttempts, delayMs, error: error.message });
       onStatus?.("reconnecting");
       await new Promise((resolve) => setTimeout(resolve, delayMs));
     }
@@ -1087,7 +1119,7 @@ async function inspectRemoteFiles(client, candidates, uploadedPaths) {
 }
 
 function sftpStat(sftp, remotePath) {
-  return withTimeout("SFTP 文件状态查询", SFTP_OPERATION_TIMEOUT_MS,
+  return withTimeout("SFTP 文件状态查询", TUNABLES.sftpTimeoutMs,
     () => new Promise((resolve, reject) => sftp.stat(remotePath, (error, stat) => error ? reject(error) : resolve(stat))),
     () => closeSftp(sftp));
 }
@@ -1134,7 +1166,7 @@ async function downloadRemoteFile(config, remotePath, localPath, onUnknownHost, 
 }
 
 function readSftp(sftp, remotePath, _expectedSize) {
-  return withTimeout("SFTP 文件读取", SFTP_OPERATION_TIMEOUT_MS, () => new Promise((resolve, reject) => {
+  return withTimeout("SFTP 文件读取", TUNABLES.sftpTimeoutMs, () => new Promise((resolve, reject) => {
     const chunks = [];
     let total = 0;
     const stream = sftp.createReadStream(remotePath);
@@ -1145,7 +1177,7 @@ function readSftp(sftp, remotePath, _expectedSize) {
 }
 
 function fastGet(sftp, remotePath, localPath) {
-  return withTimeout("SFTP 文件下载", SFTP_OPERATION_TIMEOUT_MS,
+  return withTimeout("SFTP 文件下载", TUNABLES.sftpTimeoutMs,
     () => new Promise((resolve, reject) => sftp.fastGet(remotePath, localPath, {}, (error) => error ? reject(error) : resolve())),
     () => closeSftp(sftp));
 }
@@ -1209,4 +1241,4 @@ function cleanError(value) {
   return value.replace(/\x1B\[[0-?]*[ -/]*[@-~]/g, "").trim();
 }
 
-module.exports = { buildAttachmentNote, buildDeviceConnectScript, cleanupRemoteAttachments, downloadRemoteFile, ensureDeviceControlKey, finalizeDeviceControl, getAgentSdkBridgeStatus, getClaudeModelStatus, handleToolPayload, installAgentSdkBridge, loadDeviceTemplate, markDeviceControlDisabled, mimeFromPath, readDeviceControlIpTrack, readRemoteFile, runClaude, safeRemoteFileName, uninstallAgentSdkBridge, updateClaudeAutoCompactWindow, updateClaudeModel, updateClaudeModelEntry, verifyConnection, withTimeout, writeSftp };
+module.exports = { buildAttachmentNote, buildDeviceConnectScript, cleanupRemoteAttachments, connectWithRetry, downloadRemoteFile, ensureDeviceControlKey, exec, finalizeDeviceControl, getAgentSdkBridgeStatus, getClaudeModelStatus, handleToolPayload, installAgentSdkBridge, loadDeviceTemplate, markDeviceControlDisabled, mimeFromPath, readDeviceControlIpTrack, readRemoteFile, runClaude, safeRemoteFileName, shellQuote, uninstallAgentSdkBridge, updateClaudeAutoCompactWindow, updateClaudeModel, updateClaudeModelEntry, verifyConnection, withTimeout, writeSftp };

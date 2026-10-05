@@ -221,14 +221,18 @@ function sendCloudChat(config, messages, callbacks = {}) {
     const safeResolve = (value) => { if (!settled) { settled = true; clearTimeout(responseTimer); resolve(value); } };
     const safeReject = (error) => { if (!settled) { settled = true; clearTimeout(responseTimer); reject(error); } };
 
-    // 响应级超时：收到数据后重置，5 分钟无数据则超时
+    // 响应级超时：收到数据后重置（v3.19.0 F3：空闲秒数可配 advanced.cloud.streamIdleTimeoutSec，60~1800 默认 300）
+    const streamIdleTimeoutMs = (() => {
+      const n = Number(callbacks.advanced?.cloud?.streamIdleTimeoutSec);
+      return Number.isFinite(n) && n >= 60 && n <= 1800 ? n * 1000 : 300000;
+    })();
     let responseTimer = setTimeout(() => {
       if (!settled) {
-        if (callbacks.onLog) callbacks.onLog("cloud_chat_response_timeout", { textLength: fullText?.length || 0 });
+        if (callbacks.onLog) callbacks.onLog("cloud_chat_response_timeout", { textLength: fullText?.length || 0, streamIdleTimeoutMs });
         if (req) req.destroy();
-        safeReject(new Error("云端 AI 响应超时（超过 5 分钟未收到数据）。"));
+        safeReject(new Error(`云端 AI 响应空闲超过 ${Math.round(streamIdleTimeoutMs / 1000)} 秒未收到数据。`));
       }
-    }, 300000);
+    }, streamIdleTimeoutMs);
     responseTimer.unref(); // 不阻止进程退出
 
     req = client.request(requestOptions, (res) => {
@@ -443,7 +447,12 @@ function sendCloudChat(config, messages, callbacks = {}) {
       safeReject(new Error("云端 AI 连接超时，请检查网络或更换 API 地址。"));
     });
 
-    req.setTimeout(120000); // 2 分钟连接超时
+    // v3.19.0 F3：连接超时可配（advanced.cloud.connectTimeoutSec，10~300 默认 120）
+    const connectTimeoutMs = (() => {
+      const n = Number(callbacks.advanced?.cloud?.connectTimeoutSec);
+      return Number.isFinite(n) && n >= 10 && n <= 300 ? n * 1000 : 120000;
+    })();
+    req.setTimeout(connectTimeoutMs);
     req.write(JSON.stringify(body));
     req.end();
   });

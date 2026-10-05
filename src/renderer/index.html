@@ -183,6 +183,7 @@
           <button type="button" class="settings-nav-item" data-settings-tab="models">🧠 模型</button>
           <button type="button" class="settings-nav-item" data-settings-tab="device">🖥️ 设备联动</button>
           <button type="button" class="settings-nav-item" data-settings-tab="cache">🧹 缓存清理</button>
+          <button type="button" class="settings-nav-item" data-settings-tab="advanced">⚙️ 高级设置</button>
           <button type="button" class="settings-nav-item" data-settings-tab="about">ℹ️ 关于</button>
         </aside>
         <div class="settings-body">
@@ -568,6 +569,142 @@
             <span id="cache-clean-result" class="field-hint" hidden></span>
           </div>
         </details>
+          </section>
+          <section class="settings-panel" data-settings-panel="advanced" hidden>
+            <div class="settings-panel-heading">
+              <h3>高级设置</h3>
+              <p class="hint">三组全局参数。默认「自动识别」= 当前版本实测默认值；切到「手动」后逐项定制（先按当前实值落一份手动底，行为连续不变），非法值整组回退自动，绝不静默改值。除适配器即时生效外，网络/云端参数在下一次请求生效。</p>
+            </div>
+
+            <!-- ── 卡一：网络设置 ── -->
+            <details class="adv-panel" data-adv-panel="network" id="adv-panel-network">
+              <summary>
+                <span class="adv-summary-title">🌐 网络设置</span>
+                <span class="adv-badge" data-adv-badge="network">自动识别</span>
+              </summary>
+              <div class="adv-body">
+                <details class="adv-sub" id="adv-network-ssh">
+                  <summary>
+                    <span class="adv-summary-title">SSH 连接参数</span>
+                    <span class="field-hint">SSH 传输阈值与保活；改完保存后，下一次发起测试连接或聊天时生效。</span>
+                  </summary>
+                  <div class="form-grid adv-grid">
+                    <label>单次请求超时（分钟）<input type="number" id="adv-ssh-request-timeout" min="10" max="120" step="1" /></label>
+                    <label>连接超时（秒）<input type="number" id="adv-ssh-connect-timeout" min="5" max="60" step="1" /></label>
+                    <label>SFTP 超时（秒）<input type="number" id="adv-ssh-sftp-timeout" min="10" max="300" step="1" /></label>
+                    <label>连接重试次数<input type="number" id="adv-ssh-reconnect-attempts" min="0" max="10" step="1" /></label>
+                    <label>重试退避基数（毫秒）<input type="number" id="adv-ssh-reconnect-base" min="100" max="30000" step="100" /></label>
+                    <label>保活间隔（秒）<input type="number" id="adv-ssh-keepalive" min="10" max="120" step="1" /></label>
+                  </div>
+                  <label class="toggle-row">
+                    <input type="checkbox" id="adv-ssh-debug-log" />
+                    <span>SSH 传输层调试日志（逐帧写日志文件，排查传输问题用）</span>
+                  </label>
+                </details>
+
+                <details class="adv-sub" id="adv-network-external">
+                  <summary>
+                    <span class="adv-summary-title">外网传输参数（N2N 组网）</span>
+                    <span class="field-hint">外网穿透走 N2N 加密虚拟网时生效；改完保存后，下一次建立 N2N 隧道时生效。</span>
+                  </summary>
+                  <div class="form-grid adv-grid">
+                    <label>加密方式
+                      <select id="adv-n2n-cipher">
+                        <option value="">默认（n2n 自动协商）</option>
+                        <option value="A2">A2 · Twofish-256（edge -A2）</option>
+                        <option value="A3">A3 · AES-CBC 128（edge -A3）</option>
+                        <option value="A4">A4 · Camellia-CBC（edge -A4）</option>
+                        <option value="A5">A5 · Speck-CTR 128（edge -A5）</option>
+                      </select>
+                    </label>
+                    <label>压缩
+                      <select id="adv-n2n-compression">
+                        <option value="">自动（默认 gzip）</option>
+                        <option value="lzo1x">lzo1x（edge -z1）</option>
+                        <option value="zstd">zstd（edge -z2）</option>
+                      </select>
+                    </label>
+                    <label>传输协议
+                      <select id="adv-n2n-protocol">
+                        <option value="">自动（UDP 探测失败自动降级 TCP）</option>
+                        <option value="udp">固定 UDP</option>
+                        <option value="tcp">固定 TCP</option>
+                      </select>
+                    </label>
+                  </div>
+                  <label class="toggle-row">
+                    <input type="checkbox" id="adv-n2n-header-encryption" />
+                    <span>头加密（edge -H；要求 supernode 社区名固定不变）</span>
+                  </label>
+                  <ul class="adv-notes">
+                    <li><strong>FRP 转发</strong>：frpc 的传输协议（tcp/kcp/quic/websocket/wss）由 NAS 侧 frpc 配置决定，客户端只能连到 remotePort——按真实边界不做假可选，想改在 NAS 上编辑 frpc 配置。</li>
+                    <li><strong>XTCP</strong>：需自建 frps 或服务端支持时可选；DERP / P2P 直连均为明文通道（协议既定），无客户端可调参数。</li>
+                  </ul>
+                </details>
+
+                <div class="adv-actions">
+                  <button type="button" id="adv-network-manual" class="secondary">切换为手动</button>
+                  <button type="button" id="adv-network-auto" class="secondary">恢复自动</button>
+                  <button type="button" id="adv-network-save" class="primary">保存网络设置</button>
+                </div>
+              </div>
+            </details>
+
+            <!-- ── 卡二：云端模型设置 ── -->
+            <details class="adv-panel" data-adv-panel="cloud" id="adv-panel-cloud">
+              <summary>
+                <span class="adv-summary-title">☁️ 云端模型设置</span>
+                <span class="adv-badge" data-adv-badge="cloud">自动识别</span>
+              </summary>
+              <div class="adv-body">
+                <div class="form-grid adv-grid">
+                  <label>连接超时（秒）<input type="number" id="adv-cloud-connect-timeout" min="10" max="300" step="1" /></label>
+                  <label>流式空闲超时（秒）<input type="number" id="adv-cloud-stream-idle" min="60" max="1800" step="1" /></label>
+                  <label>失败自动重试次数<input type="number" id="adv-cloud-max-retries" min="0" max="3" step="1" /></label>
+                  <label>工具循环轮次上限<input type="number" id="adv-cloud-tool-rounds" min="5" max="50" step="1" /></label>
+                </div>
+                <p class="field-hint">流式空闲超时 = 云端回复多少秒无新内容才判定断流；自动重试仅对幂等错误码（429/5xx）生效；工具循环轮次 = 云端模式单轮对话里工具最多执行多少步。</p>
+                <div class="adv-actions">
+                  <button type="button" id="adv-cloud-manual" class="secondary">切换为手动</button>
+                  <button type="button" id="adv-cloud-auto" class="secondary">恢复自动</button>
+                  <button type="button" id="adv-cloud-save" class="primary">保存云端设置</button>
+                </div>
+              </div>
+            </details>
+
+            <!-- ── 卡三：SSH 连接适配器 ── -->
+            <details class="adv-panel" data-adv-panel="adapter" id="adv-panel-adapter">
+              <summary>
+                <span class="adv-summary-title">🔌 SSH 连接适配器</span>
+                <span class="adv-badge" data-adv-badge="adapter">Claude（内置）</span>
+              </summary>
+              <div class="adv-body">
+                <p class="field-hint">仅 SSH 连接模式生效：选择 NAS 上真正运行哪一个命令行 AI。切换后立即保存生效，各适配器会话互相隔离。</p>
+                <div class="mode-switch adapter-switch" role="group" aria-label="SSH 连接适配器">
+                  <button type="button" data-adapter-key="claude">Claude</button>
+                  <button type="button" data-adapter-key="atomcode">AtomCode</button>
+                  <button type="button" data-adapter-key="qwen">Qwen Code</button>
+                  <button type="button" data-adapter-key="codex">Codex</button>
+                  <button type="button" data-adapter-key="hermes">Hermes</button>
+                </div>
+                <p id="adapter-note" class="field-hint"></p>
+                <div id="adapter-options" class="form-grid adv-grid" hidden>
+                  <label data-adapter-opt="model">CLI 模型<input type="text" id="adapter-opt-model" placeholder="留空 = CLI 默认模型" /></label>
+                  <label data-adapter-opt="sandbox">Codex 沙箱
+                    <select id="adapter-opt-sandbox">
+                      <option value="">workspace-write（默认）</option>
+                      <option value="read-only">read-only</option>
+                    </select>
+                  </label>
+                  <label data-adapter-opt="provider">Hermes 服务商<input type="text" id="adapter-opt-provider" placeholder="nous / openrouter（留空默认）" /></label>
+                </div>
+                <div class="adv-actions">
+                  <button type="button" id="adapter-apply" class="primary">应用适配器</button>
+                  <button type="button" id="adapter-detect" class="secondary">检测远端 CLI</button>
+                </div>
+                <div id="adapter-detect-result" class="adv-detect-result" hidden></div>
+              </div>
+            </details>
           </section>
           <section class="settings-panel" data-settings-panel="about" hidden>
             <div class="about-hero">

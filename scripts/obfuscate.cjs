@@ -80,6 +80,11 @@ const OBFUSCATE_FILES = {
     "main/bytecode-fallback.cjs", // 字节码降级执行器（v3.12.0，含拆分密钥——混淆前注入）
     "main/daemon-chat.cjs",     // AtomCode daemon 引擎 adapter（v3.13.0）
     "main/custom-cli.cjs",      // 自定义命令纯文本引擎（v3.13.0）
+    // SSH 远程 CLI 适配器（v3.19.0 F3）——五家选一，qwen/codex/hermes 走远端 CLI 直跑
+    "main/adapters/ssh-cli-base.cjs",
+    "main/adapters/qwen-cli.cjs",
+    "main/adapters/codex-cli.cjs",
+    "main/adapters/hermes-cli.cjs",
     // ── 模块化架构（移植自 Agent Orbit 0.9.6，v3.7.0 接线）──
     "main/modules/foundation/module-contract.cjs",
     "main/modules/foundation/module-registry.cjs",

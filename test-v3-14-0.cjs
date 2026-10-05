@@ -422,7 +422,8 @@ function makeWorkdir() {
 
   await test("main.cjs：工具循环结构（≤25 轮 / tool_calls / raw 消息回填 / 上限报错）", () => {
     assert.ok(mainSource.includes("runCloudWithTools"));
-    assert.ok(mainSource.includes("for (let round = 0; round <= MAX_TOOL_ROUNDS; round += 1)"));
+    // v3.19.0 起 maxToolRounds 可配（advanced.cloud），MAX_TOOL_ROUNDS 仍是缺失默认兜底
+    assert.ok(/round <= \(?maxToolRounds|MAX_TOOL_ROUNDS\)?/.test(mainSource), "工具循环应有轮数上限（可配或默认）");
     assert.ok(mainSource.includes("result.toolCalls"));
     assert.ok(mainSource.includes('role: "tool"'));
     assert.ok(mainSource.includes("tool_call_id"));

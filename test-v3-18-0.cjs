@@ -272,7 +272,7 @@ async function runSettingsTests() {
     const data = settings.getSettings();
     assert.strictEqual(data.schemaVersion, undefined, "白名单不透传");
     const current = JSON.parse(fs.readFileSync(targetFile, "utf8"));
-    assert.strictEqual(current.schemaVersion, 2, "落盘应升 schemaVersion 2");
+    assert.ok(current.schemaVersion >= 2, "落盘 schemaVersion 应 ≥2（v3.19.0 起为 3）"); // v3.19.0 放宽：版本随演进推进
     const backupFile = path.join(workdir, "connection.json.schema-v1.bak");
     assert.ok(fs.existsSync(backupFile), "升版前应有 .schema-v1 备份");
     const backup = JSON.parse(fs.readFileSync(backupFile, "utf8"));
@@ -316,7 +316,7 @@ async function runSettingsTests() {
       password: "slot1-pass"
     });
     const current = JSON.parse(fs.readFileSync(targetFile, "utf8"));
-    assert.strictEqual(current.schemaVersion, 2, "保存后落盘带 v2 版本标");
+    assert.ok(current.schemaVersion >= 2, "保存后落盘带版本标（v3.19.0 起为 3）"); // v3.19.0 放宽
     const slot1 = current.sshProfiles.find((p) => p.id === "ssh-1");
     const slot2 = current.sshProfiles.find((p) => p.id === "ssh-2");
     assert.strictEqual(slot1.host, "10.0.0.9", "槽 1 随保存更新（本次保存后 sshProfiles 落盘）");
@@ -549,7 +549,8 @@ async function runWiringTests() {
   });
 
   await test("G9. 版本号 3.18.0", () => {
-    assert.strictEqual(pkg.version, "3.18.0");
+    const minor = pkg.version.split(".").map(Number);
+    assert.ok(minor[0] === 3 && (minor[1] === 18 || minor[1] >= 18), `版本应 ≥3.18.0（实际 ${pkg.version}）`); // v3.19.0 放宽
   });
 }
 

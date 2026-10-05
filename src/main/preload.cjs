@@ -36,6 +36,8 @@ contextBridge.exposeInMainWorld("agentChatPro", {
   updateAutoCompactWindow: (input) => ipcRenderer.invoke("model:update-compact", input),
   // v3.18.0 F4：SSH 卡槽切换（目标槽整套参数物化为活跃连接）
   switchSshProfile: (profileId) => ipcRenderer.invoke("settings:switch-ssh-profile", profileId),
+  // v3.19.0 F3：SSH 远程适配器在场检测（单次连接探测远端 CLI）
+  detectSshAdapter: (payload) => ipcRenderer.invoke("settings:detect-ssh-adapter", payload),
   // ── 会话管理 IPC ──
   listConversations: () => ipcRenderer.invoke("conversations:list"),
   createConversation: () => ipcRenderer.invoke("conversations:create"),
