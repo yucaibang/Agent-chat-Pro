@@ -480,8 +480,9 @@ async function runUiTests() {
 
 // ════════════════ H. 版本号 + 混淆清单 ════════════════
 async function runVersionTests() {
-  await test("H1. package.json 与界面版本 3.19.0", () => {
-    assert.strictEqual(pkg.version, "3.19.0");
+  await test("H1. package.json 与界面版本 3.19.0（v3.20.0 起放宽为 ≥）", () => {
+    const [major, minor, patch] = pkg.version.split(".").map(Number);
+    assert.ok(major > 3 || (major === 3 && (minor > 19 || (minor === 19 && patch >= 0))), `版本应 ≥3.19.0（实际 ${pkg.version}）`);
     void mainSrc;
   });
   await test("H2. 版本史源码注释与 schema 版本推进", () => {

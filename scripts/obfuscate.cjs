@@ -80,6 +80,7 @@ const OBFUSCATE_FILES = {
     "main/bytecode-fallback.cjs", // 字节码降级执行器（v3.12.0，含拆分密钥——混淆前注入）
     "main/daemon-chat.cjs",     // AtomCode daemon 引擎 adapter（v3.13.0）
     "main/custom-cli.cjs",      // 自定义命令纯文本引擎（v3.13.0）
+    "main/plan-convention.cjs", // Agent plan 云端路 ```plan 约定注入（v3.20.0 F5）
     // SSH 远程 CLI 适配器（v3.19.0 F3）——五家选一，qwen/codex/hermes 走远端 CLI 直跑
     "main/adapters/ssh-cli-base.cjs",
     "main/adapters/qwen-cli.cjs",

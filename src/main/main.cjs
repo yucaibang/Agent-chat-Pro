@@ -14,6 +14,7 @@ const { runQwenCli } = require("./adapters/qwen-cli.cjs");
 const { runCodexCli } = require("./adapters/codex-cli.cjs");
 const { runHermesCli } = require("./adapters/hermes-cli.cjs");
 const { runCustomCli, verifyCustomCliConnection } = require("./custom-cli.cjs");
+const { appendPlanConvention } = require("./plan-convention.cjs"); // v3.20.0 F5：云端路 ```plan 约定注入
 const { contextTokensFromUsage } = require("./protocol.cjs");
 const { scanSystemCaches, cleanSystemCaches } = require("./cache-cleaner.cjs");
 const { getDeviceControlStatus, installDeviceControl, preferredAddress, uninstallDeviceControl } = require("./device-control.cjs");
@@ -944,7 +945,8 @@ app.whenReady().then(async () => {
       if (!cloudConfig.apiKey) throw new Error("请先在连接设置中填写云端 AI 密钥。");
       const conversation = getConversation(input.conversationId);
       const modeConfig = input.workModeId ? await (async () => { try { return await getMode(input.workModeId); } catch { return null; } })() : null;
-      const systemPrompt = modeConfig?.systemPrompt || "";
+      // v3.20.0 F5：云端路 Agent plan——system prompt 幂等追加 ```plan 约定段（渲染层 extractPlanBlocks 解析）
+      const systemPrompt = appendPlanConvention(modeConfig?.systemPrompt || "");
       const cloudMessages = buildMessages(conversation, systemPrompt);
       cloudMessages.push({ role: "user", content: message });
 

@@ -69,6 +69,14 @@
   --text-error: #ef9f95;
   --text-draft: #c7ad72;
 
+  --bg-plan-panel: #161d22;
+  --border-progress: #2f4f3c;
+  --bg-progress: #1d2d26;
+  --text-plan-status: #a9d6b6;
+  --text-plan-arrow: #6f7f7a;
+  --text-plan-index: #8d9a95;
+  --border-draft: #5c5334;
+
   --accent: #d99d5c;
   --accent-bright: #e4ad6b;
   --accent-user: #3fcf8e;
@@ -158,6 +166,14 @@
   --text-status: #16a34a;
   --text-error: #dc2626;
   --text-draft: #b45309;
+
+  --bg-plan-panel: #fbfaf7;
+  --border-progress: #b7d3c0;
+  --bg-progress: #e6f0e8;
+  --text-plan-status: #2f7a44;
+  --text-plan-arrow: #9aa4a0;
+  --text-plan-index: #7c8a86;
+  --border-draft: #d9c48f;
 
   --accent: #c78530;
   --accent-bright: #d99d5c;
@@ -424,6 +440,30 @@ header p { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .tool-card small { color: var(--text-muted); font-size: 10px; margin-top: 1px; }
 .tool-detail { max-width: min(620px, 68vw); max-height: 108px; overflow: auto; margin: 5px 0 0; padding: 6px 8px; border: 1px solid var(--border-detail); border-radius: 6px; background: var(--bg-code); color: var(--text-secondary); font: 10px/1.45 "Cascadia Code", Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; cursor: text; }
 .tool-card button { border: 1px solid var(--border-attachment); border-radius: 6px; background: var(--bg-file-action); color: var(--text-secondary); padding: 5px 7px; font-size: 10px; }
+/* ── v3.20.0 F5 Agent plan 面板（三模式共用：TodoWrite 结构化路 + ```plan 约定路） ── */
+.plan-panel { position: relative; max-width: min(620px, 86%); margin: 0 0 7px; padding: 7px 10px 8px 12px; border: 1px solid var(--border-tool-card); border-left: 3px solid var(--accent); border-radius: 9px; background: var(--bg-plan-panel); }
+.plan-header { display: flex; align-items: center; gap: 7px; cursor: pointer; user-select: none; }
+.plan-title { color: var(--text-secondary); font-size: 12px; font-weight: 600; letter-spacing: .2px; }
+.plan-meta { border: 1px solid var(--border-progress); border-radius: 20px; background: var(--bg-progress); color: var(--text-plan-status); padding: 1px 8px; font-size: 10px; }
+.plan-meta-draft { border-color: var(--border-draft); background: transparent; color: var(--text-draft); }
+.plan-toggle { margin-left: auto; color: var(--text-tertiary); font-size: 10px; transition: transform .12s ease; }
+.plan-panel.collapsed .plan-toggle { transform: rotate(-90deg); }
+.plan-items { max-height: 248px; overflow-y: auto; margin: 7px 0 0; display: flex; flex-direction: column; gap: 3px; }
+.plan-panel.collapsed .plan-items, .plan-panel.collapsed .plan-meta { display: none; }
+.plan-panel.superseded { opacity: .58; border-left-color: var(--border-shell); }
+.plan-panel.superseded .plan-meta { display: none; }
+.plan-item { display: grid; grid-template-columns: 16px 16px minmax(0, 1fr) 14px; align-items: baseline; gap: 3px; padding: 2px 0; font-size: 11.5px; line-height: 1.5; }
+.plan-arrow { color: var(--text-plan-arrow); font: 10px/1.5 monospace; }
+.plan-index { color: var(--text-plan-index); font-size: 11px; }
+.plan-text { overflow-wrap: anywhere; color: var(--text-secondary); }
+.plan-state { color: var(--text-plan-status); font-size: 11px; text-align: right; }
+.plan-item.completed .plan-text { color: var(--text-muted); text-decoration: line-through; text-decoration-color: var(--text-dim); }
+.plan-item.completed .plan-state { color: var(--success); }
+.plan-item.in_progress .plan-text { color: var(--accent-bright); font-weight: 600; }
+.plan-item.in_progress .plan-state { color: var(--accent-bright); animation: blink 1.6s step-end infinite; }
+.plan-item.in_progress .plan-arrow, .plan-item.in_progress .plan-index { color: var(--accent); }
+.plan-item.convention .plan-text { color: var(--text-secondary); }
+.plan-item.convention .plan-state { color: var(--text-plan-arrow); }
 .returned-files { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; white-space: normal; }
 .sent-files { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; margin-top: 8px; white-space: normal; }
 .sent-files span { max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 5px 8px; border: 1px solid var(--border-user-message); border-radius: 7px; background: var(--bg-sent-files-chip); color: #122010; font-size: 11px; }

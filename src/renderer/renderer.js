@@ -792,7 +792,11 @@ function bindExternalLinks(container, onError) {
 
 async function renderAssistant(item, text) {
   const content = item.querySelector(".message-content");
-  content.innerHTML = await window.agentChatPro.renderMarkdown(text);
+  // v3.20.0 F5：```plan 约定块抽离渲染 Agent plan 面板（正文剥离该块不再重复显示；
+  // 同消息内多个块只取最后一块=最新全局进度；AI 没输出 plan 块则零渲染）
+  const plan = extractPlanBlocks(text);
+  if (plan.hasPlan) renderPlanPanel(item, plan.last.map((line, i) => ({ index: i + 1, text: line, status: "" })), false);
+  content.innerHTML = await window.agentChatPro.renderMarkdown(plan.rest);
   content.classList.add("rendered");
   bindExternalLinks(content, (error) => alert(error.message));
   content.querySelectorAll("pre").forEach((pre) => {
@@ -810,6 +814,12 @@ async function renderAssistant(item, text) {
 }
 
 function renderTool(item, tool) {
+  // v3.20.0 F5：TodoWrite 走 Agent plan 面板特化渲染（结构化路=SSH 远程+本机 claude 引擎），
+  // 不进通用工具卡列表、不计入 finalizeToolList 的「已执行 N 个操作」
+  if (isPlanTool(tool)) {
+    renderPlanPanel(item, planTodosFromTool(tool), true);
+    return;
+  }
   let list = item.querySelector(".tool-list");
   if (!list) {
     list = document.createElement("div");
@@ -869,6 +879,127 @@ function normalizedToolStatus(tool) {
   return tool.result === "未获得执行权限" ? "denied" : "failed";
 }
 
+// ══════════ v3.20.0 F5 Agent plan 面板（三模式共用一套组件） ══════════
+// 结构化路（SSH 远程 + 本机 claude 引擎）：工具管线 TodoWrite 的 input.todos
+//   [{content, status: pending|in_progress|completed, activeForm}] → 特化渲染
+// 约定路（云端 AI + 本机 atomcode/custom 引擎）：assistant 文本中的 ```plan 块
+//   （云端由 plan-convention.cjs 注入约定；atomcode/custom 无 system prompt 通道，
+//   模型若按约定输出 plan 块即被渲染层检测渲染——严格「AI 列了才显示」）
+
+const PLAN_ITEM_ICONS = { pending: "○", in_progress: "●", completed: "✓" };
+
+function isPlanTool(tool) {
+  return String(tool?.name || "").trim().toLowerCase() === "todowrite";
+}
+
+function normalizePlanItemStatus(status) {
+  const value = String(status || "").trim().toLowerCase();
+  return PLAN_ITEM_ICONS[value] ? value : "pending";
+}
+
+/** TodoWrite input 形状容错：input 为对象或 JSON 字符串（不同 adapter 事件流形状不一），
+ *  空条目剔除后连续重编号（显示序号 = 面板序号） */
+function planTodosFromTool(tool) {
+  let input = tool?.input;
+  if (typeof input === "string") { try { input = JSON.parse(input); } catch { input = null; } }
+  const todos = Array.isArray(input?.todos) ? input.todos : [];
+  return todos
+    .map((todo) => {
+      const source = typeof todo === "string" ? { content: todo } : (todo && typeof todo === "object" ? todo : {});
+      const content = String(source.content ?? source.text ?? source.description ?? "").trim();
+      const activeForm = String(source.activeForm ?? "").trim();
+      if (!content && !activeForm) return null;
+      return { text: content || activeForm, activeForm, status: normalizePlanItemStatus(source.status), source };
+    })
+    .filter(Boolean)
+    .map((entry, i) => ({ ...entry, index: i + 1 }));
+}
+
+/** 约定路：抽离 assistant 文本中的 ```plan 块。同消息内多个块 → 全部剥出正文、
+ *  内容只取最后一块（= 最新全局进度，「新一轮覆盖上一轮，不做历史堆积」） */
+function extractPlanBlocks(text) {
+  const value = typeof text === "string" ? text : "";
+  const blocks = [];
+  const rest = value.replace(/```[ \t]*plan[ \t]*\r?\n([\s\S]*?)```/g, (_match, body) => {
+    const items = String(body).split(/\r?\n/).map((line) => line.trim()).filter(Boolean)
+      .map((line) => line.replace(/^\d+\s*[.)、:：]\s*/, "").trim())
+      .filter(Boolean);
+    if (items.length) blocks.push(items);
+    return "";
+  });
+  return { rest: rest.trim(), blocks, hasPlan: blocks.length > 0, last: blocks.length ? blocks[blocks.length - 1] : null };
+}
+
+/** 新一轮 plan 面板出现时，把会话内其他消息上的旧面板收成紧凑态（用户点开仍可回看历史） */
+function supersedeOtherPlanPanels(currentItem) {
+  document.querySelectorAll(".plan-panel").forEach((panel) => {
+    if (panel.closest?.("article.message") === currentItem) return;
+    panel.classList.add("superseded", "collapsed");
+  });
+}
+
+/**
+ * Agent plan 面板渲染（原位更新：同一条消息只保留一个面板，多条 TodoWrite/多块 plan
+ * 数据覆盖到同一面板上；面板插在工具区之下、正文之上）
+ * @param {HTMLElement} item 消息 article 元素
+ * @param {Array<{text,activeForm,status,index}>} entries 已归一条目（status "" = 约定块路）
+ * @param {boolean} structured true=TodoWrite 结构化路（有状态徽标）；false=```plan 约定路（标「计划」）
+ */
+function renderPlanPanel(item, entries, structured) {
+  if (!item || !Array.isArray(entries) || !entries.length) return;
+  const content = item.querySelector(".message-content");
+  let panel = item.__planPanel || null;
+  if (!panel) {
+    panel = document.createElement("div");
+    panel.className = "plan-panel";
+    item.__planPanel = panel;
+    if (content) item.insertBefore(panel, content); else item.append(panel);
+    supersedeOtherPlanPanels(item);
+  }
+  const total = entries.length;
+  const done = entries.filter((entry) => entry.status === "completed").length;
+  const header = document.createElement("div");
+  header.className = "plan-header";
+  const title = document.createElement("span");
+  title.className = "plan-title";
+  title.textContent = "📋 Agent plan";
+  const meta = document.createElement("span");
+  meta.className = structured ? "plan-meta" : "plan-meta plan-meta-draft";
+  meta.textContent = structured ? `${done}/${total}` : `计划 · ${total} 项`;
+  const toggle = document.createElement("span");
+  toggle.className = "plan-toggle";
+  header.append(title, meta, toggle);
+  header.addEventListener("click", () => {
+    toggle.textContent = panel.classList.toggle("collapsed") ? "▸" : "▾";
+  });
+  if (panel.classList.contains("collapsed")) toggle.textContent = "▸"; else toggle.textContent = "▾";
+  const list = document.createElement("div");
+  list.className = "plan-items";
+  entries.forEach((entry) => {
+    const row = document.createElement("div");
+    row.className = `plan-item${entry.status ? ` ${entry.status}` : " convention"}`;
+    const arrow = document.createElement("span");
+    arrow.className = "plan-arrow";
+    arrow.textContent = "|→";
+    const index = document.createElement("span");
+    index.className = "plan-index";
+    index.textContent = `${entry.index}.`;
+    const text = document.createElement("span");
+    text.className = "plan-text";
+    // 结构化路进行中的条目优先显示 activeForm（Claude Code 语义：现进行时描述），历史值放 title
+    text.textContent = entry.status === "in_progress" && entry.activeForm ? entry.activeForm : entry.text;
+    const tip = entry.status === "in_progress" && entry.activeForm && entry.activeForm !== entry.text ? `${entry.text}（进行中：${entry.activeForm}）` : entry.text;
+    text.title = tip;
+    const state = document.createElement("span");
+    state.className = "plan-state";
+    const icon = PLAN_ITEM_ICONS[entry.status] || (entry.status ? "○" : "·");
+    state.textContent = icon || "·";
+    row.append(arrow, index, text, state);
+    list.append(row);
+  });
+  panel.replaceChildren(header, list);
+}
+
 function refreshDeniedToolActions() {
   document.querySelectorAll(".tool-card.denied button").forEach((button) => {
     button.textContent = automaticTools ? "权限已开启，请重试" : "允许工具";
@@ -879,11 +1010,14 @@ function finalizeToolList(item, tools) {
   const list = item.querySelector(".tool-list");
   if (!list || !tools.length) return;
   list.querySelector(".tool-summary")?.remove();
-  const denied = tools.filter((tool) => normalizedToolStatus(tool) === "denied").length;
+  // v3.20.0 F5：TodoWrite 是 Agent plan 面板（自有组件），不计入「已执行 N 个操作」
+  const shown = tools.filter((tool) => !isPlanTool(tool));
+  if (!shown.length) return;
+  const denied = shown.filter((tool) => normalizedToolStatus(tool) === "denied").length;
   const summary = document.createElement("button");
   summary.type = "button";
   summary.className = `tool-summary${denied ? " needs-permission" : ""}`;
-  const label = () => denied ? `⚠ ${denied} 项操作需要权限` : `✓ 已执行 ${tools.length} 个操作`;
+  const label = () => denied ? `⚠ ${denied} 项操作需要权限` : `✓ 已执行 ${shown.length} 个操作`;
   summary.textContent = `${label()} · 查看详情`;
   summary.addEventListener("click", () => {
     const expanded = list.classList.toggle("expanded");
