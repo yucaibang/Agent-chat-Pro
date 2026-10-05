@@ -109,6 +109,8 @@ function clearConversationSession(id) {
   conversation.sshSessionId = "";
   for (const key of Object.keys(conversation)) {
     if (key === "localSessionId" || key.startsWith("localSessionId_")) conversation[key] = "";
+    // v3.18.0 F4：卡槽会话字段一并清（sshSessionId_ssh2 等）
+    if (key.startsWith("sshSessionId_")) conversation[key] = "";
   }
   conversation.lastConnectionMode = "";
   conversation.updatedAt = new Date().toISOString();
@@ -150,7 +152,15 @@ function localSessionField(engine) {
   return `localSessionId_${name.replace(/[^a-zA-Z0-9_-]/g, "")}`;
 }
 
-function addAssistantMessage(id, text, sessionId, files = [], tools = [], requestId = "", connectionMode = "ssh", usage, durationMs, engine = "claude") {
+/** SSH 模式按卡槽隔离会话字段（v3.18.0 F4，与 localSessionId_<engine> 同构）：
+ * ssh-1 走原 sshSessionId（存量会话延续，迁移后 ssh-1=旧单套配置）；ssh-2 走 sshSessionId_ssh2。 */
+function sshSessionField(profileId) {
+  const id = String(profileId || "").trim();
+  if (!id || id === "ssh-1") return "sshSessionId";
+  return `sshSessionId_${id.replace(/[^a-zA-Z0-9_-]/g, "")}`;
+}
+
+function addAssistantMessage(id, text, sessionId, files = [], tools = [], requestId = "", connectionMode = "ssh", usage, durationMs, engine = "claude", profileId = "") {
   return update(id, (conversation) => {
     const draft = requestId
       ? conversation.messages.find((message) => message.role === "assistant" && message.requestId === requestId)
@@ -166,21 +176,25 @@ function addAssistantMessage(id, text, sessionId, files = [], tools = [], reques
     if (connectionMode === "local") {
       const field = localSessionField(engine);
       if (field) conversation[field] = sessionId || conversation[field] || "";
-    } else conversation.sshSessionId = sessionId || conversation.sshSessionId || conversation.sessionId || "";
+    } else {
+      // v3.18.0 F4：SSH 会话按卡槽落字段（ssh-1 仍走 sshSessionId，存量会话延续）
+      const field = sshSessionField(profileId);
+      conversation[field] = sessionId || conversation[field] || conversation.sessionId || "";
+    }
     conversation.sessionId = sessionId || conversation.sessionId;
     // v3.15.0：记录真实三值模式（ssh/cloud/local）——历史列表模式图标 + 切对话联动连接模式
     conversation.lastConnectionMode = ["ssh", "cloud", "local"].includes(connectionMode) ? connectionMode : "ssh";
   });
 }
 
-function saveConversationSession(id, sessionId, connectionMode = "ssh", engine = "claude") {
+function saveConversationSession(id, sessionId, connectionMode = "ssh", engine = "claude", profileId = "") {
   const nextSessionId = String(sessionId || "").trim();
   if (!nextSessionId) return null;
   return update(id, (conversation) => {
     if (connectionMode === "local") {
       const field = localSessionField(engine);
       if (field) conversation[field] = nextSessionId;
-    } else conversation.sshSessionId = nextSessionId;
+    } else conversation[sshSessionField(profileId)] = nextSessionId; // v3.18.0 F4：按卡槽落字段
     conversation.sessionId = nextSessionId;
     // v3.15.0：真实三值模式（ssh/cloud/local）
     conversation.lastConnectionMode = ["ssh", "cloud", "local"].includes(connectionMode) ? connectionMode : "ssh";
@@ -203,11 +217,18 @@ function saveAssistantDraft(id, requestId, text) {
   });
 }
 
-function sessionForMode(conversation, connectionMode, engine = "claude") {
+function sessionForMode(conversation, connectionMode, engine = "claude", profileId = "") {
   if (!conversation) return "";
   if (connectionMode === "local") {
     const field = localSessionField(engine);
     return field ? conversation[field] || "" : "";
+  }
+  // v3.18.0 F4：SSH 按卡槽取会话字段；ssh-1 兜底旧 sessionId 字段（lastConnectionMode 允许时延续存量）
+  if (connectionMode === "ssh") {
+    const field = sshSessionField(profileId);
+    const slotSession = conversation[field] || "";
+    if (slotSession) return slotSession;
+    if (field !== "sshSessionId") return ""; // ssh-2 等新槽不透传旧通用会话
   }
   return conversation.sshSessionId || (conversation.lastConnectionMode !== "local" ? conversation.sessionId || "" : "");
 }
@@ -356,6 +377,7 @@ module.exports = {
   saveAssistantDraft,
   searchConversations,
   sessionForMode,
+  sshSessionField,
   truncateConversationMessages,
   conversationStats
 };

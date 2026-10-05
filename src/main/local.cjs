@@ -7,7 +7,7 @@ const { JsonLineParser, buildClaudeArgs, compactEventFromEvent, contextLimitFrom
 const { buildLocalArgsWithMode } = require("./modes/mode-params.cjs");
 const { handleToolPayload, mimeFromPath } = require("./ssh.cjs");
 const { friendlyClaudeLaunchError, describeMissingWorkingDirectory } = require("./claude-launch-diagnostics.cjs");
-const { readModelSettings, replaceModelSettings } = require("./model-config.cjs");
+const { readModelSettings, replaceModelSettings, replaceSingleModelSetting, replaceAutoCompactWindowSetting } = require("./model-config.cjs");
 
 const MAX_REQUEST_MS = 30 * 60 * 1000;
 const TOOL_PROGRESS_NOTICE_COUNTS = [8, 24];
@@ -40,7 +40,8 @@ async function updateLocalClaudeModel(modelName, onLog) {
     current = fs.readFileSync(settingsPath, "utf8");
   } catch (error) {
     if (error.code === "ENOENT") {
-      const replacement = replaceModelSettings("{}", model);
+      // v3.18.0 修复：种子必须带 env 对象——"{}" 会被 readModelSettings 判「缺少 env 配置」拒绝，全新机首次写入必炸
+      const replacement = replaceModelSettings('{"env":{}}', model);
       const dir = path.dirname(settingsPath);
       fs.mkdirSync(dir, { recursive: true });
       fs.writeFileSync(settingsPath, replacement.settings, { mode: 0o600 });
@@ -59,6 +60,51 @@ async function updateLocalClaudeModel(modelName, onLog) {
   }
   onLog?.("local_claude_model_changed", { model: replacement.model, changedKeys: replacement.changedKeys });
   return { model: replacement.model, changedKeys: replacement.changedKeys };
+}
+
+// v3.18.0 F2：本机五项单独修改 + 自动压缩阈值（与远端同语义；写前备份 .bak-model，临时文件原子替换）
+function localClaudeSettingsPath() {
+  return path.join(process.env.USERPROFILE || process.env.HOME || "", ".claude", "settings.json");
+}
+
+function writeLocalClaudeSettingsFile(settingsPath, current, mutation, onLog, contextLabel) {
+  let replacement;
+  try {
+    replacement = mutation(current);
+  } catch (error) {
+    throw new Error(error.message.replace(/Claude settings\.json/g, "本机 Claude 配置"));
+  }
+  // 写前备份（规格 §1.5：写坏 settings.json 会砸链路）
+  let backedUp = false;
+  try { fs.copyFileSync(settingsPath, `${settingsPath}.bak-model`); backedUp = true; } catch { /* 缺备份不阻断：临时文件替换本身可回退 */ }
+  const temporary = `${settingsPath}.claude-local-model-${process.pid}-${Date.now()}.tmp`;
+  try {
+    fs.writeFileSync(temporary, replacement.settings, { mode: 0o600, flag: "wx" });
+    fs.renameSync(temporary, settingsPath);
+  } catch (error) {
+    try { fs.unlinkSync(temporary); } catch {}
+    throw new Error(`${contextLabel}未能保存：` + error.message);
+  }
+  onLog?.("local_claude_model_changed", { changedKeys: replacement.changedKeys, backup: backedUp });
+  return replacement;
+}
+
+async function updateLocalClaudeModelEntry(entryId, modelName, onLog) {
+  await getLocalClaudeModelStatus(); // 文件不存在/不可读时先给出明确错误
+  const settingsPath = localClaudeSettingsPath();
+  const current = fs.readFileSync(settingsPath, "utf8");
+  const replacement = writeLocalClaudeSettingsFile(settingsPath, current, (source) => replaceSingleModelSetting(source, entryId, modelName), onLog, "模型配置项");
+  const verified = readModelSettings(fs.readFileSync(settingsPath, "utf8"));
+  return { entry: replacement.entry, changedKeys: replacement.changedKeys, models: verified.models, entries: verified.entries, autoCompactWindow: verified.autoCompactWindow, consistent: verified.consistent, model: verified.model };
+}
+
+async function updateLocalAutoCompactWindow(value, onLog) {
+  await getLocalClaudeModelStatus();
+  const settingsPath = localClaudeSettingsPath();
+  const current = fs.readFileSync(settingsPath, "utf8");
+  const replacement = writeLocalClaudeSettingsFile(settingsPath, current, (source) => replaceAutoCompactWindowSetting(source, value), onLog, "自动压缩阈值");
+  const verified = readModelSettings(fs.readFileSync(settingsPath, "utf8"));
+  return { autoCompactWindow: replacement.autoCompactWindow, changedKeys: replacement.changedKeys, models: verified.models, entries: verified.entries, consistent: verified.consistent, model: verified.model };
 }
 
 function runLocalClaude(config, message, sessionId, attachments = [], callbacks = {}) {
@@ -331,4 +377,4 @@ function cleanError(value) {
   return String(value || "").replace(/\x1B\[[0-?]*[ -/]*[@-~]/g, "").trim();
 }
 
-module.exports = { buildLocalAttachmentNote, copyLocalFile, getLocalClaudeModelStatus, inspectLocalFiles, launchSpec, readLocalFile, resolveLocalCommand, runLocalClaude, safeSessionId, updateLocalClaudeModel, validatedWorkingDirectory, verifyLocalConnection, writeLocalAttachments };
+module.exports = { buildLocalAttachmentNote, copyLocalFile, getLocalClaudeModelStatus, inspectLocalFiles, launchSpec, readLocalFile, resolveLocalCommand, runLocalClaude, safeSessionId, updateLocalAutoCompactWindow, updateLocalClaudeModel, updateLocalClaudeModelEntry, validatedWorkingDirectory, verifyLocalConnection, writeLocalAttachments };

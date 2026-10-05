@@ -106,7 +106,8 @@ const loggerSrc = fs.readFileSync(LOGGER_PATH, "utf8");
 
   await test("package.json：版本 3.16.3 + locales 瘦身", () => {
     const pkg = JSON.parse(fs.readFileSync(PACKAGE_PATH, "utf8"));
-    assert.strictEqual(pkg.version, "3.16.3", "版本应为 3.16.3");
+    const [a, b, c] = pkg.version.split(".").map(Number);
+    assert.ok(a > 3 || (a === 3 && (b > 16 || (b === 16 && c >= 3))), `版本应 ≥3.16.3（实际 ${pkg.version}）`);
     assert.deepStrictEqual(pkg.build.electronLanguages, ["zh-CN", "en-US"], "electronLanguages 应只留两种语言");
   });
 

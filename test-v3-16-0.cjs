@@ -75,9 +75,9 @@ async function runSettingsTests() {
     assert.strictEqual(backup.theme, "dark");
   });
 
-  await test("迁移后落盘文件已打 schemaVersion:1（版本标落盘）", () => {
+  await test("迁移后落盘文件已打 schemaVersion（版本标落盘，v3.18.0 起当前值为 2）", () => {
     const current = JSON.parse(fs.readFileSync(targetFile, "utf8"));
-    assert.strictEqual(current.schemaVersion, 1);
+    assert.ok(current.schemaVersion >= 1, `应带版本标，实际 ${current.schemaVersion}`);
   });
 
   await test("已带标 v1 配置再次读取 → 不产生新备份（幂等，仅一个 v0 备份）", () => {
@@ -90,7 +90,7 @@ async function runSettingsTests() {
   await test("writeRaw 落盘自动带 schemaVersion（saveSettings 链路统一打标）", () => {
     settings.setThemeForTest ? settings.setThemeForTest("light") : settings.saveSettings({ theme: "light", connectionMode: "cloud" });
     const current = JSON.parse(fs.readFileSync(targetFile, "utf8"));
-    assert.strictEqual(current.schemaVersion, 1);
+    assert.ok(current.schemaVersion >= 1, `应带版本标，实际 ${current.schemaVersion}`);
     assert.strictEqual(current.theme, "light");
   });
 
@@ -118,7 +118,7 @@ async function runSettingsTests() {
 
   await test("SETTINGS_SCHEMA_VERSION 常量与 migrateSchema 接线在 readRaw 两个返回点", () => {
     const src = fs.readFileSync(SETTINGS_PATH, "utf8");
-    assert.ok(/SETTINGS_SCHEMA_VERSION = 1/.test(src), "版本常量应存在");
+    assert.ok(/SETTINGS_SCHEMA_VERSION = \d+/.test(src), "版本常量应存在（v3.18.0 起值为 2）");
     assert.ok(src.includes("return migrateSchema(current);"), "正常分支接迁移");
     assert.ok(src.includes("return migrateSchema(JSON.parse(fs.readFileSync(legacySettingsPath(), \"utf8\")));"), "legacy 分支接迁移");
     assert.ok(src.includes("schemaVersion: SETTINGS_SCHEMA_VERSION"), "writeRaw 统一打标");

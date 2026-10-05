@@ -76,6 +76,9 @@ function settingsFromForm() {
   const config = CLOUD_PROVIDERS[provider];
   return {
     connectionMode: data.get("connectionMode"),
+    // v3.18.0 F4：SSH 卡槽（活跃槽 hidden 字段 + 当前槽名称随表单保存）
+    activeSshProfile: data.get("activeSshProfile") || "ssh-1",
+    sshProfileName: data.get("sshProfileName") || "",
     host: data.get("host"),
     port: data.get("port"),
     username: data.get("username"),
@@ -213,7 +216,60 @@ function populateSettings(settings) {
   }
   const customCliCommand = document.querySelector("#custom-cli-command");
   if (customCliCommand) customCliCommand.value = settings.customCliCommand || "";
+  // v3.18.0 F4：SSH 卡槽回填（活跃槽高亮 + 名称 + 两槽配置状态行）
+  renderSshProfiles(settings);
 }
+
+// ── v3.18.0 F4：SSH 多卡槽（AO 0.9.6 同构 + ACP 切槽即落库语义） ──
+const DEFAULT_SSH_PROFILE_NAMES = { "ssh-1": "卡槽 1", "ssh-2": "卡槽 2" };
+
+function slotProfileLabel(slot) {
+  if (!slot?.configured) return `${DEFAULT_SSH_PROFILE_NAMES[slot?.id] || slot?.id}：未配置`;
+  const name = slot.name ? `「${slot.name}」` : "";
+  return `${DEFAULT_SSH_PROFILE_NAMES[slot?.id] || slot?.id}${name}：${slot.host || "未填地址"}${slot.hasPassword ? " · 已存密码" : " · 无密码"}`;
+}
+
+function renderSshProfiles(settings) {
+  const profiles = Array.isArray(settings.sshProfiles) ? settings.sshProfiles : [];
+  if (!profiles.length) return;
+  const active = settings.activeSshProfile || "ssh-1";
+  document.querySelectorAll("#ssh-profile-switch [data-ssh-profile-id]").forEach((button) => {
+    const id = button.dataset.sshProfileId;
+    const slot = profiles.find((entry) => entry.id === id);
+    button.classList.toggle("active", id === active);
+    button.textContent = slot?.name || DEFAULT_SSH_PROFILE_NAMES[id] || id;
+  });
+  const nameInput = document.querySelector("#ssh-profile-name");
+  const hidden = document.querySelector("#active-ssh-profile");
+  const activeSlot = profiles.find((entry) => entry.id === active);
+  if (nameInput && document.activeElement !== nameInput) nameInput.value = activeSlot?.name || "";
+  if (hidden) hidden.value = active;
+  for (const slot of profiles) {
+    const info = document.querySelector(`#ssh-profile-slot-info-${slot.id === "ssh-2" ? "2" : "1"}`);
+    if (info) info.textContent = slotProfileLabel(slot);
+  }
+}
+
+document.querySelector("#ssh-profile-switch").addEventListener("click", async (event) => {
+  const button = event.target.closest("[data-ssh-profile-id]");
+  if (!button || button.classList.contains("active")) return;
+  if (currentConnectionMode !== "ssh") { setConnection("先切回 SSH 远程模式再切换卡槽。", "error"); return; }
+  const previousLabel = button.textContent;
+  button.disabled = true;
+  button.textContent = "切换…";
+  try {
+    const next = await window.agentChatPro.switchSshProfile(button.dataset.sshProfileId);
+    populateSettings(next);
+    setConnection(`已切换到${DEFAULT_SSH_PROFILE_NAMES[next.activeSshProfile]}：${next.host ? next.host : "（未配置）"}`, next.host ? "connected" : "error");
+    // 卡槽各自一套 Claude 会话——刷新当前对话的会话归属显示
+    if (conversationId && conversationCache.some((item) => item.id === conversationId)) await loadConversation(conversationId);
+  } catch (error) {
+    setConnection("切换卡槽失败：" + error.message, "error");
+  } finally {
+    button.disabled = false;
+    button.textContent = previousLabel;
+  }
+});
 
 function updateConnectionModeUI() {
   const modeValue = elements.form.elements.namedItem("connectionMode").value;
@@ -1310,6 +1366,8 @@ function switchSettingsTab(tab) {
   });
   // v3.16.2 使用时扫描：切到设备联动页即刷新状态（status 内含双控件共存扫描结果）
   if (tab === "device" && currentConnectionMode === "ssh") refreshDeviceControlStatus();
+  // v3.18.0 F2：切到模型页即按当前模式装载（ssh/local-claude 读五项表，cloud/其他引擎出状态卡）
+  if (tab === "models") refreshModelsPage();
 }
 document.querySelectorAll("[data-settings-tab]").forEach((item) => {
   item.addEventListener("click", () => switchSettingsTab(item.dataset.settingsTab));
@@ -3062,3 +3120,258 @@ async function runAppAction(action) {
     catch (error) { alert(error.message); }
   }
 }
+
+// ── v3.18.0 F2：「模型」页（设置中心第六导航）——AO 0.9.6 五项表 1:1 移植 + 云端/本机状态卡 ──
+// 分派语义：ssh → NAS 五项表（读写远端 settings.json）；local+claude → 本机五项表（同一套渲染）；
+// local+atomcode/custom → 引擎状态卡；cloud → 服务商/模型状态卡 + 快捷入口（不重复建编辑器，防双份配置打架）。
+let modelStatusCache = null;
+let modelTargetMode = ""; // 当前模型页面向的目标："ssh" | "local" | "cloud" | "local-engine"
+
+function formatAutoCompactTokens(tokens) {
+  return tokens >= 1_000_000 ? "1M tokens" : `${Math.round(tokens / 1000)}K tokens`;
+}
+
+function modelModeOf() {
+  if (currentConnectionMode === "cloud") return "cloud";
+  if (currentConnectionMode === "local") return currentLocalEngine === "claude" ? "local" : "local-engine";
+  return "ssh";
+}
+
+function setModelBadge(text, positive = false) {
+  const badge = document.querySelector("#model-badge");
+  badge.textContent = text;
+  badge.classList.toggle("installed", positive);
+}
+
+function renderModelStatusCard(status, target) {
+  const title = document.querySelector("#model-title");
+  const detail = document.querySelector("#model-detail");
+  const info = document.querySelector("#model-info");
+  const gotoCloud = document.querySelector("#goto-cloud-settings");
+  const editor = document.querySelector("#model-editor");
+  const note = document.querySelector("#model-mode-note");
+  const refresh = document.querySelector("#refresh-model");
+  gotoCloud.hidden = target !== "cloud";
+  note.hidden = target !== "local-engine";
+  editor.hidden = !(target === "ssh" || target === "local");
+  refresh.hidden = target === "cloud";
+  if (target === "cloud") {
+    const provider = CLOUD_PROVIDERS[status?.provider];
+    title.textContent = "云端 AI";
+    detail.textContent = `服务商：${provider?.name || status?.provider || "智谱 AI"} · 模型：${status?.model || "-"}`;
+    setModelBadge("已选择", true);
+    info.textContent = "云端模式的服务商与模型在连接页配置，模型页仅显示当前选择；写 Claude 模型配置不适用于云端模式。";
+  } else if (target === "local-engine") {
+    title.textContent = currentLocalEngine === "atomcode" ? "AtomCode 引擎" : "自定义命令引擎";
+    detail.textContent = "该引擎无 Claude 模型配置（不走 ~/.claude/settings.json 五项映射）。";
+    setModelBadge("不适用");
+    info.textContent = "如需管理模型配置，请在本机模式切回 Claude CLI 引擎，或使用 SSH 远程模式。";
+  }
+}
+
+function renderModelEntryRow(entry) {
+  const row = document.createElement("div");
+  row.className = "model-entry-row";
+  const copy = document.createElement("div");
+  copy.className = "model-entry-copy";
+  copy.innerHTML = ""; // 只用 DOM API 组装——模型名来自远端 settings.json，按不可信输入处理（防 HTML 注入）
+  const strong = document.createElement("strong");
+  strong.textContent = `${entry.label}（${entry.key}）`;
+  const small = document.createElement("small");
+  small.textContent = entry.description;
+  copy.append(strong, small);
+  const editor = document.createElement("div");
+  editor.className = "model-entry-editor";
+  const input = document.createElement("input");
+  input.type = "text";
+  input.autocapitalize = "off";
+  input.autocorrect = "off";
+  input.spellcheck = false;
+  input.placeholder = entry.model || "未配置";
+  input.value = entry.model || "";
+  input.dataset.modelEntryInput = entry.id;
+  if (entry.configured && !entry.valid) input.placeholder = `当前值无效：${entry.model}`;
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "secondary";
+  button.dataset.modelEntryUpdate = entry.id;
+  button.textContent = "单独保存";
+  editor.append(input, button);
+  row.append(copy, editor);
+  return row;
+}
+
+function renderClaudeEditor(status) {
+  const title = document.querySelector("#model-title");
+  const detail = document.querySelector("#model-detail");
+  const list = document.querySelector("#model-entry-list");
+  const compactCurrent = document.querySelector("#auto-compact-current");
+  const compactSelect = document.querySelector("#auto-compact-window");
+  const unified = document.querySelector("#claude-model");
+  if (!status) return;
+  // 状态卡
+  const configured = (status.entries || []).filter((entry) => entry.configured);
+  const consistentText = status.consistent ? `五项统一为 ${status.model}` : configured.length ? `五项并存（${configured.length}/5 已配置）` : "五项均未配置";
+  title.textContent = status.model || "未配置五项模型";
+  detail.textContent = `${consistentText} · ${status.settingsPath || ""}`;
+  setModelBadge(status.valid === false ? "含无效值" : "已读取", status.valid !== false);
+  unified.value = status.consistent ? (status.model || "") : (unified.value || "");
+  // 五项明细
+  list.replaceChildren(...(status.entries || []).map(renderModelEntryRow));
+  // 自动压缩阈值
+  const window_ = status.autoCompactWindow;
+  if (window_) {
+    compactCurrent.textContent = window_.mode === "auto" ? "Claude 官方自动值" : window_.valid ? formatAutoCompactTokens(window_.tokens) : `当前值无效（${window_.raw || "?"}）`;
+    compactSelect.value = window_.valid && window_.mode === "fixed" ? String(window_.tokens) : "auto";
+  }
+}
+
+async function refreshModelsPage() {
+  const target = modelModeOf();
+  modelTargetMode = target;
+  renderModelStatusCard(null, target);
+  document.querySelector("#auto-compact-current").textContent = "正在读取…";
+  if (target === "cloud" || target === "local-engine") {
+    try {
+      // 云端/引擎卡数据源：设置里的服务商与模型（云端）/引擎名（本机）
+      const settings = await window.agentChatPro.loadSettings();
+      renderModelStatusCard(target === "cloud" ? { provider: settings.cloudAiProvider, model: settings.cloudAiModel } : null, target);
+    } catch (error) { setModelBadge("读取失败"); }
+    return;
+  }
+  const title = document.querySelector("#model-title");
+  const detail = document.querySelector("#model-detail");
+  title.textContent = "正在读取…";
+  detail.textContent = target === "ssh" ? "正在读取 NAS 的 ~/.claude/settings.json" : "正在读取本机 ~/.claude/settings.json";
+  try {
+    const status = await window.agentChatPro.getModelStatus();
+    if (target !== modelTargetMode) return; // 用户已切走，丢弃过期结果
+    modelStatusCache = status;
+    renderClaudeEditor(status);
+  } catch (error) {
+    setModelBadge("读取失败");
+    title.textContent = "模型配置读取失败";
+    detail.textContent = error.message;
+    document.querySelector("#model-entry-list").replaceChildren();
+  }
+}
+
+// ── 模型管理员密码对话框（missing/invalid → 初始化；ready → 写操作确认；AO 语义承接，ACP 无老 UI 回归风险） ──
+let modelPasswordResolver = null;
+
+function openModelPasswordDialog(mode) {
+  const dialog = document.querySelector("#model-password-dialog");
+  const title = document.querySelector("#model-password-title");
+  const hint = document.querySelector("#model-password-hint");
+  const confirmWrap = document.querySelector("#model-admin-confirmation-wrap");
+  const status_ = document.querySelector("#model-password-status");
+  title.textContent = mode === "initialize" ? "初始化模型管理员密码" : "输入模型管理员密码";
+  hint.textContent = mode === "initialize"
+    ? "首次写模型配置前需要设置一个管理员密码（至少 6 位）。此后所有模型写操作都要校验它，避免误触。"
+    : "写模型配置前需要校验管理员密码。";
+  confirmWrap.hidden = mode !== "initialize";
+  status_.textContent = "";
+  document.querySelector("#model-admin-password").value = "";
+  document.querySelector("#model-admin-confirmation").value = "";
+  dialog.showModal();
+  document.querySelector("#model-admin-password").focus();
+  return new Promise((resolve) => { modelPasswordResolver = resolve; });
+}
+
+function finishModelPassword(value) {
+  const resolver = modelPasswordResolver;
+  modelPasswordResolver = null;
+  document.querySelector("#model-password-dialog").close();
+  resolver?.(value);
+}
+
+document.querySelector("#model-password-form").addEventListener("submit", (event) => {
+  event.preventDefault();
+  if (!modelPasswordResolver) return;
+  const password = document.querySelector("#model-admin-password").value;
+  const initializeMode = !document.querySelector("#model-admin-confirmation-wrap").hidden;
+  if (initializeMode) {
+    const confirmation = document.querySelector("#model-admin-confirmation").value;
+    if (password.length < 6) { document.querySelector("#model-password-status").textContent = "密码需至少 6 位。"; return; }
+    if (password !== confirmation) { document.querySelector("#model-password-status").textContent = "两次输入不一致。"; return; }
+    window.agentChatPro.initializeModelAdminPassword({ password, confirmation })
+      .then(() => finishModelPassword(password))
+      .catch((error) => { document.querySelector("#model-password-status").textContent = error.message; });
+    return;
+  }
+  if (!password) { document.querySelector("#model-password-status").textContent = "请输入管理员密码。"; return; }
+  finishModelPassword(password);
+});
+document.querySelector("#model-password-cancel").addEventListener("click", () => finishModelPassword(null));
+
+async function requestModelAdminPassword() {
+  const dialog = document.querySelector("#model-password-dialog");
+  if (dialog.open) return null;
+  const settings = await window.agentChatPro.loadSettings();
+  const state = settings.modelAdminPasswordState;
+  if (state === "unavailable") { setConnection("Windows 系统加密不可用，无法写模型配置。", "error"); return null; }
+  const mode = state === "missing" || state === "invalid" ? "initialize" : "confirm";
+  return openModelPasswordDialog(mode);
+}
+
+// ── 模型页写操作三入口（统一改为 / 单项保存 / 自动压缩阈值）+ 读取 ──
+document.querySelector("#refresh-model").addEventListener("click", () => refreshModelsPage());
+document.querySelector("#goto-cloud-settings").addEventListener("click", () => switchSettingsTab("connection"));
+
+document.querySelector("#save-model").addEventListener("click", async (event) => {
+  const button = event.currentTarget;
+  const model = document.querySelector("#claude-model").value.trim();
+  if (!model) { setConnection("请先填写要统一使用的模型名称。", "error"); return; }
+  const adminPassword = await requestModelAdminPassword();
+  if (adminPassword === null) return;
+  button.disabled = true;
+  const originalText = button.textContent;
+  button.textContent = "正在切换…";
+  try {
+    const result = await window.agentChatPro.updateModel({ model, adminPassword });
+    if (result.cancelled) return;
+    if (modelTargetMode === "ssh" || modelTargetMode === "local") { modelStatusCache = result; renderClaudeEditor(result); }
+    setConnection(`五项已统一更改为 ${result.model}；下一条消息将使用新配置。`, "connected");
+  } catch (error) { setStatus(error.message, true); }
+  finally { button.disabled = false; button.textContent = originalText; }
+});
+
+document.querySelector("#model-entry-list").addEventListener("click", async (event) => {
+  const button = event.target.closest("[data-model-entry-update]");
+  if (!button) return;
+  const entryId = button.dataset.modelEntryUpdate;
+  const input = document.querySelector(`[data-model-entry-input="${entryId}"]`);
+  const model = input?.value.trim() || "";
+  const adminPassword = await requestModelAdminPassword();
+  if (adminPassword === null) return;
+  button.disabled = true;
+  const originalText = button.textContent;
+  button.textContent = "正在更改…";
+  try {
+    const result = await window.agentChatPro.updateModelEntry({ entryId, model, adminPassword });
+    if (result.cancelled) return;
+    modelStatusCache = result;
+    renderClaudeEditor(result);
+    setConnection(`${result.entry?.label || entryId}已更改为 ${result.entry?.model || model}；其余五项未改，下一条消息将使用新配置。`, "connected");
+  } catch (error) { setStatus(error.message, true); }
+  finally { button.disabled = false; button.textContent = originalText; }
+});
+
+document.querySelector("#save-auto-compact").addEventListener("click", async (event) => {
+  const button = event.currentTarget;
+  const value = document.querySelector("#auto-compact-window").value;
+  const adminPassword = await requestModelAdminPassword();
+  if (adminPassword === null) return;
+  button.disabled = true;
+  const originalText = button.textContent;
+  button.textContent = "正在更改…";
+  try {
+    const result = await window.agentChatPro.updateAutoCompactWindow({ value, adminPassword });
+    if (result.cancelled) return;
+    modelStatusCache = result;
+    renderClaudeEditor(result);
+    const label = result.autoCompactWindow?.mode === "auto" ? "Claude 官方自动值" : formatAutoCompactTokens(result.autoCompactWindow.tokens);
+    setConnection(`自动压缩阈值已改为 ${label}；五项模型未改，下一条消息将使用新阈值。`, "connected");
+  } catch (error) { setStatus(error.message, true); }
+  finally { button.disabled = false; button.textContent = originalText; }
+});

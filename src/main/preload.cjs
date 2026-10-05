@@ -31,6 +31,11 @@ contextBridge.exposeInMainWorld("agentChatPro", {
   getModelStatus: () => ipcRenderer.invoke("model:status"),
   initializeModelAdminPassword: (input) => ipcRenderer.invoke("model:initialize-password", input),
   updateModel: (model) => ipcRenderer.invoke("model:update", model),
+  // v3.18.0 F2：五项单独修改 + 自动压缩阈值（管理员密码与确认语义对齐 model:update）
+  updateModelEntry: (input) => ipcRenderer.invoke("model:update-entry", input),
+  updateAutoCompactWindow: (input) => ipcRenderer.invoke("model:update-compact", input),
+  // v3.18.0 F4：SSH 卡槽切换（目标槽整套参数物化为活跃连接）
+  switchSshProfile: (profileId) => ipcRenderer.invoke("settings:switch-ssh-profile", profileId),
   // ── 会话管理 IPC ──
   listConversations: () => ipcRenderer.invoke("conversations:list"),
   createConversation: () => ipcRenderer.invoke("conversations:create"),

@@ -543,6 +543,22 @@ summary { cursor: pointer; font-size: 13px; margin-bottom: 12px; }
 .coexistence-note.conflict { border-color: #6b5335; background: #33291c; color: var(--warning); }
 .ip-track-note { margin: 10px 0 0; padding: 10px 12px; border: 1px solid #3d4a56; border-radius: 8px; background: #1f262c; color: var(--text-secondary); font-size: 12px; line-height: 1.6; white-space: pre-line; }
 .device-control-actions { display: flex; justify-content: flex-end; gap: 8px; }
+
+/* v3.18.0 F2 模型页五项表（AO 0.9.6 同构类名）+ F4 SSH 卡槽条 */
+.model-entry-section { margin-top: 14px; }
+.model-entry-section-heading { display: flex; flex-direction: column; gap: 2px; margin-bottom: 8px; font-size: 12px; color: var(--text-secondary); }
+.model-entry-section-heading strong { color: var(--text-primary); font-size: 13px; }
+.model-entry-list { display: flex; flex-direction: column; gap: 8px; }
+.model-entry-row { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border: 1px solid #3d4a56; border-radius: 8px; background: #232a30; }
+[data-theme="light"] .model-entry-row { border-color: #d7dce3; background: #eef1f4; }
+.model-entry-copy { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; font-size: 12px; color: var(--text-secondary); }
+.model-entry-copy strong { font-size: 12.5px; color: var(--text-primary); word-break: break-all; }
+.model-entry-editor { display: flex; align-items: center; gap: 8px; }
+.model-entry-editor input { width: 220px; }
+#ssh-profile-bar { display: flex; flex-direction: column; gap: 10px; margin-bottom: 4px; padding: 10px 12px; border: 1px solid #3d4a56; border-radius: 8px; background: #1f262c; }
+[data-theme="light"] #ssh-profile-bar { border-color: #d7dce3; background: #eef1f4; }
+#ssh-profile-bar .ssh-profile-slot-info { margin: 0; }
+#ssh-profile-switch .active { font-weight: bold; }
 .danger-button { color: #ef9f95; border-color: #67443f; }
 
 .mode-selector { position: relative; margin: 0 8px 4px; }

@@ -60,7 +60,8 @@ function normalizeUserAvatar(value) {
 }
 
 /** 配置结构版本（v3.16.0 数据迁移机制）：结构变化时在此推进版本并加迁移分支 */
-const SETTINGS_SCHEMA_VERSION = 1;
+// v3.18.0 F4：升到 2（触发 .schema-v1.bak 备份 + 打版本标；SSH 多卡槽字段由此起步）
+const SETTINGS_SCHEMA_VERSION = 2;
 
 function settingsPath() {
   return path.join(app.getPath("userData"), SETTINGS_FILE);
@@ -134,6 +135,67 @@ function sameSshTarget(left, right) {
     && String(left?.username || "").trim() === String(right?.username || "").trim();
 }
 
+// ── SSH 多卡槽（v3.18.0 F4，AO 0.9.6 同构 + ACP 特性扩展）──
+// v1 固定两槽（UI 预留扩展——拍板 #2）；每槽独立保存 host/port/username/password/workingDirectory/
+// skipPermissions/networkType/externalMethod/hostFingerprint；外网传输的具体参数（frp/n2n token 等）
+// v1 仍全局一份、槽只保存「用哪套」的选择（networkType/externalMethod）——多 NAS 各异 token 的场景留待后续版本。
+const SSH_PROFILE_IDS = ["ssh-1", "ssh-2"];
+
+function normalizeSshProfileId(value) {
+  return SSH_PROFILE_IDS.includes(value) ? value : "ssh-1";
+}
+
+/** 卡槽名称（AO：≤4 个中文字符或 8 个英文数字；留空恢复默认名）：宽松为 ≤8 码元 + 无空白无标点。 */
+function normalizeSshProfileName(value) {
+  const name = String(value || "").trim();
+  if (!name) return "";
+  if (name.length > 8 || /\s/.test(name) || /[\\/:*?"<>|]/.test(name)) return "";
+  return name;
+}
+
+function normalizeSshProfileSlot(slot) {
+  return {
+    id: normalizeSshProfileId(slot?.id),
+    name: normalizeSshProfileName(slot?.name),
+    host: String(slot?.host || "").trim(),
+    port: Number(slot?.port) || 22,
+    username: String(slot?.username || "").trim(),
+    // password 为 safeStorage base64 密文；槽间不可混（拍板：沿用 v3.1.0 AES-256-GCM 密文，各自独立保存）
+    password: typeof slot?.password === "string" ? slot.password : "",
+    workingDirectory: String(slot?.workingDirectory || "").trim(),
+    skipPermissions: Boolean(slot?.skipPermissions),
+    networkType: slot?.networkType === "external" ? "external" : "internal",
+    externalMethod: String(slot?.externalMethod || "auto").trim(),
+    hostFingerprint: String(slot?.hostFingerprint || "").trim(),
+    configured: Boolean(String(slot?.host || "").trim() && String(slot?.username || "").trim())
+  };
+}
+
+/**
+ * 卡槽列表规整 + 旧单套配置迁移（拍板：「旧配置首升全部落到 ssh-1，ssh-2 空槽待配」）：
+ * raw 无 sshProfiles 数组时 = 旧配置，ssh-1 承接顶层主配置（密码/指纹/网络选择原样搬）；
+ * 已有数组则按 id 归一化（缺失的槽补空槽）。幂等，无副作用。
+ */
+function ensureSshProfiles(raw) {
+  const hasList = Array.isArray(raw?.sshProfiles);
+  if (!hasList) {
+    const migrated = normalizeSshProfileSlot({
+      id: "ssh-1",
+      host: raw?.host, port: raw?.port, username: raw?.username, password: raw?.password,
+      workingDirectory: raw?.workingDirectory, skipPermissions: raw?.skipPermissions,
+      networkType: raw?.networkType, externalMethod: raw?.externalMethod, hostFingerprint: raw?.hostFingerprint
+    });
+    return [migrated, normalizeSshProfileSlot({ id: "ssh-2" })];
+  }
+  return SSH_PROFILE_IDS.map((id) => normalizeSshProfileSlot(raw.sshProfiles.find((slot) => slot?.id === id) || { id }));
+}
+
+function activeSshProfileSlot(raw) {
+  const profiles = ensureSshProfiles(raw);
+  const activeId = normalizeSshProfileId(raw?.activeSshProfile);
+  return profiles.find((slot) => slot.id === activeId) || profiles[0];
+}
+
 function modelAdminPasswordState(raw = readRaw()) {
   if (!safeStorage.isEncryptionAvailable()) return "unavailable";
   if (!raw.modelAdminPassword) return "missing";
@@ -180,11 +242,32 @@ function getAtomcodeToken() {
 function getSettings() {
   const raw = readRaw();
   const defaultDataDirectory = app.getPath("userData");
+  // v3.18.0 F4：SSH 字段从当前活跃卡槽物化（顶层 raw 字段保持为活跃槽镜像，供旧读取方兼容）；
+  // sshProfiles 只脱敏暴露（hasPassword，不回传密文/明文）。
+  const slot = activeSshProfileSlot(raw);
+  const profiles = ensureSshProfiles(raw);
+  const activeProfile = normalizeSshProfileId(raw.activeSshProfile);
   return {
     connectionMode: raw.connectionMode === "local" ? "local" : raw.connectionMode === "cloud" ? "cloud" : "ssh",
-    host: raw.host || "",
-    port: raw.port || 22,
-    username: raw.username || "",
+    activeSshProfile: activeProfile,
+    sshProfiles: profiles.map((entry) => ({
+      id: entry.id,
+      name: entry.name,
+      host: entry.host,
+      port: entry.port,
+      username: entry.username,
+      workingDirectory: entry.workingDirectory,
+      skipPermissions: entry.skipPermissions,
+      networkType: entry.networkType,
+      externalMethod: entry.externalMethod,
+      hostFingerprint: entry.hostFingerprint,
+      configured: entry.configured,
+      hasPassword: Boolean(entry.password),
+      active: entry.id === activeProfile
+    })),
+    host: slot.host || "",
+    port: slot.port || 22,
+    username: slot.username || "",
     clientLabel: raw.clientLabel || os.hostname(),
     wakeName: raw.wakeName || "claude",
     // 本机模式引擎（v3.13.0）
@@ -193,19 +276,19 @@ function getSettings() {
     atomcodePort: normalizeAtomcodePort(raw.atomcodePort),
     hasAtomcodeToken: Boolean(raw.atomcodeTokenEncrypted),
     customCliCommand: String(raw.customCliCommand || "").trim(),
-    workingDirectory: raw.workingDirectory || "",
-    skipPermissions: Boolean(raw.skipPermissions),
+    workingDirectory: slot.workingDirectory || "",
+    skipPermissions: Boolean(slot.skipPermissions),
     statusSignalCapture: raw.statusSignalCapture === undefined ? !app.isPackaged : Boolean(raw.statusSignalCapture),
     userAvatar: normalizeUserAvatar(raw.userAvatar),
-    hostFingerprint: raw.hostFingerprint || "",
+    hostFingerprint: slot.hostFingerprint || "",
     dataDirectory: raw.dataDirectory || defaultDataDirectory,
     defaultDataDirectory,
-    hasPassword: Boolean(raw.password),
+    hasPassword: Boolean(slot.password || raw.password),
     hasModelAdminPassword: modelAdminPasswordState(raw) === "ready",
     modelAdminPasswordState: modelAdminPasswordState(raw),
-    // 网络设置
-    networkType: raw.networkType || "internal",
-    externalMethod: raw.externalMethod || "auto",
+    // 网络设置（活跃卡槽物化；frp/n2n 等具体参数 v1 仍全局）
+    networkType: slot.networkType || "internal",
+    externalMethod: slot.externalMethod || "auto",
     frp: sanitizeNetworkConfig(raw.frp || {}, "frp"),
     derp: sanitizeNetworkConfig(raw.derp || {}, "derp"),
     p2p: sanitizeNetworkConfig(raw.p2p || {}, "p2p"),
@@ -270,7 +353,10 @@ function decryptStoredString(encoded, label) {
 function getSshConnection() {
   const raw = readRaw();
   const settings = getSettings();
-  if (!raw.password) throw new Error("请先在连接设置中保存密码。");
+  // v3.18.0 F4：密码取当前活跃卡槽（顶层 raw.password 是活跃槽镜像，做兜底）
+  const slot = activeSshProfileSlot(raw);
+  const passwordStored = slot.password || raw.password || "";
+  if (!passwordStored) throw new Error("请先在连接设置中保存密码。");
   if (!safeStorage.isEncryptionAvailable()) {
     throw new Error("Windows 系统加密不可用，无法安全保存 SSH 密码。");
   }
@@ -281,7 +367,7 @@ function getSshConnection() {
     frp: raw.frp || settings.frp,
     derp: raw.derp || settings.derp,
     n2n: raw.n2n || settings.n2n,
-    password: decryptStoredString(raw.password, "SSH 密码")
+    password: decryptStoredString(passwordStored, "SSH 密码")
   };
 }
 
@@ -456,6 +542,29 @@ function saveSettings(input) {
       : "SSH 地址、端口或账号已改变，请输入新目标的 SSH 密码。旧密码不会自动用于新目标。");
   }
 
+  // v3.18.0 F4：本次保存的连接参数镜像进活跃卡槽（ssh 模式）；local/cloud 模式卡槽结构原样保留仅归一化
+  if (connectionMode === "ssh") {
+    const profiles = ensureSshProfiles({ ...next, sshProfiles: Array.isArray(previous.sshProfiles) ? previous.sshProfiles : undefined });
+    const activeId = normalizeSshProfileId(input.activeSshProfile !== undefined ? input.activeSshProfile : previous.activeSshProfile);
+    const index = SSH_PROFILE_IDS.indexOf(activeId);
+    const base = profiles[index] || {};
+    profiles[index] = {
+      id: activeId,
+      name: input.sshProfileName !== undefined ? normalizeSshProfileName(input.sshProfileName) : (base.name || ""),
+      host: next.host, port: next.port, username: next.username, password: next.password,
+      workingDirectory: next.workingDirectory, skipPermissions: Boolean(next.skipPermissions),
+      networkType: next.networkType || "internal", externalMethod: next.externalMethod || "auto",
+      hostFingerprint: next.hostFingerprint || "",
+      configured: Boolean(next.host && next.username)
+    };
+    next.sshProfiles = profiles;
+    next.activeSshProfile = activeId;
+  } else {
+    // 非 ssh 模式的 host/username 输入为空且不可信——卡槽结构一律从 previous 归一化，防止空值覆盖卡槽
+    next.sshProfiles = ensureSshProfiles(previous);
+    next.activeSshProfile = normalizeSshProfileId(previous.activeSshProfile);
+  }
+
   writeRaw(next);
   recoveryNotice = "";
   return getSettings();
@@ -464,7 +573,38 @@ function saveSettings(input) {
 function trustHostFingerprint(fingerprint) {
   const raw = readRaw();
   raw.hostFingerprint = fingerprint;
+  // v3.18.0 F4：指纹属于「凭什么进门」的身份链——同步记进活跃卡槽，切槽不丢
+  raw.sshProfiles = ensureSshProfiles(raw);
+  raw.activeSshProfile = normalizeSshProfileId(raw.activeSshProfile);
+  const index = SSH_PROFILE_IDS.indexOf(raw.activeSshProfile);
+  raw.sshProfiles[index] = { ...raw.sshProfiles[index], hostFingerprint: fingerprint };
   writeRaw(raw);
+}
+
+/** v3.18.0 F4：切换 SSH 卡槽——把目标槽整套参数物化到顶层（活跃槽镜像），密码/指纹随槽走。 */
+function switchSshProfile(profileId) {
+  const raw = readRaw();
+  const profiles = ensureSshProfiles(raw);
+  // v3.18.0 F4 防御：未知槽 id 明确拒绝而不是静默回退槽 1（用户点了不存在的槽必须知道没切成功）
+  if (!SSH_PROFILE_IDS.includes(String(profileId || ""))) throw new Error("未知的 SSH 卡槽，无法切换。");
+  const activeId = normalizeSshProfileId(profileId);
+  const slot = profiles.find((entry) => entry.id === activeId) || profiles[0];
+  const next = {
+    ...raw,
+    sshProfiles: profiles,
+    activeSshProfile: activeId,
+    host: slot.host,
+    port: slot.port,
+    username: slot.username,
+    password: slot.password,
+    workingDirectory: slot.workingDirectory,
+    skipPermissions: slot.skipPermissions,
+    networkType: slot.networkType,
+    externalMethod: slot.externalMethod,
+    hostFingerprint: slot.hostFingerprint
+  };
+  writeRaw(next);
+  return getSettings();
 }
 
 function setModelAdminPassword(value) {
@@ -487,4 +627,4 @@ function verifyModelAdminPassword(value) {
   return expected.length === actual.length && crypto.timingSafeEqual(expected, actual);
 }
 
-module.exports = { getConnection, getSettings, getAtomcodeToken, getSshConnection, getCloudAiConfig, modelAdminPasswordState, sameSshTarget, saveSettings, setModelAdminPassword, trustHostFingerprint, verifyModelAdminPassword };
+module.exports = { getConnection, getSettings, getAtomcodeToken, getSshConnection, getCloudAiConfig, modelAdminPasswordState, normalizeSshProfileId, normalizeSshProfileName, sameSshTarget, saveSettings, setModelAdminPassword, switchSshProfile, trustHostFingerprint, verifyModelAdminPassword };

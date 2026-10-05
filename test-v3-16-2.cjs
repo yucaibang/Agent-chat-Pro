@@ -435,8 +435,10 @@ async function runCrossFamilyTests() {
     }
   });
 
-  await test("版本号 ≥3.16.2（v3.16.3 起性能修复顺延）", () => {
-    assert.ok(pkg.version === "3.16.2" || pkg.version === "3.16.3", `版本应为 3.16.2 或 3.16.3（实际 ${pkg.version}）`);
+  await test("版本号 ≥3.16.2（后续版本顺延不再枚举）", () => {
+    const [a, b, c] = pkg.version.split(".").map(Number);
+    const [x, y, z] = "3.16.2".split(".").map(Number);
+    assert.ok(a > x || (a === x && b > y) || (a === x && b === y && c >= z), `版本应 ≥3.16.2（实际 ${pkg.version}）`);
   });
 
   await test("既往不回退：v3.16.0 的 autologon 披露与 schemaVersion 仍在", () => {

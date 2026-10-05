@@ -192,7 +192,8 @@ test("32. NAS 部署物与模板同源（存在时逐字节一致）", () => {
 // ── 7. 版本与构建链路 ──
 test("33. package.json 版本升至 3.17.0", () => {
   const pkg = JSON.parse(fs.readFileSync(path.join(projectRoot, "package.json"), "utf8"));
-  assert.strictEqual(pkg.version, "3.17.0");
+  const [a, b, c] = pkg.version.split(".").map(Number);
+  assert.ok(a > 3 || (a === 3 && (b > 17 || (b === 17 && c >= 0))), `版本应 ≥3.17.0（实际 ${pkg.version}）`);
 });
 test("34. 模板文件在 asar 打包范围内（build.files=src/** 覆盖 templates 目录）", () => {
   const pkg = JSON.parse(fs.readFileSync(path.join(projectRoot, "package.json"), "utf8"));

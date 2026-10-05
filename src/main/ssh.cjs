@@ -17,7 +17,7 @@ const {
 } = require("./protocol.cjs");
 const { buildCommandWithMode, buildBridgeStartWithMode } = require("./modes/mode-params.cjs");
 const { friendlyClaudeLaunchError, describeMissingWorkingDirectory } = require("./claude-launch-diagnostics.cjs");
-const { readModelSettings, replaceModelSettings } = require("./model-config.cjs");
+const { readModelSettings, replaceModelSettings, replaceSingleModelSetting, replaceAutoCompactWindowSetting } = require("./model-config.cjs");
 const { bridgeCompatibility, parseVersion } = require("./modules/agent/claude/runtime-compatibility.cjs");
 
 const TOOL_PROGRESS_NOTICE_COUNTS = [8, 24];
@@ -119,11 +119,19 @@ async function getClaudeModelStatus(config, onUnknownHost, onLog) {
     const result = await exec(client, `cat -- ${shellQuote(settingsPath)}`);
     if (result.code !== 0) throw new Error("无法读取目标 NAS 的 Claude 模型配置：" + cleanError(result.stderr));
     const parsed = readModelSettings(result.stdout);
-    return { model: parsed.model, models: parsed.models, consistent: parsed.consistent, settingsPath };
+    return {
+      model: parsed.model, models: parsed.models, consistent: parsed.consistent, settingsPath,
+      // v3.18.0 增量：五项明细 + 自动压缩阈值状态（模型页渲染用）
+      entries: parsed.entries, autoCompactWindow: parsed.autoCompactWindow,
+      valid: parsed.valid, invalidKeys: parsed.invalidKeys
+    };
   } finally { client.end(); }
 }
 
-async function updateClaudeModel(config, modelName, onUnknownHost, onLog) {
+// v3.18.0 F2：远端模型配置写入公共链（统一改为/单项修改/自动压缩阈值三写法共用）——
+// cat 现值 → 派生函数改写 JSON → 【写前备份 settings.json.bak-model，失败即中止】→ SFTP 临时文件原子替换 →
+// 读回核对（核对失败抛错，.bak-model 保留可人工恢复）→ 失败清理临时文件，原配置不动。
+async function applyRemoteModelSettings(config, mutation, verifyResult, onUnknownHost, onLog) {
   const client = await connectWithRetry(config, onUnknownHost, onLog);
   try {
     const home = (await exec(client, "printf %s \"$HOME\"")).stdout.trim();
@@ -131,7 +139,14 @@ async function updateClaudeModel(config, modelName, onUnknownHost, onLog) {
     const settingsPath = `${home}/.claude/settings.json`;
     const current = await exec(client, `cat -- ${shellQuote(settingsPath)}`);
     if (current.code !== 0) throw new Error("无法读取目标 NAS 的 Claude 模型配置：" + cleanError(current.stderr));
-    const replacement = replaceModelSettings(current.stdout, modelName);
+    let replacement;
+    try { replacement = mutation(current.stdout); }
+    catch (error) {
+      throw new Error(error.message.replace(/Claude settings\.json/g, "目标 NAS 的 Claude 配置"));
+    }
+    const backupPath = `${settingsPath}.bak-model`;
+    const backup = await exec(client, `cp -f -- ${shellQuote(settingsPath)} ${shellQuote(backupPath)}`);
+    if (backup.code !== 0) throw new Error("写前备份创建失败（settings.json.bak-model），已中止写入：" + cleanError(backup.stderr));
     const temporaryPath = `${settingsPath}.agent-chat-pro-model-${process.pid}-${Date.now()}.tmp`;
     try {
       const sftp = await openSftp(client);
@@ -142,12 +157,11 @@ async function updateClaudeModel(config, modelName, onUnknownHost, onLog) {
         `mv -- ${shellQuote(temporaryPath)} ${shellQuote(settingsPath)}`
       ].join(" && "));
       if (promote.code !== 0) throw new Error("模型配置未能保存，原配置仍保留：" + cleanError(promote.stderr));
-      const verified = await getModelStatusFromClient(client, settingsPath);
-      if (!verified.consistent || verified.model !== replacement.model) {
-        throw new Error("模型配置写入后核对失败，请检查五项模型配置。");
-      }
-      onLog?.("claude_model_changed", { host: config.host, model: replacement.model, changedKeys: replacement.changedKeys });
-      return { ...verified, changedKeys: replacement.changedKeys };
+      const verified = getModelStatusFromClient(client, settingsPath);
+      const problem = verifyResult(verified, replacement);
+      if (problem) throw new Error(problem);
+      onLog?.("claude_model_changed", { host: config.host, changedKeys: replacement.changedKeys, backup: backupPath });
+      return { ...verified, changedKeys: replacement.changedKeys, backupPath };
     } catch (error) {
       await exec(client, `rm -f -- ${shellQuote(temporaryPath)}`).catch(() => {});
       throw error;
@@ -155,11 +169,61 @@ async function updateClaudeModel(config, modelName, onUnknownHost, onLog) {
   } finally { client.end(); }
 }
 
+async function updateClaudeModel(config, modelName, onUnknownHost, onLog) {
+  return applyRemoteModelSettings(
+    config,
+    (source) => replaceModelSettings(source, String(modelName || "").trim()),
+    (verified, replacement) => (!verified.consistent || verified.model !== replacement.model
+      ? "模型配置写入后核对失败，请检查五项模型配置。"
+      : ""),
+    onUnknownHost,
+    onLog
+  );
+}
+
+// v3.18.0 F2：五项单独修改（AO 0.9.6 同语义——只改一项，其余 env 原样保留）
+async function updateClaudeModelEntry(config, entryId, modelName, onUnknownHost, onLog) {
+  return applyRemoteModelSettings(
+    config,
+    (source) => replaceSingleModelSetting(source, entryId, modelName),
+    (verified, replacement) => {
+      const key = replacement.entry.key;
+      const after = verified.models[key] || "";
+      return after !== replacement.model
+        ? `模型配置项写入后核对失败（${key} 应为 ${replacement.model}，实际 ${after || "空"}）。`
+        : "";
+    },
+    onUnknownHost,
+    onLog
+  );
+}
+
+// v3.18.0 F2：自动压缩阈值（auto=删 settings.json 顶层 autoCompactWindow 走官方自动值；AO 0.9.6 同源）
+async function updateClaudeAutoCompactWindow(config, value, onUnknownHost, onLog) {
+  return applyRemoteModelSettings(
+    config,
+    (source) => replaceAutoCompactWindowSetting(source, value),
+    (verified, replacement) => {
+      const after = verified.autoCompactWindow;
+      const target = replacement.autoCompactWindow;
+      if (target.mode === "auto" && after.mode !== "auto") return "自动压缩阈值写入后核对失败（应回到官方自动值）。";
+      if (target.mode === "fixed" && (after.mode !== "fixed" || after.tokens !== target.tokens)) return "自动压缩阈值写入后核对失败。";
+      return "";
+    },
+    onUnknownHost,
+    onLog
+  );
+}
+
 async function getModelStatusFromClient(client, settingsPath) {
   const result = await exec(client, `cat -- ${shellQuote(settingsPath)}`);
   if (result.code !== 0) throw new Error("模型配置写入后无法重新读取：" + cleanError(result.stderr));
   const parsed = readModelSettings(result.stdout);
-  return { model: parsed.model, models: parsed.models, consistent: parsed.consistent, settingsPath };
+  return {
+    model: parsed.model, models: parsed.models, consistent: parsed.consistent, settingsPath,
+    entries: parsed.entries, autoCompactWindow: parsed.autoCompactWindow,
+    valid: parsed.valid, invalidKeys: parsed.invalidKeys
+  };
 }
 
 async function ensureDeviceControlKey(config, deviceId, metadata, onUnknownHost, onLog) {
@@ -1145,4 +1209,4 @@ function cleanError(value) {
   return value.replace(/\x1B\[[0-?]*[ -/]*[@-~]/g, "").trim();
 }
 
-module.exports = { buildAttachmentNote, buildDeviceConnectScript, cleanupRemoteAttachments, downloadRemoteFile, ensureDeviceControlKey, finalizeDeviceControl, getAgentSdkBridgeStatus, getClaudeModelStatus, handleToolPayload, installAgentSdkBridge, loadDeviceTemplate, markDeviceControlDisabled, mimeFromPath, readDeviceControlIpTrack, readRemoteFile, runClaude, safeRemoteFileName, uninstallAgentSdkBridge, updateClaudeModel, verifyConnection, withTimeout, writeSftp };
+module.exports = { buildAttachmentNote, buildDeviceConnectScript, cleanupRemoteAttachments, downloadRemoteFile, ensureDeviceControlKey, finalizeDeviceControl, getAgentSdkBridgeStatus, getClaudeModelStatus, handleToolPayload, installAgentSdkBridge, loadDeviceTemplate, markDeviceControlDisabled, mimeFromPath, readDeviceControlIpTrack, readRemoteFile, runClaude, safeRemoteFileName, uninstallAgentSdkBridge, updateClaudeAutoCompactWindow, updateClaudeModel, updateClaudeModelEntry, verifyConnection, withTimeout, writeSftp };
