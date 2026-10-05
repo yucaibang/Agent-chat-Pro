@@ -10,6 +10,8 @@
  *   F. main.cjs SSH 分叉（三家 runner + atomcode daemon + adapterOptions 透传 + 检测 IPC）
  *   G. UI 接线（index 三卡 / renderer 函数与绑定 / preload 通道 / styles）
  *   H. 版本号 3.19.0 + 混淆清单登记
+ *   I. renderer 运行时冒烟（vm 假 DOM 真求值：顶层求值 + populateSettings 直调——2026-10-05
+ *      首发事故教训：renderAdvancedPanels 引用未定义标识符 adv，静态正则断言测不出，一跑现形）
  */
 
 const fs = require("fs");
@@ -493,6 +495,261 @@ async function runVersionTests() {
   });
 }
 
+// ════════════════ I. renderer 运行时冒烟（vm 假 DOM 真求值） ════════════════
+async function runSmokeTests() {
+  const vm = require("vm");
+
+  function makeStyle() {
+    const store = {};
+    return new Proxy(store, {
+      get(target, prop) {
+        if (prop === "setProperty") return (key, val) => { target[key] = val; };
+        if (prop === "removeProperty") return (key) => { delete target[key]; };
+        if (prop === "getPropertyValue") return (key) => target[key];
+        return target[prop];
+      },
+      set(target, prop, val) { target[prop] = val; return true; }
+    });
+  }
+
+  function makeFakeEl() {
+    const classes = new Set();
+    const children = [];
+    return {
+      value: "", checked: false, type: "", placeholder: "", textContent: "", innerHTML: "",
+      hidden: false, disabled: false, className: "", tagName: "DIV", draggable: false,
+      scrollTop: 0, scrollHeight: 0, scrollLeft: 0, clientHeight: 0, clientWidth: 0,
+      files: [], children, style: makeStyle(), dataset: {},
+      elements: { namedItem: () => getFake("#form-named-item") },
+      form: { elements: { namedItem: () => getFake("#named-form-item") } },
+      classList: {
+        toggle(name, force) {
+          const on = force === undefined ? !classes.has(name) : Boolean(force);
+          if (on) classes.add(name); else classes.delete(name);
+          return on;
+        },
+        add(...names) { for (const n of names) classes.add(n); },
+        remove(...names) { for (const n of names) classes.delete(n); },
+        contains(name) { return classes.has(name); }
+      },
+      addEventListener() {}, removeEventListener() {}, dispatchEvent() { return true; },
+      setAttribute() {}, getAttribute: () => "", removeAttribute() {}, hasAttribute: () => false, toggleAttribute: () => false,
+      insertAdjacentHTML() {}, insertAdjacentElement: () => null, hasChildNodes: () => false,
+      append(...nodes) { for (const node of nodes) children.push(node); },
+      appendChild(node) { children.push(node); return node; },
+      replaceChildren(...nodes) { children.length = 0; children.push(...nodes); },
+      closest() { return null; }, contains() { return false; },
+      querySelector(sel) { return getFake(sel || "#inner"); },
+      querySelectorAll() { return []; },
+      focus() {}, blur() {}, click() {}, select() {}, remove() {},
+      scrollIntoView() {}, scrollBy() {}, scrollTo() {}, setSelectionRange() {},
+      getBoundingClientRect() { return { top: 0, left: 0, right: 0, bottom: 0, width: 0, height: 0 }; }
+    };
+  }
+
+  // 选择器缓存：同一选择器返回同一假元素，便于断言读回
+  const cache = new Map();
+  const getFake = (sel) => {
+    const key = String(sel);
+    if (!cache.has(key)) cache.set(key, makeFakeEl());
+    return cache.get(key);
+  };
+
+  const documentStub = {
+    body: getFake("body"),
+    head: getFake("head"),
+    documentElement: getFake("documentElement"),
+    activeElement: null,
+    querySelector: (sel) => getFake(sel),
+    querySelectorAll: () => [],
+    getElementById: (id) => getFake(`#${id}`),
+    createElement: (tag) => { const el = makeFakeEl(); el.tagName = String(tag || "div").toUpperCase(); return el; },
+    createTextNode: (text) => ({ textContent: String(text), children: [] }),
+    addEventListener() {}, removeEventListener() {}
+  };
+
+  const sampleSettings = {
+    host: "10.66.1.111", port: 22, username: "demo-user", wakeName: "", clientLabel: "",
+    workingDirectory: "/data", dataDirectory: "",
+    skipPermissions: false, showSignalLights: true, connectionMode: "ssh", localEngine: "claude",
+    hasPassword: true, hasCloudAiConfig: true,
+    cloudAiProvider: "zhipu", cloudAiBaseUrl: "https://open.bigmodel.cn/api/paas/v4", cloudAiModel: "glm-4-flash",
+    cloudToolsEnabled: true, cloudRunCommandEnabled: false, cloudWorkingDirectory: "",
+    proxyEnabled: false, proxyType: "http",
+    compactAuto: true, compactThreshold: 80, compactInstruction: "",
+    atomcodeHost: "127.0.0.1", atomcodePort: 13456, customCliCommand: "",
+    sshProfiles: [
+      { id: "ssh-1", name: "主 NAS", host: "10.66.1.111", port: 22, username: "demo-user",
+        workingDirectory: "/data", skipPermissions: false, networkType: "internal",
+        externalMethod: "auto", hostFingerprint: "SHA256:x", configured: true, hasPassword: true },
+      { id: "ssh-2", name: "", host: "", port: 22, username: "",
+        workingDirectory: "", skipPermissions: false, networkType: "internal",
+        externalMethod: "auto", hostFingerprint: "", configured: false, hasPassword: false }
+    ],
+    activeSshProfile: "ssh-1",
+    advanced: null,
+    advancedEffective: {
+      adapter: "claude",
+      adapterOptions: { model: "", sandbox: "", provider: "" },
+      ssh: { requestTimeoutMin: 30, connectTimeoutSec: 15, sftpTimeoutSec: 30, reconnectAttempts: 3, reconnectBaseMs: 600, keepaliveSec: 15, debugLog: false },
+      external: { method: "frp", n2n: { cipher: "", compression: "", protocol: "", headerEncryption: false } },
+      cloud: { connectTimeoutSec: 120, streamIdleTimeoutSec: 300, maxRetries: 0, maxToolRounds: 25 }
+    }
+  };
+
+  // 假 IPC 桥：未知方法一律返回 settings 形状兜底对象（防数据形状误报，只抓未定义标识符类错误）
+  const bridge = new Proxy({}, {
+    get(_target, prop) {
+      if (prop === "then") return undefined;
+      return async (payload) => ({
+        ...sampleSettings,
+        id: payload && payload.id !== undefined ? String(payload.id) : "smoke-id",
+        version: "3.19.0",
+        path: "",
+        ok: true,
+        results: [],
+        conversations: [],
+        items: [],
+        messages: [],
+        tools: [],
+        files: [],
+        entries: [],
+        valid: true,
+        invalidKeys: []
+      });
+    }
+  });
+
+  const windowStub = {
+    window: null, self: null,
+    agentChatPro: bridge,
+    addEventListener() {}, removeEventListener() {},
+    location: { href: "file:///app/index.html", protocol: "file:", search: "", host: "", origin: "file://" },
+    matchMedia: () => ({ matches: false, media: "", addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {} }),
+    open: () => null,
+    close() {},
+    navigator: { clipboard: { writeText: async () => {} }, userAgent: "smoke" },
+    localStorage: { getItem: () => null, setItem() {}, removeItem() {} },
+    getComputedStyle: () => ({ getPropertyValue: () => "" }),
+    requestAnimationFrame: (cb) => cb(),
+    setTimeout: () => 0, clearTimeout() {}, setInterval: () => 0, clearInterval() {},
+    crypto: require("crypto").webcrypto
+  };
+  windowStub.window = windowStub;
+  windowStub.self = windowStub;
+
+  class FakeEvent {
+    constructor(type, init) {
+      this.type = String(type || "");
+      Object.assign(this, init || {});
+      this.preventDefault = () => {};
+      this.stopPropagation = () => {};
+    }
+  }
+
+  const sandbox = {
+    console, Math, Date, JSON, Object, Array, String, Number, Boolean, BigInt,
+    Map, Set, WeakMap, WeakSet, Promise, Symbol, Error, TypeError, RangeError,
+    SyntaxError, ReferenceError, RegExp, parseInt, parseFloat, isNaN, isFinite,
+    encodeURIComponent, decodeURIComponent, structuredClone,
+    URL, URLSearchParams, TextEncoder, TextDecoder, AbortController,
+    queueMicrotask, performance, Buffer,
+    process: { env: {}, platform: "win32", versions: process.versions },
+    window: windowStub, document: documentStub,
+    navigator: windowStub.navigator, localStorage: windowStub.localStorage,
+    location: windowStub.location, matchMedia: windowStub.matchMedia,
+    requestAnimationFrame: windowStub.requestAnimationFrame,
+    getComputedStyle: windowStub.getComputedStyle,
+    crypto: windowStub.crypto,
+    Event: FakeEvent, CustomEvent: FakeEvent, FormData: function FormData() {}, alert() {}, confirm: () => false, prompt: () => null,
+    setTimeout: () => 0, clearTimeout() {}, setInterval: () => 0, clearInterval() {},
+    addEventListener() {}, removeEventListener() {}
+  };
+  for (const key of ["File", "Blob", "Headers", "Request", "Response", "fetch", "Image"]) {
+    if (typeof globalThis[key] !== "undefined") sandbox[key] = globalThis[key];
+  }
+  sandbox.globalThis = sandbox;
+
+  // 尾部挂钩：把待直调的函数暴露出脚本作用域（跨 vm 取不到 let/const 绑定，必须借闭包）
+  const source = rendererSrc
+    + "\n;globalThis.__acpSmoke = { populateSettings, renderAdvancedPanels, renderAdapterCard, renderAdapterDetect, pendingAdapterKey: () => pendingAdapterKey };";
+
+  await test("I1. renderer.js vm 假 DOM 全量求值零异常（未定义标识符一跑现形）", () => {
+    let error = null;
+    try {
+      vm.createContext(sandbox);
+      vm.runInContext(source, sandbox, { filename: "renderer.js" });
+    } catch (err) { error = err; }
+    assert.ifError(error);
+    assert.ok(sandbox.__acpSmoke, "求值后应挂 __acpSmoke 挂钩");
+  });
+
+  await test("I2. populateSettings（自动态）跑通 + effective 兜底值全部落位", () => {
+    sandbox.__acpSmoke.populateSettings(sampleSettings);
+    const value = (sel) => cache.get(sel)?.value;
+    assert.strictEqual(value("#adv-ssh-request-timeout"), 30);
+    assert.strictEqual(value("#adv-ssh-connect-timeout"), 15);
+    assert.strictEqual(value("#adv-ssh-sftp-timeout"), 30);
+    assert.strictEqual(value("#adv-ssh-reconnect-attempts"), 3);
+    assert.strictEqual(value("#adv-ssh-reconnect-base"), 600);
+    assert.strictEqual(value("#adv-ssh-keepalive"), 15);
+    assert.strictEqual(cache.get("#adv-ssh-debug-log").checked, false);
+    assert.strictEqual(value("#adv-n2n-cipher"), "");
+    assert.strictEqual(value("#adv-cloud-connect-timeout"), 120);
+    assert.strictEqual(value("#adv-cloud-stream-idle"), 300);
+    assert.strictEqual(value("#adv-cloud-max-retries"), 0);
+    assert.strictEqual(value("#adv-cloud-tool-rounds"), 25);
+    assert.ok(cache.get("#adapter-note").textContent.includes("agent-sdk-bridge"), "claude 应显示内置双链说明");
+    assert.strictEqual(cache.get('[data-adv-badge="network"]').classList.contains("is-manual"), false);
+    assert.ok(cache.get('[data-adv-badge="adapter"]').textContent.includes("内置默认"), "claude 徽章应标内置默认");
+  });
+
+  await test("I3. populateSettings（手动态）回读落位 + 徽章转手动 + 适配器附加参数显隐", () => {
+    sandbox.__acpSmoke.populateSettings({
+      ...sampleSettings,
+      advanced: {
+        ssh: { requestTimeoutMin: 45, connectTimeoutSec: 15, sftpTimeoutSec: 30, reconnectAttempts: 3, reconnectBaseMs: 600, keepaliveSec: 15, debugLog: true },
+        external: { method: "n2n", n2n: { cipher: "A4", compression: "zstd", protocol: "tcp", headerEncryption: true } },
+        cloud: { connectTimeoutSec: 90, streamIdleTimeoutSec: 400, maxRetries: 0, maxToolRounds: 40 },
+        adapter: "codex",
+        adapterOptions: { model: "", sandbox: "workspace-write", provider: "" }
+      }
+    });
+    const value = (sel) => cache.get(sel)?.value;
+    assert.strictEqual(value("#adv-ssh-request-timeout"), 45);
+    assert.strictEqual(cache.get("#adv-ssh-debug-log").checked, true);
+    assert.strictEqual(value("#adv-n2n-cipher"), "A4");
+    assert.strictEqual(value("#adv-n2n-compression"), "zstd");
+    assert.strictEqual(value("#adv-n2n-protocol"), "tcp");
+    assert.strictEqual(cache.get("#adv-n2n-header-encryption").checked, true);
+    assert.strictEqual(value("#adv-cloud-tool-rounds"), 40);
+    assert.strictEqual(cache.get('[data-adv-badge="network"]').classList.contains("is-manual"), true);
+    assert.ok(cache.get('[data-adv-badge="adapter"]').textContent.includes("手动选择"), "codex 徽章应标手动选择");
+    assert.strictEqual(sandbox.__acpSmoke.pendingAdapterKey(), "codex");
+    // 沙箱下拉语义：空值=「workspace-write（默认）」，仅 read-only 回显自身——存 workspace-write 时归一显示为空
+    assert.strictEqual(value("#adapter-opt-sandbox"), "");
+    assert.strictEqual(cache.get("#adapter-options").hidden, false);
+    assert.ok(cache.get("#adapter-note").textContent.includes("@openai/codex"), "codex 应显示安装指引");
+  });
+
+  await test("I4. renderAdapterDetect 真执行：行构建 + 三态文案 + 空结果收起", () => {
+    sandbox.__acpSmoke.renderAdapterDetect([
+      { key: "claude", status: "builtin", detail: "内置 agent-sdk-bridge / direct-cli 双链" },
+      { key: "qwen", status: "installed", path: "/usr/local/bin/qwen" },
+      { key: "codex", status: "missing", installHint: "npm install -g @openai/codex" }
+    ]);
+    const box = cache.get("#adapter-detect-result");
+    assert.strictEqual(box.hidden, false);
+    assert.strictEqual(box.children.length, 3);
+    assert.strictEqual(box.children[0].children[0].textContent, "Claude");
+    assert.strictEqual(box.children[1].children[1].textContent, "✅ 已安装");
+    assert.strictEqual(box.children[2].children[1].textContent, "❌ 未安装");
+    assert.ok(box.children[2].children[2].textContent.includes("@openai/codex"), "missing 行应带安装指引");
+    sandbox.__acpSmoke.renderAdapterDetect([]);
+    assert.strictEqual(box.hidden, true);  // 空结果仅收起（隐藏态残留行不显示，下次渲染 replaceChildren 全量替换）
+  });
+}
+
 (async () => {
   console.log("=== v3.19.0 F3 高级设置测试 ===");
   console.log("── A. settings advanced 分组 ──"); await runAdvancedSettingsTests();
@@ -503,6 +760,9 @@ async function runVersionTests() {
   console.log("── F. main 分叉 ──"); await runMainTests();
   console.log("── G. UI ──"); await runUiTests();
   console.log("── H. 版本 ──"); await runVersionTests();
+  console.log("── I. renderer 运行时冒烟 ──"); await runSmokeTests();
   console.log(`\n通过 ${passed} / 失败 ${failed}`);
+  // ⚠ 显式退出：vm 冒烟求值挂出的异步启动链（微任务）不依赖、也不许影响测试收口
   if (failed) { console.log(failures.join("\n")); process.exit(1); }
+  process.exit(0);
 })();
