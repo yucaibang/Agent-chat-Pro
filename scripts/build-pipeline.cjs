@@ -148,7 +148,9 @@ function step0_inject_key() {
 function step1_obfuscate() {
   log("🔒", "步骤 1/6: 代码混淆...");
   run("node scripts/obfuscate.cjs obfuscate");
-  log("✅", "代码混淆完成");
+  // v3.21.1：混淆后主进程模块加载冒烟（防线）——顶层求值级错误构建期拦截，不再等装机现形
+  run("node scripts/obf-smoke.cjs");
+  log("✅", "代码混淆完成（含模块加载冒烟）");
 }
 
 async function step2_bytenode() {

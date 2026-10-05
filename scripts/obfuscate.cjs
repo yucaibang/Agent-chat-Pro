@@ -105,6 +105,9 @@ const OBFUSCATE_FILES = {
 
 // ── 混淆配置 ──────────────────────────────────────────
 
+// v3.21.1：导出名单供 obf-smoke.cjs（构建后冒烟防线）复用
+module.exports = { OBFUSCATE_FILES };
+
 const OBFUSCATOR_CONFIGS = {
   // 🔵 渲染进程 — 轻量混淆
   // 仅：变量重命名 + 字符串编码数组 + 代码压缩
@@ -134,14 +137,15 @@ const OBFUSCATOR_CONFIGS = {
   },
 
   // 🟠 主进程 — 中等混淆
-  // 字符串编码 + 变量重命名 + 适度控制流平坦化
+  // 字符串编码 + 变量重命名
   // 禁止：自我防御、调试保护、对象键变换（防止 IPC 通道名/事件名断裂）
+  // ⚠ v3.21.1 装机事故：controlFlowFlattening + deadCodeInjection 曾随机把语句重排/
+  //   死代码注入 chat:send handler——「使用」被搬到「声明」之前 → 运行时 TDZ 崩溃
+  //   （Cannot access '_0x4b1a81' before initialization，云端/SSH 发消息即炸）——永久禁用
   medium: {
     compact: true,
-    controlFlowFlattening: true,
-    controlFlowFlatteningThreshold: 0.3, // ← 降低（0.5 太激进，影响性能）
-    deadCodeInjection: true,
-    deadCodeInjectionThreshold: 0.05,      // ← 降低（0.1 膨胀过大）
+    controlFlowFlattening: false,          // ← 禁止（v3.21.1 装机事故：语句重排致 TDZ 崩溃）
+    deadCodeInjection: false,              // ← 禁止（同上，死代码注入干扰语句流）
     debugProtection: false,                // ← 禁止（主进程也需要调试）
     disableConsoleOutput: false,
     identifierNamesGenerator: "hexadecimal",
@@ -303,6 +307,9 @@ function formatSize(bytes) {
 
 // ── 主逻辑 ────────────────────────────────────────────
 
+// v3.21.1：仅直接运行时执行命令分发（被 obf-smoke.cjs require 时只取名单，不触发 process.exit）
+if (require.main === module) {
+
 const command = process.argv[2] || "check";
 
 if (command === "restore") {
@@ -407,3 +414,5 @@ console.log("  obfuscate  — 混淆源文件（打包前执行）");
 console.log("  restore     — 从 git 还原原始文件（打包后执行）");
 console.log("  check       — 检查当前混淆状态");
 process.exit(1);
+
+} // end if (require.main === module)

@@ -312,8 +312,8 @@ async function main() {
   // ════════════════ E. 版本 / 混淆 / settings defaultModel ════════════════
   console.log("\n=== E. 版本 / 混淆登记 / defaultModel 无死模型 ===");
 
-  await test("E1. package.json 3.21.0 + obfuscate 登记 main/cloud-models.cjs", () => {
-    assert.strictEqual(pkg.version, "3.21.0");
+  await test("E1. package.json semver + obfuscate 登记 main/cloud-models.cjs（版本不写死，按 v3-19-0 先例）", () => {
+    assert.ok(/^\d+\.\d+\.\d+$/.test(pkg.version), `package.json 应为 semver 形态，实际 ${pkg.version}`);
     assert.ok(obfuscateSrc.includes('"main/cloud-models.cjs"'), "混淆清单已登记");
   });
 
