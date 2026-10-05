@@ -553,6 +553,8 @@ input, select { color: var(--text-primary); background: var(--bg-input); border:
 .directory-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto auto; gap: 8px; }
 .directory-row input { min-width: 0; color: var(--text-tertiary); }
 .password-row input { min-width: 0; }
+/* v3.21.0：模型行（select + 拉取按钮）复用 password-row 栅格 */
+.password-row select { min-width: 0; }
 .password-toggle { min-width: 58px; border: 1px solid var(--border-button); border-radius: 8px; color: var(--text-secondary); background: var(--bg-hover); }
 .field-hint { color: var(--text-muted); font-size: 11px; }
 .two-columns { display: grid; grid-template-columns: 1fr 130px; gap: 12px; }

@@ -99,7 +99,10 @@ function settingsFromForm() {
     networkType: document.querySelector("#network-type").value,
     externalMethod: document.querySelector("#external-method").value,
     cloudAiProvider: provider,
-    cloudAiModel: document.querySelector("#cloud-model")?.value || "glm-4-flash",
+    // v3.21.0：custom 走模型名手填框（原先恒为字面 "custom" 的隐性 bug 修复）
+    cloudAiModel: provider === "custom"
+      ? (document.querySelector("#cloud-custom-model")?.value || "").trim()
+      : (document.querySelector("#cloud-model")?.value || "glm-4.7-flash"),
     cloudAiBaseUrl: document.querySelector("#cloud-base-url")?.value || (config?.baseUrl || ""),
     cloudAiApiKey: document.querySelector("#cloud-api-key")?.value || "",
     clearCloudAiApiKey: !document.querySelector("#cloud-api-key")?.value && hasCloudApiKey,
@@ -152,7 +155,6 @@ function populateSettings(settings) {
   // 云端 AI 设置填充（扁平字段）
   const cloudApiKey = document.querySelector("#cloud-api-key");
   const cloudBaseURL = document.querySelector("#cloud-base-url");
-  const cloudModel = document.querySelector("#cloud-model");
   const cloudProvider = document.querySelector("#cloud-provider");
   hasCloudApiKey = Boolean(settings.hasCloudAiConfig || settings.cloudAi?.hasApiKey);
   if (cloudApiKey) {
@@ -164,11 +166,13 @@ function populateSettings(settings) {
   // 从扁平字段回填
   const provider = settings.cloudAiProvider || "zhipu";
   const baseURL = settings.cloudAiBaseUrl || "";
-  const model = settings.cloudAiModel || "glm-4-flash";
+  const model = settings.cloudAiModel || "";
   if (cloudProvider) cloudProvider.value = provider;
   if (cloudBaseURL) cloudBaseURL.value = baseURL || (CLOUD_PROVIDERS[provider]?.baseUrl || "");
-  if (cloudModel) cloudModel.value = model;
-  if (cloudProvider) cloudProvider.dispatchEvent(new Event("change"));
+  // v3.21.0：custom 模型名回填手填框；固定服务商把已存模型传给 change 处理（重建下拉后恢复选中，防漂移）
+  const customModelInput = document.querySelector("#cloud-custom-model");
+  if (provider === "custom" && customModelInput) customModelInput.value = model;
+  if (cloudProvider) applyCloudProviderChange(provider === "custom" ? "" : model);
   // 工具执行回填（v3.14.0 云办公一期）
   const cloudToolsEnabled = document.querySelector("#cloud-tools-enabled");
   const cloudRunCommandEnabled = document.querySelector("#cloud-run-command-enabled");
@@ -1879,61 +1883,106 @@ document.querySelector("#toggle-atomcode-token")?.addEventListener("click", () =
 });
 
 // ── 云端 AI 设置事件（通用适配器） ──
+// v3.21.0：内置清单全量重写（2026-10-05 各官方一手实锤，见 资料库/调研存档/云端AI模型清单全量-2026-10-05.md）。
+// 每家全量收录当前在役模型；「拉取模型列表」按钮可实时刷新该密钥可用清单，两边互补永不落后。
+// pullModels: 是否支持官方 GET /models 实拉（豆包无列表端点故为 false）。
 const CLOUD_PROVIDERS = {
   zhipu: {
     name: "智谱 AI",
     baseUrl: "https://open.bigmodel.cn/api/paas/v4/",
+    pullModels: true,
     models: [
-      { value: "glm-4-flash", label: "GLM-4-Flash（永久免费）" },
+      { value: "glm-5.3", label: "GLM-5.3（新旗舰）" },
+      { value: "glm-5.2", label: "GLM-5.2（旗舰）" },
+      { value: "glm-5.1", label: "GLM-5.1" },
+      { value: "glm-5-turbo", label: "GLM-5-Turbo（高速）" },
+      { value: "glm-5", label: "GLM-5" },
+      { value: "glm-4.7", label: "GLM-4.7" },
       { value: "glm-4.7-flash", label: "GLM-4.7-Flash（免费）" },
-      { value: "glm-4-plus", label: "GLM-4-Plus（付费，更强）" },
-      { value: "glm-4-long", label: "GLM-4-Long（付费，超长文本）" }
+      { value: "glm-4.7-flashx", label: "GLM-4.7-FlashX（免费·极速）" },
+      { value: "glm-4.6", label: "GLM-4.6" },
+      { value: "glm-4.5-air", label: "GLM-4.5-Air" },
+      { value: "glm-4.5-airx", label: "GLM-4.5-AirX（极速）" },
+      { value: "glm-4.5-flash", label: "GLM-4.5-Flash（26-01-30 下线→4.7-Flash）" },
+      { value: "glm-4-flash-250414", label: "GLM-4-Flash-250414（免费）" },
+      { value: "glm-4-flashx-250414", label: "GLM-4-FlashX-250414（免费·极速）" },
+      { value: "glm-5v-turbo", label: "GLM-5V-Turbo（视觉）" },
+      { value: "glm-4.6v", label: "GLM-4.6V（视觉）" },
+      { value: "glm-4.6v-flash", label: "GLM-4.6V-Flash（视觉·免费）" },
+      { value: "glm-4.6v-flashx", label: "GLM-4.6V-FlashX（视觉·免费）" },
+      { value: "glm-4.5v", label: "GLM-4.5V（视觉）" },
+      { value: "glm-4.1v-thinking-flashx", label: "GLM-4.1V-Thinking-FlashX（视觉）" },
+      { value: "glm-4.1v-thinking-flash", label: "GLM-4.1V-Thinking-Flash（视觉）" },
+      { value: "glm-4v-flash", label: "GLM-4V-Flash（视觉·免费）" }
     ],
     registerUrl: "https://open.bigmodel.cn/user/apikey",
-    hint: '还没有密钥？<a href="https://open.bigmodel.cn/user/apikey" id="cloud-register-link">点击免费注册智谱 AI</a>，注册后在 API Keys 页面创建密钥。'
+    hint: '还没有密钥？<a href="https://open.bigmodel.cn/user/apikey" id="cloud-register-link">点击免费注册智谱 AI</a>，Flash 系免费。'
   },
   deepseek: {
     name: "DeepSeek",
     baseUrl: "https://api.deepseek.com/v1/",
+    pullModels: true,
     models: [
-      { value: "deepseek-chat", label: "DeepSeek-V3（对话）" },
-      { value: "deepseek-reasoner", label: "DeepSeek-R1（推理）" }
+      { value: "deepseek-flash", label: "DeepSeek V4.1-Flash（1M·支持视觉）" },
+      { value: "deepseek-v4-pro", label: "DeepSeek V4-Pro（旗舰）" }
     ],
     registerUrl: "https://platform.deepseek.com/api_keys",
-    hint: '还没有密钥？<a href="https://platform.deepseek.com/" id="cloud-register-link">点击注册 DeepSeek</a>。'
+    hint: '还没有密钥？<a href="https://platform.deepseek.com/" id="cloud-register-link">点击注册 DeepSeek</a>。（deepseek-chat/reasoner 已于 26-07-24 退役）'
   },
   kimi: {
     name: "Kimi（月之暗面）",
     baseUrl: "https://api.moonshot.cn/v1/",
+    pullModels: true,
     models: [
-      { value: "moonshot-v1-8k", label: "Moonshot V1 8K" },
-      { value: "moonshot-v1-32k", label: "Moonshot V1 32K" },
-      { value: "moonshot-v1-128k", label: "Moonshot V1 128K" }
+      { value: "kimi-k3", label: "Kimi-K3（旗舰·1M）" },
+      { value: "kimi-k2.7-code", label: "Kimi-K2.7-Code（编程）" },
+      { value: "kimi-k2.7-code-highspeed", label: "Kimi-K2.7-Code-Highspeed（编程·高速）" },
+      { value: "kimi-k2.6", label: "Kimi-K2.6" }
     ],
     registerUrl: "https://platform.moonshot.cn/console/api-keys",
-    hint: '还没有密钥？<a href="https://platform.moonshot.cn/" id="cloud-register-link">点击注册 Kimi</a>。'
+    hint: '还没有密钥？<a href="https://platform.moonshot.cn/" id="cloud-register-link">点击注册 Kimi</a>。（moonshot-v1/k2.5 系已 26-08-31 下线）'
   },
   doubao: {
     name: "豆包（字节跳动）",
     baseUrl: "https://ark.cn-beijing.volces.com/api/v3/",
+    pullModels: false,
     models: [
-      { value: "doubao-pro-4k", label: "Doubao Pro 4K" },
-      { value: "doubao-pro-32k", label: "Doubao Pro 32K" },
-      { value: "doubao-pro-128k", label: "Doubao Pro 128K" },
-      { value: "doubao-lite-4k", label: "Doubao Lite 4K（免费额度）" }
+      { value: "doubao-seed-evolving", label: "Doubao Seed-Evolving（统一 ID·自动升级）" },
+      { value: "doubao-seed-2-1-pro-260915", label: "Doubao Seed 2.1-Pro（1M·旗舰）" },
+      { value: "doubao-seed-2-1-lite-260915", label: "Doubao Seed 2.1-Lite（1M）" },
+      { value: "doubao-seed-2-1-turbo-260628", label: "Doubao Seed 2.1-Turbo" },
+      { value: "doubao-seed-2-0-lite-260428", label: "Doubao Seed 2.0-Lite" },
+      { value: "doubao-seed-2-0-mini-260428", label: "Doubao Seed 2.0-Mini" },
+      { value: "doubao-seed-2-0-pro-260215", label: "Doubao Seed 2.0-Pro（即将下线）" },
+      { value: "doubao-seed-2-0-lite-260215", label: "Doubao Seed 2.0-Lite-260215（即将下线）" },
+      { value: "doubao-seed-2-0-code-preview-260215", label: "Doubao Seed 2.0-Code（编程）" },
+      { value: "doubao-seed-character-251128", label: "Doubao Seed Character（角色扮演）" }
     ],
     registerUrl: "https://console.volcengine.com/ark",
-    hint: '还没有密钥？<a href="https://console.volcengine.com/ark" id="cloud-register-link">点击注册豆包</a>，在火山引擎控制台创建 API Key。'
+    hint: '还没有密钥？<a href="https://console.volcengine.com/ark" id="cloud-register-link">点击注册豆包</a>，在火山引擎控制台创建 API Key（无需接入点也可直接用 Model ID）。'
   },
   openai: {
     name: "OpenAI（ChatGPT）",
     baseUrl: "https://api.openai.com/v1/",
+    pullModels: true,
     models: [
-      { value: "gpt-4o", label: "GPT-4o" },
-      { value: "gpt-4o-mini", label: "GPT-4o Mini" },
-      { value: "o3-mini", label: "o3-mini" },
-      { value: "gpt-4.1", label: "GPT-4.1" },
-      { value: "gpt-4.1-mini", label: "GPT-4.1 Mini" }
+      { value: "gpt-5.4", label: "GPT-5.4（新旗舰）" },
+      { value: "gpt-5.4-mini", label: "GPT-5.4-Mini" },
+      { value: "gpt-5.4-nano", label: "GPT-5.4-Nano（最低价）" },
+      { value: "gpt-5-pro", label: "GPT-5-Pro（深度推理）" },
+      { value: "gpt-5.1", label: "GPT-5.1（上一代）" },
+      { value: "gpt-5", label: "GPT-5（上一代）" },
+      { value: "gpt-5-codex", label: "GPT-5-Codex（编程，Responses API）" },
+      { value: "gpt-5-codex-max", label: "GPT-5-Codex-Max（编程）" },
+      { value: "gpt-5-codex-mini", label: "GPT-5-Codex-Mini（编程）" },
+      { value: "o3-pro", label: "o3-Pro" },
+      { value: "o3", label: "o3" },
+      { value: "o4-mini", label: "o4-Mini" },
+      { value: "gpt-oss-120b", label: "GPT-OSS-120B（开源权重）" },
+      { value: "gpt-oss-20b", label: "GPT-OSS-20B（开源权重）" },
+      { value: "gpt-4o", label: "GPT-4o（旧款，ChatGPT 已退役·API 在役）" },
+      { value: "gpt-4.1", label: "GPT-4.1（旧款，API 在役）" },
+      { value: "gpt-4.1-mini", label: "GPT-4.1-Mini（旧款）" }
     ],
     registerUrl: "https://platform.openai.com/api-keys",
     hint: '需要 OpenAI API Key。<a href="https://platform.openai.com/api-keys" id="cloud-register-link">点击管理密钥</a>。'
@@ -1941,21 +1990,43 @@ const CLOUD_PROVIDERS = {
   gemini: {
     name: "Google Gemini",
     baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai/",
+    pullModels: true,
     models: [
-      { value: "gemini-2.5-flash", label: "Gemini 2.5 Flash" },
+      { value: "gemini-3.8-flash", label: "Gemini 3.8 Flash（最新）" },
+      { value: "gemini-3.7-flash", label: "Gemini 3.7 Flash" },
+      { value: "gemini-3.6-flash", label: "Gemini 3.6 Flash" },
+      { value: "gemini-3.5-flash", label: "Gemini 3.5 Flash" },
+      { value: "gemini-3.5-flash-lite", label: "Gemini 3.5 Flash-Lite（高吞吐）" },
+      { value: "gemini-3.1-pro-preview", label: "Gemini 3.1 Pro（Preview）" },
+      { value: "gemini-3.1-flash-lite", label: "Gemini 3.1 Flash-Lite" },
+      { value: "gemini-3-flash-preview", label: "Gemini 3 Flash（Preview）" },
       { value: "gemini-2.5-pro", label: "Gemini 2.5 Pro" },
-      { value: "gemini-2.0-flash", label: "Gemini 2.0 Flash" }
+      { value: "gemini-2.5-flash", label: "Gemini 2.5 Flash" },
+      { value: "gemini-2.5-flash-lite", label: "Gemini 2.5 Flash-Lite" },
+      { value: "gemma-4-31b-it", label: "Gemma 4 31B（开源）" },
+      { value: "gemma-4-26b-a4b-it", label: "Gemma 4 26B MoE（开源）" }
     ],
     registerUrl: "https://aistudio.google.com/apikey",
-    hint: '需要 Google AI API Key。<a href="https://aistudio.google.com/apikey" id="cloud-register-link">点击获取密钥</a>。'
+    hint: '需要 Google AI API Key。<a href="https://aistudio.google.com/apikey" id="cloud-register-link">点击获取密钥</a>，Flash-Lite 有免费额度。'
   },
   anthropic: {
     name: "Anthropic（Claude）",
     baseUrl: "https://api.anthropic.com/v1/",
+    pullModels: true,
     models: [
-      { value: "claude-sonnet-4-20250514", label: "Claude Sonnet 4" },
-      { value: "claude-3.7-sonnet-20250219", label: "Claude 3.7 Sonnet" },
-      { value: "claude-3.5-haiku-20241022", label: "Claude 3.5 Haiku" }
+      { value: "claude-fable-5-1", label: "Claude Fable 5.1（顶配·1M）" },
+      { value: "claude-opus-5-5", label: "Claude Opus 5.5（1M）" },
+      { value: "claude-sonnet-5-5", label: "Claude Sonnet 5.5（1M）" },
+      { value: "claude-haiku-4-5", label: "Claude Haiku 4.5（最快·10-15 起退休窗口）" },
+      { value: "claude-fable-5", label: "Claude Fable 5" },
+      { value: "claude-opus-5", label: "Claude Opus 5" },
+      { value: "claude-sonnet-5", label: "Claude Sonnet 5" },
+      { value: "claude-opus-4-8", label: "Claude Opus 4.8" },
+      { value: "claude-opus-4-7", label: "Claude Opus 4.7" },
+      { value: "claude-opus-4-6", label: "Claude Opus 4.6" },
+      { value: "claude-sonnet-4-6", label: "Claude Sonnet 4.6" },
+      { value: "claude-opus-4-5", label: "Claude Opus 4.5" },
+      { value: "claude-sonnet-4-5", label: "Claude Sonnet 4.5" }
     ],
     registerUrl: "https://console.anthropic.com/settings/keys",
     hint: '需要 Anthropic API Key。<a href="https://console.anthropic.com/settings/keys" id="cloud-register-link">点击管理密钥</a>。'
@@ -1963,11 +2034,18 @@ const CLOUD_PROVIDERS = {
   groq: {
     name: "Groq",
     baseUrl: "https://api.groq.com/openai/v1/",
+    pullModels: true,
     models: [
-      { value: "llama-3.3-70b-versatile", label: "Llama 3.3 70B" },
-      { value: "llama-3.1-8b-instant", label: "Llama 3.1 8B（极速）" },
-      { value: "mixtral-8x7b-32768", label: "Mixtral 8x7B" },
-      { value: "gemma2-9b-it", label: "Gemma 2 9B" }
+      { value: "llama-3.3-70b-versatile", label: "Llama 3.3 70B（~280tps）" },
+      { value: "llama-3.1-8b-instant", label: "Llama 3.1 8B（~560tps 极速）" },
+      { value: "openai/gpt-oss-120b", label: "GPT-OSS-120B（~500tps）" },
+      { value: "openai/gpt-oss-20b", label: "GPT-OSS-20B（~1000tps）" },
+      { value: "qwen/qwen3.8-27b", label: "Qwen3.8-27B（视觉）" },
+      { value: "minimaxai/minimax-m2.7", label: "MiniMax-M2.7" },
+      { value: "openai/gpt-oss-safeguard-20b", label: "GPT-OSS-Safeguard-20B（安全审查）" },
+      { value: "meta-llama/llama-4-scout-17b-16e-instruct", label: "Llama 4 Scout 17B" },
+      { value: "groq/compound", label: "Groq Compound（联网 Agent 系统）" },
+      { value: "groq/compound-mini", label: "Groq Compound-Mini（联网）" }
     ],
     registerUrl: "https://console.groq.com/keys",
     hint: '还没有密钥？<a href="https://console.groq.com/keys" id="cloud-register-link">点击注册 Groq</a>，极速推理，免费额度。'
@@ -1975,44 +2053,131 @@ const CLOUD_PROVIDERS = {
   siliconflow: {
     name: "硅基流动",
     baseUrl: "https://api.siliconflow.cn/v1/",
+    pullModels: true,
     models: [
-      { value: "deepseek-ai/DeepSeek-V3", label: "DeepSeek V3" },
-      { value: "Qwen/Qwen3-8B", label: "Qwen3 8B（免费）" },
-      { value: "Qwen/Qwen2.5-72B-Instruct", label: "Qwen2.5 72B" },
-      { value: "meta-llama/Meta-Llama-3.1-8B-Instruct", label: "Llama 3.1 8B" }
+      { value: "zai-org/GLM-5.3", label: "GLM-5.3（旗舰）" },
+      { value: "zai-org/GLM-5.2", label: "GLM-5.2" },
+      { value: "Pro/zai-org/GLM-5.1", label: "GLM-5.1（Pro 加速版）" },
+      { value: "zai-org/GLM-4.5V", label: "GLM-4.5V（视觉）" },
+      { value: "zai-org/GLM-4.5-Air", label: "GLM-4.5-Air" },
+      { value: "deepseek-ai/DeepSeek-V4-Flash", label: "DeepSeek V4-Flash（夜间时段半价）" },
+      { value: "deepseek-ai/DeepSeek-V4-Pro", label: "DeepSeek V4-Pro（旗舰）" },
+      { value: "deepseek-ai/DeepSeek-V3.2", label: "DeepSeek V3.2" },
+      { value: "deepseek-ai/DeepSeek-V3.1-Terminus", label: "DeepSeek V3.1-Terminus" },
+      { value: "moonshotai/Kimi-K2.7-Code", label: "Kimi K2.7-Code（编程）" },
+      { value: "Pro/moonshotai/Kimi-K2.6", label: "Kimi K2.6（Pro 加速版）" },
+      { value: "Qwen/Qwen3.8-27B", label: "Qwen3.8-27B" },
+      { value: "Qwen/Qwen3.6-35B-A3B", label: "Qwen3.6-35B-A3B" },
+      { value: "Qwen/Qwen3.6-27B", label: "Qwen3.6-27B" },
+      { value: "Qwen/Qwen3.5-122B-A10B", label: "Qwen3.5-122B-A10B（MoE 大杯）" },
+      { value: "Qwen/Qwen3.5-35B-A3B", label: "Qwen3.5-35B-A3B" },
+      { value: "Qwen/Qwen3.5-27B", label: "Qwen3.5-27B" },
+      { value: "meituan-longcat/LongCat-2.0", label: "LongCat-2.0（美团）" },
+      { value: "stepfun-ai/Step-3.5-Flash", label: "Step-3.5-Flash（阶跃）" },
+      { value: "tencent/Hunyuan-A13B-Instruct", label: "Hunyuan-A13B（混元·免费）" },
+      { value: "XingChenAGI/Xing4.0-29B", label: "Xing4.0-29B（星尘·免费）" }
     ],
     registerUrl: "https://cloud.siliconflow.cn/",
-    hint: '还没有密钥？<a href="https://cloud.siliconflow.cn/" id="cloud-register-link">点击免费注册硅基流动</a>。'
+    hint: '还没有密钥？<a href="https://cloud.siliconflow.cn/" id="cloud-register-link">点击免费注册硅基流动</a>。「🔄 拉取」可拿全量模型（内置只列主力）。'
   },
   custom: {
     name: "自定义",
     baseUrl: "",
-    models: [{ value: "custom", label: "自定义模型（请在下方填写）" }],
+    pullModels: true,
+    models: [],
     registerUrl: "",
-    hint: '填写任意 OpenAI 兼容的 API 地址和密钥。支持 one-api、new-api 等中转站。'
+    hint: '填写任意 OpenAI 兼容的 API 地址和密钥。支持 one-api、new-api 等中转站。模型名手填，或填好后点「🔄 拉取」从列表选。'
   }
 };
 
-document.querySelector("#cloud-provider")?.addEventListener("change", () => {
+// v3.21.0：切服务商重建模型下拉，支持恢复已存档模型（savedModel 不在清单里时追加选中项，杜绝回填漂移）；
+// custom 走模型名手填框；豆包无拉取端点故隐藏「🔄 拉取」按钮。
+function applyCloudProviderChange(savedModel) {
   const provider = document.querySelector("#cloud-provider").value;
   const modelSelect = document.querySelector("#cloud-model");
   const customFields = document.querySelector("#cloud-custom-fields");
   const keyHint = document.querySelector("#cloud-key-hint");
   const providerHint = document.querySelector("#cloud-provider-hint");
+  const fetchResult = document.querySelector("#cloud-fetch-result");
+  const fetchButton = document.querySelector("#cloud-fetch-models");
   const config = CLOUD_PROVIDERS[provider];
   if (!config) return;
   // 更新模型下拉
   modelSelect.innerHTML = config.models.map((m) => `<option value="${m.value}">${m.label}</option>`).join("");
+  // 已存档模型保底：清单里有就选中；没有（例如服务商刚退役该款）就追加一条标注存档的 option 选中，保存时不漂移
+  if (savedModel) {
+    if (config.models.some((m) => m.value === savedModel)) {
+      modelSelect.value = savedModel;
+    } else if (savedModel !== "custom") {
+      const archived = document.createElement("option");
+      archived.value = savedModel;
+      archived.textContent = `${savedModel}（已存档·清单暂无）`;
+      modelSelect.appendChild(archived);
+      modelSelect.value = savedModel;
+    }
+  }
   // 更新服务商提示
-  if (providerHint) providerHint.textContent = config.name === "智谱 AI" ? "智谱 AI 的 GLM-4-Flash 模型永久免费，适合日常对话。" : `${config.name} — 在下方输入 API 密钥后即可使用。`;
-  // 显示/隐藏自定义字段
+  const blurbs = {
+    zhipu: "智谱 AI — GLM-4.7/GLM-4.6V Flash 系免费。",
+    anthropic: "Anthropic — Claude 5.x 系按量计费，Sonnet 最均衡。"
+  };
+  if (providerHint) providerHint.textContent = blurbs[provider] || `${config.name} — 在下方输入 API 密钥后即可使用。`;
+  // 显示/隐藏自定义字段与模型控件（custom：模型手填框 + datalist；其它：下拉）
   customFields.hidden = provider !== "custom";
+  const modelLabel = document.querySelector("#cloud-model-label");
+  if (modelLabel) modelLabel.hidden = provider === "custom";
+  // 拉取按钮：豆包不支持官方模型列表端点，隐藏
+  if (fetchButton) fetchButton.hidden = config.pullModels === false;
+  if (fetchResult) {
+    fetchResult.textContent = config.pullModels === false ? "该服务商无模型列表接口，从以上清单选择即可。" : "";
+  }
   if (config.baseUrl) document.querySelector("#cloud-base-url").value = config.baseUrl;
   else document.querySelector("#cloud-base-url").value = "";
   // 更新密钥提示
   if (keyHint) keyHint.innerHTML = config.hint;
   // v3.15.7 注册链接接管——切服务商重写 hint 后重新绑定（否则点「点击注册 DeepSeek」等会把主窗口导航走）
   bindExternalLinks(keyHint);
+}
+
+document.querySelector("#cloud-provider")?.addEventListener("change", () => applyCloudProviderChange());
+
+// ── v3.21.0「🔄 拉取」：走官方 GET /models 实时拉取该密钥可用的全部模型 ──
+document.querySelector("#cloud-fetch-models")?.addEventListener("click", async () => {
+  const button = document.querySelector("#cloud-fetch-models");
+  const resultEl = document.querySelector("#cloud-fetch-result");
+  if (!button || !resultEl || button.disabled) return;
+  const provider = document.querySelector("#cloud-provider")?.value || "zhipu";
+  const config = CLOUD_PROVIDERS[provider];
+  if (!config || config.pullModels === false) return;
+  const apiKey = document.querySelector("#cloud-api-key")?.value || ""; // 留空时主进程用已保存密钥兜底
+  const baseUrl = document.querySelector("#cloud-base-url")?.value || config.baseUrl || "";
+  button.disabled = true;
+  button.textContent = "拉取中…";
+  resultEl.textContent = "正在请求官方模型列表…";
+  try {
+    const result = await window.agentChatPro.fetchCloudModels({ provider, apiKey, baseUrl });
+    if (!result?.ok) {
+      resultEl.textContent = `⚠️ ${result?.reason || "拉取失败，请检查密钥和网络"}`;
+      return;
+    }
+    // custom：填 datalist（手填框照用）；其它：全量替换下拉并保持当前选中
+    if (provider === "custom") {
+      const datalist = document.querySelector("#cloud-custom-model-list");
+      if (datalist) datalist.innerHTML = result.models.map((m) => `<option value="${m.value}">${m.label === m.value ? "" : m.label}</option>`).join("");
+      resultEl.textContent = `✅ 已拉取 ${result.count} 个模型，点模型输入框可从列表选择`;
+    } else {
+      const modelSelect = document.querySelector("#cloud-model");
+      const current = modelSelect?.value || "";
+      modelSelect.innerHTML = result.models.map((m) => `<option value="${m.value}">${m.label}</option>`).join("");
+      if (current && result.models.some((m) => m.value === current)) modelSelect.value = current;
+      resultEl.textContent = `✅ 已拉取 ${result.count} 个该密钥可用的模型`;
+    }
+  } catch (error) {
+    resultEl.textContent = `⚠️ 拉取失败：${error?.message || error}`;
+  } finally {
+    button.disabled = false;
+    button.textContent = "🔄 拉取";
+  }
 });
 
 // v3.15.7 静态初始提示（页面加载时的智谱注册链接）同样接管

@@ -48,6 +48,8 @@ const { buildCommandWithMode, buildBridgeStartWithMode, buildLocalArgsWithMode }
 const { NetworkManager, STATES } = require("./network/network-manager.cjs");
 const { LatencyMonitor } = require("./network/latency-monitor.cjs");
 const { sendCloudChat, buildMessages, verifyCloudConnection, testProxyConnectivity } = require("./cloud-chat.cjs");
+// v3.21.0 云端「拉取模型列表」：官方 GET /models 实时拉取该密钥可用的全部模型
+const { fetchProviderModels } = require("./cloud-models.cjs");
 const { executeToolCall, toolDefinitions, MAX_TOOL_ROUNDS } = require("./cloud-tools.cjs");
 const { collapseRepetition } = require("./repetition-guard.cjs"); // v3.15.5 修复1：复读检测折叠
 const {
@@ -335,6 +337,20 @@ app.whenReady().then(async () => {
     writeLog("conversation_archives_failed", { error });
   }
   ipcMain.handle("settings:load", () => ({ ...getSettings(), conversationRecoveryNotice: getConversationRecoveryNotice() }));
+  // v3.21.0 云端「拉取模型列表」：密钥用渲染层现值，留空时兜底已保存密钥（custom 用现填 baseUrl）
+  ipcMain.handle("cloud:fetch-models", async (_event, payload = {}) => {
+    let savedApiKey = "";
+    try {
+      savedApiKey = String(getCloudAiConfig().apiKey || "");
+    } catch {
+      savedApiKey = "";
+    }
+    const merged = { ...payload, apiKey: String(payload.apiKey || "").trim() || savedApiKey };
+    const result = await fetchProviderModels(merged);
+    if (!result.ok) writeLog("cloud_fetch_models_failed", { provider: payload.provider, reason: result.reason });
+    else writeLog("cloud_fetch_models_ok", { provider: payload.provider, count: result.count });
+    return result;
+  });
   ipcMain.handle("settings:save", async (_event, input) => {
     const previous = getSettings();
     const requestedDirectory = input.dataDirectory || previous.defaultDataDirectory;

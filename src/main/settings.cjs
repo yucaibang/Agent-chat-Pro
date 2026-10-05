@@ -516,16 +516,18 @@ function getSshConnection() {
 
 function getCloudAiConfig() {
   const raw = readRaw();
+  // v3.21.0：defaultModel 全部刷新为 2026-10 各家现役模型（原先的 deepseek-chat / moonshot-v1-8k /
+  // doubao-pro-4k / claude-sonnet-4-20250514 等均已退役，新用户切司会 404）
   const providerConfigs = {
-    zhipu: { baseURL: "https://open.bigmodel.cn/api/paas/v4", defaultModel: "glm-4-flash" },
-    deepseek: { baseURL: "https://api.deepseek.com/v1", defaultModel: "deepseek-chat" },
-    kimi: { baseURL: "https://api.moonshot.cn/v1", defaultModel: "moonshot-v1-8k" },
-    doubao: { baseURL: "https://ark.cn-beijing.volces.com/api/v3", defaultModel: "doubao-pro-4k" },
-    openai: { baseURL: "https://api.openai.com/v1", defaultModel: "gpt-4o-mini" },
-    gemini: { baseURL: "https://generativelanguage.googleapis.com/v1beta/openai", defaultModel: "gemini-2.0-flash" },
-    anthropic: { baseURL: "https://api.anthropic.com/v1", defaultModel: "claude-sonnet-4-20250514" },
+    zhipu: { baseURL: "https://open.bigmodel.cn/api/paas/v4", defaultModel: "glm-4.7-flash" },
+    deepseek: { baseURL: "https://api.deepseek.com/v1", defaultModel: "deepseek-flash" },
+    kimi: { baseURL: "https://api.moonshot.cn/v1", defaultModel: "kimi-k2.6" },
+    doubao: { baseURL: "https://ark.cn-beijing.volces.com/api/v3", defaultModel: "doubao-seed-evolving" },
+    openai: { baseURL: "https://api.openai.com/v1", defaultModel: "gpt-5.4-mini" },
+    gemini: { baseURL: "https://generativelanguage.googleapis.com/v1beta/openai", defaultModel: "gemini-2.5-flash" },
+    anthropic: { baseURL: "https://api.anthropic.com/v1", defaultModel: "claude-sonnet-5-5" },
     groq: { baseURL: "https://api.groq.com/openai/v1", defaultModel: "llama-3.3-70b-versatile" },
-    siliconflow: { baseURL: "https://api.siliconflow.cn/v1", defaultModel: "deepseek-ai/DeepSeek-V3" },
+    siliconflow: { baseURL: "https://api.siliconflow.cn/v1", defaultModel: "Qwen/Qwen3.5-27B" },
     custom: { baseURL: "", defaultModel: "" }
   };
   const provider = raw.cloudAiProvider || "zhipu";

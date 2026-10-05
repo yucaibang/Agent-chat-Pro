@@ -79,6 +79,8 @@ contextBridge.exposeInMainWorld("agentChatPro", {
   testConnection: (settings) => ipcRenderer.invoke("connection:test", settings),
   // ── 代理连通性测试 IPC ──
   testProxy: (proxyConfig) => ipcRenderer.invoke("chat:test-proxy", proxyConfig),
+  // v3.21.0 云端「拉取模型列表」IPC
+  fetchCloudModels: (payload) => ipcRenderer.invoke("cloud:fetch-models", payload),
   // ── 上下文压缩 IPC（v3.10.0）──
   compactContext: (payload) => ipcRenderer.invoke("chat:compact", payload),
   // 上下文进度条回填（v3.12.1）：切换对话时取 main 侧记录的 {tokens, limit}
