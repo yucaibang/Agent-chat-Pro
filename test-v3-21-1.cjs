@@ -74,8 +74,8 @@ async function main() {
   });
 
   console.log("\n=== C. 版本 ===");
-  await test("C1. package.json 3.21.1（semver 形态）", () => {
-    assert.strictEqual(pkg.version, "3.21.1");
+  await test("C1. package.json semver（版本不写死，按 v3-19-0 先例——v3.21.1 后续版本不误杀）", () => {
+    assert.ok(/^\d+\.\d+\.\d+$/.test(pkg.version), `package.json 应为 semver 形态，实际 ${pkg.version}`);
   });
 
   console.log("\n=== D. 主进程模块加载冒烟（实跑） ===");

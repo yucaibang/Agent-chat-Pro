@@ -1024,7 +1024,11 @@ app.whenReady().then(async () => {
       const runCloudWithTools = async () => {
         let loopMessages = cloudMessages;
         // v3.19.0 F3：工具循环轮数上限可配（advanced.cloud.maxToolRounds，5~50 默认 25）
-        const advancedCloud = config.advancedEffective?.cloud || {};
+        // v3.21.2 TDZ 修复：原写 config 引用的是 handler 顶层（云端分支之后、云端路径永不执行）
+        // 的 const config → 云端发消息必 TDZ（ReferenceError: Cannot access '_0x27f1ac'）。
+        // v3.19/v3.20 装机没炸纯属混淆器洗牌侥幸掩盖。改为 cloudConfig（本块内先声明的 getCloudAiConfig()），
+        // 同源 advancedEffective 字段（另见 cloudCallbacks.advanced 的正确示范 L990），语义等价。
+        const advancedCloud = cloudConfig.advancedEffective?.cloud || {};
         const maxToolRounds = Number.isInteger(Number(advancedCloud.maxToolRounds))
           && Number(advancedCloud.maxToolRounds) >= 5 && Number(advancedCloud.maxToolRounds) <= 50
           ? Number(advancedCloud.maxToolRounds) : MAX_TOOL_ROUNDS;
