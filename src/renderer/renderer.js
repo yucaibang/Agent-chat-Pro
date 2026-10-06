@@ -1842,7 +1842,9 @@ async function refreshAgentBridgeInfo() {
     const tokenInput = document.querySelector("#agentbridge-token");
     if (tokenInput) tokenInput.value = info.token || "";
     const urlText = document.querySelector("#agentbridge-url");
-    if (urlText) urlText.textContent = info.port ? `http://127.0.0.1:${info.port}/api/send` : "（HTTP 服务未启动）";
+    // ⚠ #agentbridge-url 是 <input>（index.html 431 行）——input 显示靠 value 属性，textContent 赋值不渲染（v1.0.0 装机实锤空白）；
+    // listening 才有 port（stop 后 boundPort 残留旧值，别用 port 判断服务在不在）
+    if (urlText) urlText.value = info.listening ? `http://127.0.0.1:${info.port}/api/send` : "（HTTP 服务未启动）";
     const targetName = document.querySelector("#agentbridge-target-name");
     if (targetName) {
       const settings = await window.agentChatPro.loadSettings();

@@ -704,7 +704,7 @@ async function main() {
     assert_.strictEqual(getFake("#agentbridge-port").value, 21774, "端口回填");
     assert_.strictEqual(getFake("#agentbridge-gate").checked, true, "放行闸回填");
     assert_.strictEqual(getFake("#agentbridge-token").value, "bridge-token-abc", "Token 回填");
-    assert_.ok(String(getFake("#agentbridge-url").textContent).includes("http://127.0.0.1:21774/api/send"), "接入地址回填");
+    assert_.ok(String(getFake("#agentbridge-url").value).includes("http://127.0.0.1:21774/api/send"), "接入地址回填（#agentbridge-url 是 <input>——显示靠 value，textContent 不渲染，v1.0.0 装机实锤空白）");
     assert_.ok(String(getFake("#agentbridge-target-name").textContent).includes("对话"), "目标对话名回填");
   });
 
@@ -779,7 +779,7 @@ async function main() {
 
   await test("G2. 管线：editionInfoFor 随形态出 exe/安装包/清单名", () => {
     assert.ok(pipelineSrc.includes('BRIDGE_PRODUCT = "Agent Chat Pro Bridge"'), "桥产品名常量");
-    assert.ok(pipelineSrc.includes('BRIDGE_VERSION = "1.0.0"'), "桥独立版本");
+    assert.ok(pipelineSrc.includes('BRIDGE_VERSION = "1.0.1"'), "桥独立版本（1.0.1=接入地址 input/value 错位修复）");
     assert.ok(pipelineSrc.includes("SHA256SUMS-bridge.txt"), "桥清单文件名");
     assert.ok(pipelineSrc.includes("isBridge ? BRIDGE_VERSION : pkg.version"), "版本取值分形态");
     assert.ok(pipelineSrc.includes("applyEditionOverlay(info)"), "构建期形态覆写");

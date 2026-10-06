@@ -90,7 +90,7 @@ const KEY_FILE_REL = path.join("dist", ".bytecode-key.json");
 // src/main/edition.cjs 覆写为 bridge 形态 + package.json 品牌临时改写；step5 统一还原。
 // 铁律不变：构建前必须 commit（git checkout HEAD 是还原路径）。
 const BRIDGE_PRODUCT = "Agent Chat Pro Bridge";
-const BRIDGE_VERSION = "1.0.0";
+const BRIDGE_VERSION = "1.0.1";
 const BRIDGE_APPID = "com.jiang.agentChatProBridge";
 
 /** 目标形态信息：exe 名 / 安装包名 / 校验清单全部随形态走（step4/6/7 不再硬编码主版名） */
