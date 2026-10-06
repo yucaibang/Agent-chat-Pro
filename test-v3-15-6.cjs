@@ -106,7 +106,7 @@ async function runTests() {
     assert.ok(enterBlock.includes("sendMessage();"), "Enter 发送路径丢失");
   });
   await test("sendMessage 拦截归属化本对话 + 明确提示其他对话（不再静默 return）", () => {
-    const sendFnHead = extractBetween(rendererSrc, "async function sendMessage() {", "const userItem = addMessage");
+    const sendFnHead = extractBetween(rendererSrc, "async function sendMessage(composerText = elements.prompt.value, opts = {}) {", "const userItem = addMessage");
     assert.ok(sendFnHead.includes('if (streamingConversationId === conversationId) return;'), "本对话任务进行中仍应静默拦截");
     assert.ok(sendFnHead.includes("setConnection("), "其他对话任务占用时未给出提示");
     assert.ok(sendFnHead.includes("完成后即可发送"), "提示文案缺失（同一时间仅一个任务）");
@@ -117,7 +117,7 @@ async function runTests() {
     assert.ok(!loadFn.includes("if (activeId) return;"), "loadConversation 锁回退");
   });
   await test("addMessage 仍挂载消息（v3.15.2 不回退）", () => {
-    const fn = rendererSrc.split("function addMessage(kind, text = \"\") {")[1];
+    const fn = rendererSrc.split('function addMessage(kind, text = "", meta = {}) {')[1];
     assert.ok(fn.includes("elements.messages.append(item);"), "addMessage 未挂载消息");
   });
   await test("计量隔离仍在（v3.15.1 不回退）", () => {

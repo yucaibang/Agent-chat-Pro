@@ -868,3 +868,79 @@ textarea { resize: vertical; min-height: 60px; }
 .adv-detect-result { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; border: 1px dashed var(--border-control); border-radius: 8px; }
 .adv-detect-row { display: flex; align-items: center; gap: 10px; font-size: 12px; color: var(--text-secondary); flex-wrap: wrap; }
 .adv-detect-row strong { color: var(--text-primary); font-weight: 600; white-space: nowrap; }
+
+/* ── 阉割版 Bridge Edition：云端AI 标记徽章 + Agent HTTP 桥放行队列 ── */
+.cloudai-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: fit-content;
+  margin-bottom: 6px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: .3px;
+  color: var(--accent-bright);
+  background: var(--bg-mode-switch);
+  border: 1px solid var(--accent);
+}
+.bridge-queue {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 260px;
+  overflow-y: auto;
+  margin: 0 14px 10px;
+  padding: 10px;
+  border: 1px dashed var(--accent);
+  border-radius: 12px;
+  background: var(--bg-deep);
+}
+.bridge-queue-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-tool-card);
+  border-radius: 9px;
+  background: var(--bg-mode-switch);
+}
+.bridge-queue-head { display: flex; align-items: center; }
+.bridge-queue-tag {
+  font-size: 11px;
+  font-weight: 650;
+  color: var(--accent-bright);
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--accent);
+}
+.bridge-queue-text {
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--text-primary);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 120px;
+  overflow-y: auto;
+}
+.bridge-queue-meta { font-size: 11px; color: var(--text-muted); }
+.bridge-queue-actions { display: flex; gap: 8px; }
+.bridge-queue-actions button { padding: 6px 16px; border-radius: 8px; font-size: 12px; cursor: pointer; }
+.bridge-approve {
+  color: var(--bg-main, #14171a);
+  background: var(--accent);
+  border: 1px solid var(--accent);
+  font-weight: 650;
+}
+.bridge-approve:hover:not(:disabled) { background: var(--accent-bright); }
+.bridge-approve:disabled { opacity: .5; cursor: wait; }
+.bridge-reject {
+  color: var(--text-secondary);
+  background: transparent;
+  border: 1px solid var(--border-control);
+}
+.bridge-reject:hover:not(:disabled) { color: var(--text-primary); border-color: var(--text-muted); }
+[data-theme="light"] .bridge-queue { background: #fbfaf8; }
+[data-theme="light"] .bridge-approve { color: #fff; }
+.bridge-queue:empty { display: none; }

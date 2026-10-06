@@ -169,16 +169,17 @@ async function runObfuscateTests() {
 // ── 5. 构建管线 SHA-256 清单 ─────────────────
 async function runPipelineTests() {
   await test("build-pipeline 新增 step7_checksums 且 verify 通过后调用", () => {
-    assert.ok(pipelineSrc.includes("function step7_checksums()"), "step7 应存在");
-    assert.ok(/const verified = step6_verify\(\);\s*\n?\s*if \(!verified\) throw[^;]+;\s*\n\s*step7_checksums\(\);/.test(pipelineSrc),
+    assert.ok(pipelineSrc.includes("function step7_checksums(info)"), "step7 应存在（v3.21.2 后参数化接形态 info）");
+    assert.ok(/const verified = step6_verify\(info\);\s*\n?\s*if \(!verified\) throw[^;]+;\s*\n\s*step7_checksums\(info\);/.test(pipelineSrc),
       "step7 应在 verify 通过后调用");
     assert.ok(pipelineSrc.includes("SHA256SUMS.txt"), "产物名正确");
+    assert.ok(pipelineSrc.includes("SHA256SUMS-bridge.txt"), "桥形态清单文件名（v1 Bridge Edition）");
     assert.ok(pipelineSrc.includes("certutil -hashfile"), "清单附 Windows 校验命令提示");
   });
 
   await test("step7 只覆盖本次构建版本（从 package.json 读 version 过滤）", () => {
-    assert.ok(pipelineSrc.includes(`Agent Chat Pro-${"…"}-Setup.exe`) || /`Agent Chat Pro-\$\{version\}-Setup\.exe`/.test(pipelineSrc),
-      "安装包名按版本动态拼接");
+    assert.ok(/`Agent Chat Pro-\$\{version\}-Setup\.exe`/.test(pipelineSrc) || /`\$\{productName\}-\$\{version\}-Setup\.exe`/.test(pipelineSrc),
+      "安装包名按版本动态拼接（v3.21.2 后 productName 随形态）");
     assert.ok(pipelineSrc.includes('path.join(PROJECT_ROOT, "package.json")') || pipelineSrc.includes('require("../package.json")'),
       "版本号从 package.json 读取");
   });

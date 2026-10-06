@@ -135,9 +135,11 @@ function deleteConversation(id) {
   return true;
 }
 
-function addUserMessage(id, text, attachmentNames = []) {
+function addUserMessage(id, text, attachmentNames = [], senderType = "") {
   return update(id, (conversation) => {
     const message = { mid: randomUUID(), role: "user", text, attachmentNames, at: new Date().toISOString() }; // v3.15.5 修复2：mid 删除锚点
+    // 阉割版 Bridge Edition：云端AI 经 HTTP 桥注入的消息带 senderType 渲染层徽章；文本前缀已在 chat:send 主进程侧强制追加
+    if (senderType) message.senderType = senderType;
     conversation.messages.push(message);
     if (conversation.title === "新对话") conversation.title = makeTitle(text);
     return message;

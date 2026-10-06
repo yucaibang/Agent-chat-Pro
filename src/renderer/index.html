@@ -155,6 +155,9 @@
         </div>
       </div>
 
+      <!-- 阉割版 Bridge Edition：云端AI 放行队列——浮层卡片，每条云端AI消息等用户点「放行」才转发 -->
+      <section id="bridge-queue" class="bridge-queue" hidden></section>
+
       <form id="composer" class="composer">
         <input id="file-picker" type="file" multiple hidden />
         <div id="attachment-list" class="attachment-list" hidden></div>
@@ -413,6 +416,29 @@
               <label>社区名<input id="n2n-community" placeholder="社区标识" /></label>
               <label>加密密钥<input id="n2n-key" type="password" placeholder="可选" /></label>
             </details>
+          </div>
+        </details>
+        <details id="agentbridge-settings" hidden>
+          <summary>🤖 Agent HTTP 桥（云端AI 接入）</summary>
+          <div class="device-control-card">
+            <div class="device-control-heading">
+              <div><strong>云端AI → NAS Agent 对话链</strong><small>云端 AI 用 curl 调本桥发消息；每条都会被标记「云端AI发送 · 非用户本人」</small></div>
+            </div>
+            <div class="two-columns">
+              <label>桥端口<input id="agentbridge-port" type="number" min="1024" max="65535" value="21774" /></label>
+              <label class="checkbox"><input id="agentbridge-gate" type="checkbox" checked /><span>人工放行（云端AI消息需点「放行」才转发）</span></label>
+            </div>
+            <label>接入地址（仅本机回环可访问）<input id="agentbridge-url" readonly /></label>
+            <label>桥 Token<input id="agentbridge-token" readonly /></label>
+            <p class="hint">把接入地址和 Token 一起告诉云端 AI。云端AI消息文本一律强制带前缀「【云端AI消息 · 非用户本人】」，聊天气泡另带 🤖 徽章——这不是你本人发的消息。</p>
+            <label>桥目标对话：<span id="agentbridge-target-name">跟随最新对话</span>
+              <span class="field-hint">放行后的消息在该对话中以 SSH 模式转发给 NAS Agent；不指定目标时自动用最新对话。</span>
+            </label>
+            <div class="device-control-actions">
+              <button type="button" id="agentbridge-copy-token" class="secondary">复制 Token</button>
+              <button type="button" id="agentbridge-reset-target" class="secondary">重置为跟随最新对话</button>
+              <button type="button" id="agentbridge-save" class="primary">保存并重启桥</button>
+            </div>
           </div>
         </details>
         <p id="settings-status" class="status"></p>

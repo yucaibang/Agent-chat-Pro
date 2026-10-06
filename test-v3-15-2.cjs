@@ -34,11 +34,11 @@ const pkg = JSON.parse(fs.readFileSync(PACKAGE_PATH, "utf8"));
 async function runTests() {
   // ⭐ 核心修复：addMessage 必须把消息挂进 DOM
   await test("addMessage 含 elements.messages.append(item)（v3.15.2 核心修复）", () => {
-    const fn = rendererSrc.split("function addMessage(kind, text = \"\") {")[1].split("\nfunction isNearBottom")[0];
+    const fn = rendererSrc.split('function addMessage(kind, text = "", meta = {}) {')[1].split("\nfunction isNearBottom")[0];
     assert.ok(fn.includes("elements.messages.append(item);"), "addMessage 未挂载消息（聊天区空白的根因）");
   });
   await test("挂载行在滚动判断之前（先入 DOM 再滚动）", () => {
-    const fn = rendererSrc.split("function addMessage(kind, text = \"\") {")[1].split("\nfunction isNearBottom")[0];
+    const fn = rendererSrc.split('function addMessage(kind, text = "", meta = {}) {')[1].split("\nfunction isNearBottom")[0];
     const appendIndex = fn.indexOf("elements.messages.append(item);");
     const scrollIndex = fn.indexOf("isNearBottom()");
     assert.ok(appendIndex >= 0 && scrollIndex > appendIndex, "挂载应在滚动判断之前");

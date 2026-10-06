@@ -78,6 +78,8 @@ const OBFUSCATE_FILES = {
     "main/status-event-normalizer.cjs", // 状态归一化
     "main/claude-launch-diagnostics.cjs", // Claude 启动失败诊断（v3.7.1）
     "main/cache-cleaner.cjs",   // Windows 系统缓存清理（v3.10.0）
+    "main/edition.cjs",          // 产品形态门控（Bridge Edition）——构建期被 build-pipeline 覆写形态，step5 还原
+    "main/agent-http-bridge.cjs", // Agent HTTP 桥（Bridge Edition 专属，零 electron 依赖）
     "main/bytecode-fallback.cjs", // 字节码降级执行器（v3.12.0，含拆分密钥——混淆前注入）
     "main/daemon-chat.cjs",     // AtomCode daemon 引擎 adapter（v3.13.0）
     "main/custom-cli.cjs",      // 自定义命令纯文本引擎（v3.13.0）

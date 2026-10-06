@@ -18,7 +18,9 @@ const elements = {
   composerModePopup: document.querySelector("#composer-mode-popup"),
   composerModeList: document.querySelector("#composer-mode-list"),
   stateText: document.querySelector("#state-text"),
-  stateDot: document.querySelector("#state-dot")
+  stateDot: document.querySelector("#state-dot"),
+  // 阉割版 Bridge Edition：云端AI 放行队列（composer 上方浮层卡片）
+  bridgeQueue: document.querySelector("#bridge-queue")
 };
 
 let sessionId = "";
@@ -43,6 +45,13 @@ let streamingConversationId = "";  // 进行中任务所属对话（v3.15.0：�
 // v3.15.6：输入框草稿按对话隔离——切走时保存（文本+附件），进入时恢复，新对话干净待发送
 const composerDrafts = new Map();  // conversationId → { text, attachments }
 let streamingConnectionMode = "";  // 进行中任务发起时的连接模式（状态条文案用）
+
+// ── 产品形态门控（阉割版 Bridge Edition）：getEdition IPC 返回，默认主版全开 ──
+let editionState = {
+  edition: "main",
+  productName: "Agent Chat Pro",
+  gates: { deviceLink: true, printLink: true, localEngines: true, easterEgg: true, agentBridge: false, cloudChat: true, cacheClean: true, signalLights: true }
+};
 
 // v3.15.0 功能2：历史列表模式图标（对话的 lastConnectionMode → 标题后徽标）
 const CONVERSATION_MODE_ICONS = { ssh: "🖥️", cloud: "☁️", local: "💻" };
@@ -448,7 +457,7 @@ function updateConnectionModeUI() {
   document.querySelector("#mode-local").classList.toggle("active", isLocal);
   document.querySelector("#ssh-fields").hidden = isLocal || isCloud;
   document.querySelector("#cloud-fields").hidden = !isCloud;
-  document.querySelector("#device-control-settings").hidden = isLocal || isCloud;
+  document.querySelector("#device-control-settings").hidden = isLocal || isCloud || editionState.gates.deviceLink === false;
   document.querySelector("#bridge-settings").hidden = isLocal || isCloud;
   // 本机引擎子面板（v3.13.0）
   const localFields = document.querySelector("#local-fields");
@@ -754,10 +763,18 @@ function resetContextBar() {
   renderContextBar();
 }
 
-function addMessage(kind, text = "") {
+function addMessage(kind, text = "", meta = {}) {
   elements.empty.hidden = true;
   const item = document.createElement("article");
   item.className = `message ${kind}`;
+  // 阉割版 Bridge Edition：云端AI 经 HTTP 桥注入的消息——气泡顶部强制徽章（文本本体另带
+  // 「【云端AI消息 · 非用户本人】」前缀，双保险：前缀进 NAS Agent 上下文，徽章防人看走眼）
+  if (meta.senderType === "cloud-ai") {
+    const badge = document.createElement("div");
+    badge.className = "cloudai-badge";
+    badge.textContent = "🤖 云端AI发送 · 非用户本人";
+    item.append(badge);
+  }
   const content = document.createElement("div");
   content.className = "message-content";
   content.textContent = text;
@@ -1088,7 +1105,8 @@ function renderReturnedFiles(item, files = []) {
     open.addEventListener("click", () => runFileAction(open, () => window.agentChatPro.openRemoteFile(file)));
     actions.append(save, open);
     // v3.16.1 打印联动：AI 产物图片下方出现「打印」按钮（检测到本机 Agent print 打印终端时才显示）
-    if (file.isImage) {
+    // 阉割版 Bridge Edition：printLink 门控关闭 → 按钮不再出现（主进程 print:* IPC 也已注册拦截）
+    if (file.isImage && editionState.gates.printLink !== false) {
       window.agentChatPro.printDetect().then((present) => {
         if (!present || actions.querySelector(".print-btn")) return;
         const print = document.createElement("button");
@@ -1293,8 +1311,10 @@ async function loadConversation(id) {
   const conversation = await window.agentChatPro.getConversation(id);
   if (!conversation) return;
   // v3.15.0 功能2：切到另一模式的对话时，聊天界面模式跟着切换（同步持久化——main 侧 chat:send 读已保存设置）
+  // 阉割版 Bridge：本机模式被形态门控关闭——lastMode=local 一律不跟随，保持 SSH
+  const allowedLastModes = editionState.gates.localEngines === false ? ["ssh", "cloud"] : ["ssh", "cloud", "local"];
   const lastMode = conversation.lastConnectionMode || "";
-  if (lastMode && ["ssh", "cloud", "local"].includes(lastMode) && lastMode !== currentConnectionMode) {
+  if (lastMode && allowedLastModes.includes(lastMode) && lastMode !== currentConnectionMode) {
     elements.form.elements.namedItem("connectionMode").value = lastMode;
     updateConnectionModeUI();
     try {
@@ -1324,7 +1344,7 @@ async function loadConversation(id) {
   const streamingOngoing = Boolean(activeId && streamingConversationId === conversation.id);
   conversation.messages.forEach((message) => {
     if (message.draft && streamingOngoing) return;
-    const item = addMessage(message.role, message.text);
+    const item = addMessage(message.role, message.text, { senderType: message.senderType || "" });
     // v3.15.5 修复2：写入落库锚点（mid/at/role）——右键「删除此条及下方所有消息」据此同步落库删除
     item.dataset.msgId = message.mid || "";
     item.dataset.msgAt = message.at || "";
@@ -1509,11 +1529,19 @@ async function openSettings() {
   elements.dialog.showModal();
 }
 
-async function sendMessage() {
-  const message = elements.prompt.value.trim();
+async function sendMessage(composerText = elements.prompt.value, opts = {}) {
+  // 阉割版 Bridge Edition：云端AI 经 HTTP 桥放的轮（opts.bridge.msgId 在场）——终态必须回报给桥
+  //（云端AI 轮询 /api/message 拿回复），busy/取消/失败/成功四态都回报，不让云端AI 悬等
+  const viaBridge = Boolean(opts.bridge && opts.bridge.msgId);
+  const reportBridgeResult = (state, extra = {}) => {
+    if (!viaBridge) return;
+    try { window.agentChatPro.reportAgentBridgeResult({ msgId: opts.bridge.msgId, state, ...extra }); } catch { /* 回报失败不阻断 UI */ }
+  };
+  const message = String(composerText ?? "").trim();
   if (!message && !attachments.length) return;
   // v3.15.6：全局同一时间仅一个任务——被占用时不再静默拦截，按任务归属给出明确提示
   if (activeId) {
+    reportBridgeResult("failed", { error: "应用正忙：另一轮对话正在进行中，稍后可重发。" });
     if (streamingConversationId === conversationId) return; // 本对话已在处理中
     setConnection(`正在处理其他对话的任务，完成后即可发送（同一时间仅支持一个任务）`, "connected");
     return;
@@ -1522,12 +1550,13 @@ async function sendMessage() {
   // v3.15.0 bug1：记录进行中任务归属（对话+模式）——切走后后台继续，完成回调防串话
   streamingConversationId = conversationId;
   streamingConnectionMode = currentConnectionMode;
-  const userItem = addMessage("user", message);
-  renderSentAttachments(userItem, attachments);
+  // 桥回合的附件恒为空——全局 attachments 是用户输入框草稿，桥回合不得顺手把它带进对话
+  const turnAttachments = viaBridge ? [] : attachments;
+  const userItem = addMessage("user", message, { senderType: viaBridge ? "cloud-ai" : "" });
+  renderSentAttachments(userItem, turnAttachments);
   const answer = addMessage("assistant generating");
   messages.set(activeId, answer);
-  elements.prompt.value = "";
-  adjustTextarea();
+  if (!viaBridge) { elements.prompt.value = ""; adjustTextarea(); } // 桥回合不清用户输入框草稿
   setBusy(true);
   setConnection(currentConnectionMode === "cloud" ? "正在连接云端 AI…" : currentConnectionMode === "local" ? `正在启动本机 ${localEngineLabel()}…` : "正在连接 NAS…", "");
   // 重置流式 token 计数，估算用户消息 token
@@ -1535,13 +1564,12 @@ async function sendMessage() {
   addConversationTokens(estimateTokens(message));
 
   try {
-    const preparedAttachments = await Promise.all(attachments.map(async (file) => ({
+    const preparedAttachments = await Promise.all(turnAttachments.map(async (file) => ({
       name: file.name,
       mimeType: file.type,
       data: await file.arrayBuffer()
     })));
-    attachments = [];
-    renderAttachments();
+    if (!viaBridge) { attachments = []; renderAttachments(); }
     // 客户端超时兜底：35 分钟（略大于 ssh.cjs 的 MAX_REQUEST_MS 30 分钟）
     const SEND_TIMEOUT_MS = 35 * 60 * 1000;
     const sendPromise = window.agentChatPro.sendMessage({
@@ -1550,7 +1578,9 @@ async function sendMessage() {
       sessionId,
       conversationId,
       attachments: preparedAttachments,
-      workModeId: currentModeId
+      workModeId: currentModeId,
+      // 阉割版 Bridge：云端AI 桥回合——主进程据此强制追加标记前缀 + 落库 senderType
+      senderType: viaBridge ? "cloud-ai" : ""
     });
     // 超时兜底赢走 race 后，IPC 才报错/返回时避免 unhandled rejection
     sendPromise.catch(() => {});
@@ -1568,6 +1598,7 @@ async function sendMessage() {
       answer.querySelector(".message-content").textContent = partial
         ? `${partial}\n\n（已停止）`
         : "已停止。";
+      reportBridgeResult("cancelled", { reply: partial || "" });
       // 停止时合并已产生的流式 token
       addConversationTokens(streamingTokens + confirmedTokens);
       resetStreamingTokens();
@@ -1582,6 +1613,7 @@ async function sendMessage() {
     (result.tools || []).forEach((tool) => renderTool(answer, tool));
     finalizeToolList(answer, result.tools || []);
     renderReturnedFiles(answer, result.files || []);
+    reportBridgeResult("done", { reply: result.text || "" });
     answer.classList.remove("generating");
     // 合并流式 token 到对话累计（v3.15.0：切走后完成时不再累进当前对话的计数，切回时按消息重算）
     if (streamingConversationId === conversationId) addConversationTokens(streamingTokens + confirmedTokens);
@@ -1616,6 +1648,7 @@ async function sendMessage() {
       : streamingConnectionMode === "local" ? `连接或本机 ${localEngineName} 执行失败`
       : "连接或 NAS Agent 执行失败";
     answer.querySelector(".message-content").textContent = failureLabel + "：\n" + error.message;
+    reportBridgeResult("failed", { error: error.message });
     setConnection("连接失败", "error");
     // 失败时也合并已估算的 token
     addConversationTokens(streamingTokens + confirmedTokens);
@@ -1678,9 +1711,177 @@ async function fillAboutVersion() {
 fillAboutVersion();
 
 // ── v3.15.8 关于页彩蛋：点击「Agent Chat Pro」标题弹出跳跳龙小游戏 ──
-document.querySelector(".about-title")?.addEventListener("click", () => {
-  window.agentChatPro.openDinoGame().catch(() => {});
+// 阉割版 Bridge Edition：easterEgg 门控关闭 → 不注册点击（主进程 app:open-dino-game 也不注册）
+if (editionState.gates.easterEgg !== false) {
+  document.querySelector(".about-title")?.addEventListener("click", () => {
+    window.agentChatPro.openDinoGame().catch(() => {});
+  });
+}
+
+// ── 阉割版 Bridge Edition：Agent HTTP 桥（云端AI ↔ NAS Agent 对话链） ──────────
+// 云端AI 用 curl POST /api/send → 进入放行队列（浮层卡片）→ 用户点「放行」→
+// 主进程推 agentBridge:turn-start → runBridgeTurn 切到桥目标对话并以 SSH 模式走既有 chat:send。
+// 所有云端AI消息：文本强制带【云端AI消息 · 非用户本人】前缀（主进程侧）+ 气泡徽章（渲染层）。
+
+/** 门控应用：按 edition gates 隐藏阉割项、放行桥设置卡；boot IIFE 在 populateSettings 后调用 */
+async function applyEdition() {
+  try { editionState = (await window.agentChatPro.getEdition?.()) || editionState; } catch { return editionState; }
+  const gates = editionState.gates || {};
+  const isBridge = editionState.edition === "bridge";
+  document.body.classList.toggle("edition-bridge", isBridge);
+  const hide = (selector) => { const el = document.querySelector(selector); if (el) el.hidden = true; };
+  if (gates.localEngines === false) {
+    hide("#mode-local");
+    hide("#local-fields");
+    hide("#atomcode-fields");
+    hide("#custom-fields");
+    // 存量设置若停在 local 模式：强制回 SSH（本机引擎链路在 Bridge 版不存在）
+    if (currentConnectionMode === "local") {
+      elements.form.elements.namedItem("connectionMode").value = "ssh";
+      currentConnectionMode = "ssh";
+      updateConnectionModeUI();
+      try { await window.agentChatPro.saveSettings({ ...(await window.agentChatPro.loadSettings()), connectionMode: "ssh" }); } catch {}
+    }
+  }
+  if (gates.deviceLink === false) document.querySelectorAll('[data-settings-tab="device"]').forEach((tab) => { tab.hidden = true; });
+  if (gates.agentBridge) {
+    const section = document.querySelector("#agentbridge-settings");
+    if (section) section.hidden = false;
+    await refreshAgentBridgeInfo();
+  }
+  return editionState;
+}
+
+/** 放行队列渲染：每条云端AI待放行消息一张卡（文本全文 + 放行/拒绝按钮） */
+function renderBridgeQueue(queue = []) {
+  if (!elements.bridgeQueue) return;
+  const items = editionState.gates.agentBridge && Array.isArray(queue) ? queue : [];
+  elements.bridgeQueue.hidden = items.length === 0;
+  elements.bridgeQueue.replaceChildren();
+  if (!items.length) return;
+  for (const item of items) {
+    const card = document.createElement("div");
+    card.className = "bridge-queue-card";
+    const head = document.createElement("div");
+    head.className = "bridge-queue-head";
+    const tag = document.createElement("span");
+    tag.className = "bridge-queue-tag";
+    tag.textContent = "🤖 云端AI请求 · 等待放行";
+    head.append(tag);
+    const body = document.createElement("div");
+    body.className = "bridge-queue-text";
+    body.textContent = String(item.text == null ? "" : item.text);
+    const meta = document.createElement("div");
+    meta.className = "bridge-queue-meta";
+    meta.textContent = `${item.at || ""} · ${String(item.text == null ? "" : item.text).length} 字`;
+    const actions = document.createElement("div");
+    actions.className = "bridge-queue-actions";
+    const approve = document.createElement("button");
+    approve.type = "button";
+    approve.className = "bridge-approve";
+    approve.textContent = "放行";
+    approve.addEventListener("click", async () => {
+      approve.disabled = true;
+      try {
+        const result = await window.agentChatPro.approveAgentBridgeMessage(item.msgId);
+        if (result?.ok === false) setStatus(result.error || "放行失败。", true);
+      } catch (error) { setStatus(error.message, true); }
+      finally { approve.disabled = false; }
+    });
+    const reject = document.createElement("button");
+    reject.type = "button";
+    reject.className = "bridge-reject";
+    reject.textContent = "拒绝";
+    reject.addEventListener("click", async () => {
+      reject.disabled = true;
+      try { await window.agentChatPro.rejectAgentBridgeMessage(item.msgId); }
+      catch (error) { setStatus(error.message, true); }
+      finally { reject.disabled = false; }
+    });
+    actions.append(approve, reject);
+    card.append(head, body, meta, actions);
+    elements.bridgeQueue.append(card);
+  }
+}
+
+/** 桥回合：切到桥目标对话、切回 SSH 模式，然后走既有 sendMessage（opts.bridge 携 msgId 回报终态） */
+async function runBridgeTurn(turn) {
+  if (!turn?.msgId || !turn.text) return;
+  try {
+    // ① 目标对话在场：不在场（应用刚启动/用户切走）则加载
+    if (turn.conversationId && conversationId !== turn.conversationId) {
+      await loadConversation(turn.conversationId);
+    } else if (!turn.conversationId && !conversationId) {
+      const conversation = await window.agentChatPro.createConversation();
+      await loadConversation(conversation.id);
+    }
+  } catch (error) {
+    try { window.agentChatPro.reportAgentBridgeResult({ msgId: turn.msgId, state: "failed", error: `无法进入目标对话：${error.message}` }); } catch {}
+    return;
+  }
+  // ② 桥对话链固定 SSH 模式（云端AI 的对面是 NAS Agent，不是云端AI 自己）
+  if (currentConnectionMode !== "ssh") {
+    elements.form.elements.namedItem("connectionMode").value = "ssh";
+    currentConnectionMode = "ssh";
+    updateConnectionModeUI();
+    try { await window.agentChatPro.saveSettings({ ...(await window.agentChatPro.loadSettings()), connectionMode: "ssh" }); } catch {}
+  }
+  sendMessage(turn.text, { bridge: { msgId: turn.msgId } });
+}
+
+/** 桥设置卡回填（端口/闸门/Token/目标对话）；token 明文只走本机 IPC 展示 */
+async function refreshAgentBridgeInfo() {
+  try {
+    const info = await window.agentChatPro.getAgentBridgeInfo();
+    if (!info) return;
+    renderBridgeQueue(info.queue || []);
+    const portInput = document.querySelector("#agentbridge-port");
+    if (portInput && document.activeElement !== portInput) portInput.value = info.port || "";
+    const gateBox = document.querySelector("#agentbridge-gate");
+    if (gateBox) gateBox.checked = Boolean(info.gate);
+    const tokenInput = document.querySelector("#agentbridge-token");
+    if (tokenInput) tokenInput.value = info.token || "";
+    const urlText = document.querySelector("#agentbridge-url");
+    if (urlText) urlText.textContent = info.port ? `http://127.0.0.1:${info.port}/api/send` : "（HTTP 服务未启动）";
+    const targetName = document.querySelector("#agentbridge-target-name");
+    if (targetName) {
+      const settings = await window.agentChatPro.loadSettings();
+      const targetId = String(settings.agentBridgeConversationId || "");
+      targetName.textContent = targetId
+        ? (conversationCache.find((item) => item.id === targetId)?.title || `对话 ${targetId.slice(0, 8)}…`)
+        : "跟随最新对话（未指定时自动用最新一条）";
+    }
+  } catch { /* 桥未就绪时忽略（设置卡保留占位） */ }
+}
+
+document.querySelector("#agentbridge-save")?.addEventListener("click", async (event) => {
+  const button = event.currentTarget;
+  const port = Number(document.querySelector("#agentbridge-port")?.value) || 0;
+  const gate = Boolean(document.querySelector("#agentbridge-gate")?.checked);
+  button.disabled = true;
+  try {
+    const info = await window.agentChatPro.setAgentBridgeConfig({ port, gate });
+    await refreshAgentBridgeInfo();
+    setConnection(info?.listening ? `Agent 桥已运行：127.0.0.1:${info.port}（放行${info.gate ? "开启" : "关闭"}）` : "Agent 桥配置已保存，但 HTTP 服务启动失败（端口被占用？）", info?.listening ? "connected" : "error");
+  } catch (error) { setConnection("Agent 桥配置保存失败：" + error.message, "error"); }
+  finally { button.disabled = false; }
 });
+document.querySelector("#agentbridge-copy-token")?.addEventListener("click", async (event) => {
+  const button = event.currentTarget;
+  const token = document.querySelector("#agentbridge-token")?.value || "";
+  try { await navigator.clipboard.writeText(token); button.textContent = "已复制"; }
+  catch { button.textContent = "复制失败"; }
+  setTimeout(() => { button.textContent = "复制 Token"; }, 1500);
+});
+document.querySelector("#agentbridge-reset-target")?.addEventListener("click", async () => {
+  try {
+    await window.agentChatPro.setAgentBridgeTarget("");
+    await refreshAgentBridgeInfo();
+    setConnection("桥目标已重置：下一条放行消息将转发到最新对话。", "connected");
+  } catch (error) { setConnection("重置失败：" + error.message, "error"); }
+});
+window.agentChatPro?.onAgentBridgeQueue?.((queue) => renderBridgeQueue(Array.isArray(queue) ? queue : []));
+window.agentChatPro?.onAgentBridgeTurn?.((turn) => runBridgeTurn(turn));
 
 elements.dialog.addEventListener("close", async () => {
   try { populateSettings(await window.agentChatPro.loadSettings()); }
@@ -3249,6 +3450,8 @@ window.agentChatPro.getBrandConfig().then(config => {
   setMaximized(await window.agentChatPro.isWindowMaximized());
   const settings = await window.agentChatPro.loadSettings();
   populateSettings(settings);
+  // 阉割版 Bridge Edition：门控应用（隐藏本机模式/设备联动等，放行桥设置卡）——必须在 loadConversation 之前
+  await applyEdition();
   // 初始化模式选择器
   currentModeId = settings.workModeId || "regular";
   await refreshModeSelector();

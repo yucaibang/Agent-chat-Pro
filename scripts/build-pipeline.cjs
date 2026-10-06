@@ -42,20 +42,19 @@ const path = require("path");
 const PROJECT_ROOT = path.resolve(__dirname, "..");
 const DIST_DIR = path.join(PROJECT_ROOT, "dist");
 
-/** v3.16.0：发布包 SHA-256 清单——只覆盖本次构建版本，写 dist/SHA256SUMS.txt 随包交付 */
-function step7_checksums() {
+/** v3.16.0：发布包 SHA-256 清单——只覆盖本次构建版本，随包交付（Bridge 版写 SHA256SUMS-bridge.txt） */
+function step7_checksums(info) {
   const crypto = require("crypto");
-  const version = JSON.parse(fs.readFileSync(path.join(PROJECT_ROOT, "package.json"), "utf8")).version;
-  const installer = path.join(DIST_DIR, `Agent Chat Pro-${version}-Setup.exe`);
+  const installer = path.join(DIST_DIR, info.installer);
   if (!fs.existsSync(installer)) throw new Error(`未找到安装包：${installer}`);
   const buffer = fs.readFileSync(installer);
   const digest = crypto.createHash("sha256").update(buffer).digest("hex");
-  const content = `# Agent Chat Pro ${version} · SHA-256 · 构建于 ${new Date().toISOString()}\n`
-    + `# 校验命令（Windows）：certutil -hashfile "Agent Chat Pro-${version}-Setup.exe" SHA256\n`
+  const content = `# ${info.productName} ${info.version} · SHA-256 · 构建于 ${new Date().toISOString()}\n`
+    + `# 校验命令（Windows）：certutil -hashfile "${info.installer}" SHA256\n`
     + `${digest}\n`
     + `文件大小：${buffer.length} bytes\n`;
-  fs.writeFileSync(path.join(DIST_DIR, "SHA256SUMS.txt"), content, "utf8");
-  log("✅", `SHA-256 清单已写入 dist/SHA256SUMS.txt：${digest.slice(0, 32)}…`);
+  fs.writeFileSync(path.join(DIST_DIR, info.sumsFile), content, "utf8");
+  log("✅", `SHA-256 清单已写入 dist/${info.sumsFile}：${digest.slice(0, 32)}…`);
   return `${digest}  ${path.basename(installer)}`;
 }
 
@@ -85,6 +84,68 @@ const { fallbackLoaderTemplate, encOnlyLoaderTemplate } = require(path.join(__di
 
 // step0 与 step2 之间的密钥传递文件（dist/ 不入 git、不进 asar）
 const KEY_FILE_REL = path.join("dist", ".bytecode-key.json");
+
+// ── 产品形态（v1：main / bridge）──────────────────────
+// bridge 目标 = 阉割版「Agent Chat Pro Bridge」：同一仓库同一份代码，构建期把
+// src/main/edition.cjs 覆写为 bridge 形态 + package.json 品牌临时改写；step5 统一还原。
+// 铁律不变：构建前必须 commit（git checkout HEAD 是还原路径）。
+const BRIDGE_PRODUCT = "Agent Chat Pro Bridge";
+const BRIDGE_VERSION = "1.0.0";
+const BRIDGE_APPID = "com.jiang.agentChatProBridge";
+
+/** 目标形态信息：exe 名 / 安装包名 / 校验清单全部随形态走（step4/6/7 不再硬编码主版名） */
+function editionInfoFor(target) {
+  const isBridge = target === "bridge";
+  const pkg = JSON.parse(fs.readFileSync(path.join(PROJECT_ROOT, "package.json"), "utf8"));
+  const version = isBridge ? BRIDGE_VERSION : pkg.version;
+  const productName = isBridge ? BRIDGE_PRODUCT : "Agent Chat Pro";
+  return {
+    target,
+    edition: isBridge ? "bridge" : "main",
+    isBridge,
+    productName,
+    version,
+    exeName: `${productName}.exe`,
+    installer: `${productName}-${version}-Setup.exe`,
+    sumsFile: isBridge ? "SHA256SUMS-bridge.txt" : "SHA256SUMS.txt",
+    builderTarget: target === "portable" ? "portable" : "nsis"
+  };
+}
+
+/** 形态覆写（bridge 专用，main 直通）：
+ *  ① src/main/edition.cjs → bridge 形态（BRIDGE_EDITION 单值模块）；主版形态快照留存
+ *  ② package.json → bridge 品牌（appId/productName/shortcutName/version/extraResources 去设备联动）
+ *  还原在 step5_restore（obfuscate restore 还原 edition.cjs；package.json 从快照回拷）。 */
+function applyEditionOverlay(info) {
+  if (!info.isBridge) return;
+  const editionPath = path.join(PROJECT_ROOT, "src", "main", "edition.cjs");
+  const { BRIDGE_EDITION } = require(editionPath); // 提交态恒为主版形态，但总导出携带 BRIDGE_EDITION 定义
+  if (!BRIDGE_EDITION || BRIDGE_EDITION.edition !== "bridge") {
+    throw new Error("src/main/edition.cjs 未导出 bridge 形态定义（BRIDGE_EDITION）——请先提交主版 edition.cjs");
+  }
+  const overlay = `/**
+ * ⚠️ Bridge Edition 构建产物——由 build-pipeline（target=bridge）覆写生成，勿手改。
+ * ⚠️ 仓库提交态恒为主版形态（edition.cjs 由 git HEAD 保护）；step5_restore 会还原。
+ */
+"use strict";
+module.exports = ${JSON.stringify(BRIDGE_EDITION, null, 2)};
+`;
+  fs.writeFileSync(editionPath, overlay, "utf8");
+  log("🎭", `形态覆写：edition.cjs → ${info.edition}（productName=${info.productName}）`);
+
+  const brandingPath = path.join(PROJECT_ROOT, "package.json");
+  fs.copyFileSync(brandingPath, path.join(PROJECT_ROOT, "dist", ".package.json.main-backup"));
+  const pkg = JSON.parse(fs.readFileSync(brandingPath, "utf8"));
+  pkg.version = info.version;
+  pkg.description = `${BRIDGE_PRODUCT} — 阉割版（SSH/云端对话 + 云端AI Agent HTTP 桥）`;
+  pkg.build.appId = BRIDGE_APPID;
+  pkg.build.productName = info.productName;
+  pkg.build.nsis.shortcutName = info.productName;
+  // 阉割：设备联动安装资源不进 Bridge 包（SDK bridge 资源保留——SSH 工具确认/精确停止依赖）
+  pkg.build.extraResources = pkg.build.extraResources.filter((entry) => entry.from !== "src/device-control");
+  fs.writeFileSync(brandingPath, `${JSON.stringify(pkg, null, 2)}\n`, "utf8");
+  log("🎭", `品牌覆写：package.json → ${info.productName} v${info.version}（appId=${BRIDGE_APPID}，设备联动资源已剔除）`);
+}
 
 // ── 工具函数 ──────────────────────────────────────────
 
@@ -251,15 +312,23 @@ function step3_build(target = "nsis") {
   log("✅", "打包完成");
 }
 
-function step4_fuses() {
+function step4_fuses(info) {
   log("🔐", "步骤 4/6: Electron Fuse 烧录...");
-  run("node scripts/set-fuses.cjs");
+  run("node scripts/set-fuses.cjs", { env: { ...process.env, ACP_EXE_NAME: info.exeName } });
   log("✅", "Fuse 烧录完成");
 }
 
-function step5_restore() {
+function step5_restore(info) {
   log("🔄", "步骤 5/6: 还原混淆源码...");
   run("node scripts/obfuscate.cjs restore");
+
+  // 还原 package.json 主版品牌（bridge 构建临时覆写；快照在 dist/，还原后即删）
+  const brandBackup = path.join(PROJECT_ROOT, "dist", ".package.json.main-backup");
+  if (fs.existsSync(brandBackup)) {
+    fs.copyFileSync(brandBackup, path.join(PROJECT_ROOT, "package.json"));
+    fs.unlinkSync(brandBackup);
+    log("  ↩️", "package.json 已还原主版品牌");
+  }
 
   // 清理字节码/加密体构建残留（asar 已打包，源码目录不留）
   for (const file of BYTECODE_FILES) {
@@ -282,10 +351,10 @@ function step5_restore() {
   log("✅", "源码还原完成");
 }
 
-function step6_verify() {
+function step6_verify(info) {
   log("🔍", "步骤 6/6: 构建产物验证...");
 
-  const exePath = path.join(DIST_DIR, "win-unpacked", "Agent Chat Pro.exe");
+  const exePath = path.join(DIST_DIR, "win-unpacked", info.exeName);
   if (!fs.existsSync(exePath)) {
     log("❌", "构建产物不存在，验证跳过");
     return false;
@@ -403,37 +472,40 @@ async function main() {
   const target = process.argv[2] || "nsis";
 
   if (target === "verify") {
-    process.exit(step6_verify() ? 0 : 1);
+    process.exit(step6_verify(editionInfoFor("nsis")) ? 0 : 1);
   }
+
+  const info = editionInfoFor(target);
 
   console.log("");
   console.log("╔══════════════════════════════════════════════════╗");
-  console.log("║   Agent Chat Pro 构建流水线 v2 — 强化防破解     ║");
+  console.log(`║   Agent Chat Pro 构建流水线 v2 — 形态：${info.edition.padEnd(8)}║`);
   console.log("╚══════════════════════════════════════════════════╝");
   console.log("");
 
   const startTime = Date.now();
 
   try {
+    applyEditionOverlay(info); // bridge：覆写 edition.cjs + package.json 品牌（必须先于混淆）
     step0_inject_key(); // v3.12.0：必须在混淆前注入（混淆器把密钥段编码进 stringArray）
     step1_obfuscate();
     await step2_bytenode(); // .jsc 尽力编译，.enc 必须全量（fallback 方案关键产物）
-    step3_build(target);
-    step4_fuses();
-    step5_restore();
-    const verified = step6_verify();
+    step3_build(info.builderTarget);
+    step4_fuses(info);
+    step5_restore(info);
+    const verified = step6_verify(info);
     if (!verified) throw new Error("构建产物验证未通过（见上方 ❌ 项）");
-    step7_checksums(); // v3.16.0：SHA-256 发布清单
+    step7_checksums(info); // v3.16.0：SHA-256 发布清单
 
     const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
     console.log("");
-    log("🎉", `构建完成！耗时 ${elapsed}s`);
+    log("🎉", `构建完成！耗时 ${elapsed}s「${info.productName} v${info.version}」`);
 
     // 商业壳加固提示
     console.log("");
     log("📋", "后续步骤（需在 Windows 端手动执行）：");
-    console.log("   1. 将 dist/win-unpacked 复制到 Windows 机器");
-    console.log("   2. 使用 Virbox Protector DS 模式加固 Agent Chat Pro.exe");
+    console.log(`   1. 将 dist/win-unpacked 复制到 Windows 机器（形态：${info.edition}）`);
+    console.log(`   2. 使用 Virbox Protector DS 模式加固 ${info.exeName}`);
     console.log("   3. 或使用 VMProtect Ultimate 加壳保护");
     console.log("   4. 重新打包为 NSIS 安装包");
     console.log("   5. 安装测试验证功能正常");
@@ -442,7 +514,7 @@ async function main() {
 
     // 尝试还原
     try {
-      step5_restore();
+      step5_restore(info);
     } catch (e) {
       // 忽略还原失败
     }

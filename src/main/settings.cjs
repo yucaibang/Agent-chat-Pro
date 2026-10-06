@@ -378,6 +378,43 @@ function getAtomcodeToken() {
   return decryptStoredString(raw.atomcodeTokenEncrypted, "AtomCode token");
 }
 
+/** Agent HTTP 桥端口归一化（阉割版专用）：1024–65535，非法回默认 21774 */
+function normalizeAgentBridgePort(value) {
+  const port = Number(value);
+  return Number.isInteger(port) && port >= 1024 && port <= 65535 ? port : 21774;
+}
+
+/** Agent HTTP 桥 Token：首次取用时自动生成并 safeStorage 加密落盘（加密存储，不随 settings:load 明文外发，仅桥模块比对与 agentBridge:info 出示给用户复制） */
+function ensureAgentBridgeToken() {
+  const raw = readRaw();
+  if (raw.agentBridgeTokenEncrypted) return decryptStoredString(raw.agentBridgeTokenEncrypted, "Agent 桥 Token");
+  if (!safeStorage.isEncryptionAvailable()) throw new Error("Windows 系统加密不可用，无法生成 Agent 桥 Token。");
+  const token = crypto.randomBytes(24).toString("hex");
+  raw.agentBridgeTokenEncrypted = safeStorage.encryptString(token).toString("base64");
+  writeRaw(raw);
+  return token;
+}
+
+/** Agent HTTP 桥目标对话：settings 存指定对话 id（空 = 桥模块fallback取最新对话/自动建） */
+function getAgentBridgeConversationId() {
+  return String(readRaw().agentBridgeConversationId || "").trim();
+}
+
+function setAgentBridgeConversationId(id) {
+  const raw = readRaw();
+  raw.agentBridgeConversationId = String(id || "").trim();
+  writeRaw(raw);
+}
+
+/** Agent HTTP 桥配置直写（不走 saveSettings——saveSettings 对 ssh 模式强制校验密码，而放行闸开关必须在未配好连接时也能改） */
+function setAgentBridgeConfig(input = {}) {
+  const raw = readRaw();
+  if (input.port !== undefined) raw.agentBridgePort = normalizeAgentBridgePort(input.port);
+  if (input.gate !== undefined) raw.agentBridgeGate = Boolean(input.gate);
+  writeRaw(raw);
+  return { agentBridgePort: normalizeAgentBridgePort(raw.agentBridgePort), agentBridgeGate: Boolean(raw.agentBridgeGate) };
+}
+
 function getSettings() {
   const raw = readRaw();
   const defaultDataDirectory = app.getPath("userData");
@@ -446,6 +483,9 @@ function getSettings() {
     cloudToolsEnabled: Boolean(raw.cloudToolsEnabled),
     cloudRunCommandEnabled: Boolean(raw.cloudRunCommandEnabled),
     cloudWorkingDirectory: String(raw.cloudWorkingDirectory || "").trim(),
+    // Agent HTTP 桥（阉割版 Bridge Edition 专用；主版字段在场但功能门控关闭；Token 不出此接口）
+    agentBridgePort: normalizeAgentBridgePort(raw.agentBridgePort),
+    agentBridgeGate: raw.agentBridgeGate === undefined ? true : Boolean(raw.agentBridgeGate),
     // 代理设置
     proxyEnabled: Boolean(raw.proxyEnabled),
     proxyType: raw.proxyType === "socks5" ? "socks5" : "http",
@@ -583,6 +623,12 @@ function saveSettings(input) {
     atomcodeTokenEncrypted: previous.atomcodeTokenEncrypted || "",
     atomcodeToken: "",
     customCliCommand: String(input.customCliCommand !== undefined ? input.customCliCommand : (previous.customCliCommand || "")).trim(),
+    // Agent HTTP 桥（阉割版专用；saveSettings 白名单透传保存，避免每次保存设置被抹字段。Token 不走此链——ensureAgentBridgeToken 独立加密落盘）
+    agentBridgePort: normalizeAgentBridgePort(input.agentBridgePort !== undefined ? input.agentBridgePort : previous.agentBridgePort),
+    agentBridgeGate: input.agentBridgeGate !== undefined
+      ? Boolean(input.agentBridgeGate)
+      : (previous.agentBridgeGate === undefined ? true : Boolean(previous.agentBridgeGate)),
+    agentBridgeTokenEncrypted: previous.agentBridgeTokenEncrypted || "",
     workingDirectory: String(input.workingDirectory || "").trim(),
     skipPermissions: Boolean(input.skipPermissions),
     statusSignalCapture: typeof input.statusSignalCapture === "boolean"
@@ -776,4 +822,4 @@ function verifyModelAdminPassword(value) {
   return expected.length === actual.length && crypto.timingSafeEqual(expected, actual);
 }
 
-module.exports = { getConnection, getSettings, getAtomcodeToken, getSshConnection, getCloudAiConfig, modelAdminPasswordState, normalizeSshProfileId, normalizeSshProfileName, sameSshTarget, saveSettings, setModelAdminPassword, switchSshProfile, trustHostFingerprint, verifyModelAdminPassword };
+module.exports = { getConnection, getSettings, getAtomcodeToken, getSshConnection, getCloudAiConfig, modelAdminPasswordState, normalizeSshProfileId, normalizeSshProfileName, sameSshTarget, saveSettings, setModelAdminPassword, switchSshProfile, trustHostFingerprint, verifyModelAdminPassword, ensureAgentBridgeToken, getAgentBridgeConversationId, setAgentBridgeConversationId, setAgentBridgeConfig, normalizeAgentBridgePort };

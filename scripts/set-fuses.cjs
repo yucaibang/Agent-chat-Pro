@@ -25,8 +25,8 @@ const PROJECT_ROOT = path.resolve(__dirname, "..");
 const DIST_DIR = path.join(PROJECT_ROOT, "dist");
 
 async function findAndFlipFuses() {
-  // 查找 Windows exe
-  const exeName = "Agent Chat Pro.exe";
+  // 查找 Windows exe（Bridge Edition 构建时 build-pipeline 经 ACP_EXE_NAME 传入）
+  const exeName = process.env.ACP_EXE_NAME || "Agent Chat Pro.exe";
   const exePath = path.join(DIST_DIR, "win-unpacked", exeName);
 
   if (!fs.existsSync(exePath)) {

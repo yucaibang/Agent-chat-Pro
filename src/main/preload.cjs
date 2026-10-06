@@ -96,6 +96,17 @@ contextBridge.exposeInMainWorld("agentChatPro", {
   renderMarkdown: (source) => ipcRenderer.invoke("markdown:render", source),
   // ── 链接打开 IPC ──
   openLink: (url) => ipcRenderer.invoke("link:open", url),
+  // ── 产品形态（阉割门控）：渲染层按 gates 隐藏设备联动/本机模式/彩蛋/打印等 ──
+  getEdition: () => ipcRenderer.invoke("app:edition"),
+  // ── Agent HTTP 桥（阉割版 Bridge Edition 专属；agentBridge:* 命名空间，与既有 bridge:*（Agent SDK 桥安装机制）严格区分） ──
+  getAgentBridgeInfo: () => ipcRenderer.invoke("agentBridge:info"),
+  approveAgentBridgeMessage: (msgId) => ipcRenderer.invoke("agentBridge:approve", msgId),
+  rejectAgentBridgeMessage: (msgId, reason) => ipcRenderer.invoke("agentBridge:reject", msgId, reason),
+  reportAgentBridgeResult: (payload) => ipcRenderer.invoke("agentBridge:report", payload),
+  setAgentBridgeConfig: (input) => ipcRenderer.invoke("agentBridge:set-config", input),
+  setAgentBridgeTarget: (conversationId) => ipcRenderer.invoke("agentBridge:set-target", conversationId),
+  onAgentBridgeQueue: (handler) => ipcRenderer.on("agentBridge:queue", (_event, queue) => handler(queue)),
+  onAgentBridgeTurn: (handler) => ipcRenderer.on("agentBridge:turn-start", (_event, turn) => handler(turn)),
   // ── 网络状态 IPC ──
   getNetworkStatus: () => ipcRenderer.invoke("network:status"),
   networkConnect: (config) => ipcRenderer.invoke("network:connect", config),

@@ -174,7 +174,7 @@ async function runRendererTests() {
   await test("loadConversation 读 lastConnectionMode 联动切模式并持久化", () => {
     const fn = rendererSrc.split("async function loadConversation(id) {")[1].split("\nasync function createNewConversation")[0];
     assert.ok(fn.includes("conversation.lastConnectionMode"), "未读对话 lastConnectionMode");
-    assert.ok(fn.includes('["ssh", "cloud", "local"].includes(lastMode)'), "未校验三值");
+    assert.ok(fn.includes('["ssh", "cloud", "local"]') && fn.includes("allowedLastModes.includes(lastMode)"), "未校验三值（v3.21.2 后经 allowedLastModes 形态门控）");
     assert.ok(fn.includes("saveSettings"), "联动未持久化（main 侧 chat:send 读已保存设置）");
     assert.ok(fn.includes("updateConnectionModeUI()"), "联动未更新 UI");
   });

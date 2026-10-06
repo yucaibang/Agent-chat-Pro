@@ -5,7 +5,7 @@ const fs = require("fs");
 const path = require("path");
 const { randomUUID } = require("crypto");
 const { spawnSync } = require("child_process"); // v3.16.1 print:detect 调 reg/tasklist
-const { getConnection, getSettings, getAtomcodeToken, getSshConnection, getCloudAiConfig, sameSshTarget, saveSettings, setModelAdminPassword, switchSshProfile, trustHostFingerprint, verifyModelAdminPassword } = require("./settings.cjs");
+const { getConnection, getSettings, getAtomcodeToken, getSshConnection, getCloudAiConfig, sameSshTarget, saveSettings, setModelAdminPassword, switchSshProfile, trustHostFingerprint, verifyModelAdminPassword, ensureAgentBridgeToken, getAgentBridgeConversationId, setAgentBridgeConversationId, setAgentBridgeConfig } = require("./settings.cjs");
 const { connectWithRetry, downloadRemoteFile, ensureDeviceControlKey, exec, finalizeDeviceControl, getAgentSdkBridgeStatus, getClaudeModelStatus, installAgentSdkBridge, markDeviceControlDisabled, readDeviceControlIpTrack, readRemoteFile, runClaude, uninstallAgentSdkBridge, updateClaudeAutoCompactWindow, updateClaudeModel, updateClaudeModelEntry, verifyConnection } = require("./ssh.cjs");
 const { copyLocalFile, getLocalClaudeModelStatus, readLocalFile, runLocalClaude, updateLocalAutoCompactWindow, updateLocalClaudeModel, updateLocalClaudeModelEntry, validatedWorkingDirectory: validatedLocalWorkdir, verifyLocalConnection } = require("./local.cjs");
 const { runAtomCodeChat, verifyAtomCodeConnection } = require("./daemon-chat.cjs");
@@ -19,6 +19,10 @@ const { contextTokensFromUsage } = require("./protocol.cjs");
 const { scanSystemCaches, cleanSystemCaches } = require("./cache-cleaner.cjs");
 const { getDeviceControlStatus, installDeviceControl, preferredAddress, uninstallDeviceControl } = require("./device-control.cjs");
 const { scanCoexistence, summarizeCoexistence } = require("./coexistence-scanner.cjs");
+// 产品形态开关（阉割机制）：bridge 版 = Agent HTTP 桥在场、设备联动/打印联动/本机引擎/彩蛋关闭
+const EDITION = require("./edition.cjs");
+const IS_BRIDGE = EDITION.edition === "bridge";
+const { CLOUD_AI_TAG } = require("./agent-http-bridge.cjs");
 const {
   addAssistantMessage,
   addUserMessage,
@@ -77,6 +81,7 @@ function activeSshProfileOf(config) {
 }
 
 let window;
+let agentBridgeInstance = null; // Agent HTTP 桥（阉割版 Bridge Edition 专属；主版恒 null）
 const brandManager = new CloudBrandManager();
 const integrityGuard = new IntegrityGuard();
 const activeRequests = new Map();
@@ -306,16 +311,20 @@ function createDinoGameWindow() {
 }
 
 app.whenReady().then(async () => {
-  app.setAppUserModelId("com.jiang.agentChatPro");
+  // 阉割版 Bridge 用独立 AppUserModelId（与主版共存安装时通知/任务栏分组互不粘连）
+  app.setAppUserModelId(IS_BRIDGE ? "com.jiang.agentChatProBridge" : "com.jiang.agentChatPro");
   nativeTheme.themeSource = "dark";
-  writeLog("app_start", { version: app.getVersion(), platform: process.platform, arch: process.arch });
+  writeLog("app_start", { version: app.getVersion(), platform: process.platform, arch: process.arch, edition: EDITION.edition });
 
   // v3.16.2 启动共存扫描：本机是否并存另一套 Agent 联动控件（Agent Orbit / Claude NAS 系）
-  try {
-    const scan = scanCoexistence();
-    if (scan.coexistence) writeLog("coexistence_scan_complete", { detected: true, otherFamilyInUse: scan.otherFamilyInUse, legacyOrphan: scan.legacyOrphan, conflicts: (scan.conflicts || []).map((c) => c.type), summary: summarizeCoexistence(scan) });
-    else writeLog("coexistence_scan_complete", { detected: false });
-  } catch (error) { writeLog("coexistence_scan_failed", { error: String(error && error.message || error) }); }
+  // 阉割版 Bridge 无设备联动，跳过扫描
+  if (EDITION.gates.deviceLink) {
+    try {
+      const scan = scanCoexistence();
+      if (scan.coexistence) writeLog("coexistence_scan_complete", { detected: true, otherFamilyInUse: scan.otherFamilyInUse, legacyOrphan: scan.legacyOrphan, conflicts: (scan.conflicts || []).map((c) => c.type), summary: summarizeCoexistence(scan) });
+      else writeLog("coexistence_scan_complete", { detected: false });
+    } catch (error) { writeLog("coexistence_scan_failed", { error: String(error && error.message || error) }); }
+  }
 
   // 运行时完整性自检 — 检测 Fuse/ASAR/调试/注入
   try {
@@ -824,6 +833,8 @@ app.whenReady().then(async () => {
   // v3.16.1 打印联动（Agent print 生态闭环）：检测本机 Agent print 在场 → 图片卡片显示「打印」按钮
   // 检测依据 = Agent print 首次启动用 setAsDefaultProtocolClient 注册的 agent-print:// 协议（HKCU 注册表），
   // 兜底进程探测同名 exe（Agent print.exe，Setup 版）。
+  // 阉割版 Bridge：打印联动关闭（gates.printLink=false），通道不注册——渲染层同步按门控不调
+  if (EDITION.gates.printLink) {
   ipcMain.handle("print:detect", async () => {
     try {
       const out = spawnSync("reg", ["query", "HKCU\\Software\\Classes\\agent-print"], { encoding: "utf8", timeout: 5000 });
@@ -857,6 +868,7 @@ app.whenReady().then(async () => {
     writeLog("file_sent_to_agent_print", { name: file?.name, staged: path.basename(localPath), size: file?.size, source: file?.localPath ? "local" : "ssh" });
     return localPath;
   });
+  }
   ipcMain.handle("chat:test-proxy", async (_event, proxyConfig) => {
     const merged = { ...(proxyConfig || {}) };
     if (!merged.password) {
@@ -927,7 +939,12 @@ app.whenReady().then(async () => {
     const id = input.id || randomUUID();
     const settings = getSettings();
     const connectionMode = settings.connectionMode;
-    const message = String(input.message || "").trim();
+    // 阉割版 Bridge Edition：云端AI 经 HTTP 桥注入的消息 senderType === "cloud-ai"——
+    // 标记前缀在主进程侧强制追加（不信任渲染层自称），随消息文本进入 NAS Agent 上下文防误判
+    const senderType = input.senderType === "cloud-ai" ? "cloud-ai" : "";
+    const rawMessage = String(input.message || "").trim();
+    // 标记幂等：turn-start 载荷已带前缀（渲染层气泡所见=落库所存），不因重复注入而双前缀
+    let message = senderType && !rawMessage.startsWith(CLOUD_AI_TAG) ? `${CLOUD_AI_TAG}\n${rawMessage}` : rawMessage;
     const attachments = Array.isArray(input.attachments) ? input.attachments : [];
     if (attachments.length > 10) throw new Error("一次最多添加 10 个附件。");
     if (attachments.some((file) => Number(file?.data?.byteLength || 0) > 30 * 1024 * 1024)) {
@@ -944,7 +961,7 @@ app.whenReady().then(async () => {
       attachmentCount: attachments.length
     }));
     const startedAt = Date.now();
-    addUserMessage(input.conversationId, message, attachments.map((file) => file.name));
+    addUserMessage(input.conversationId, message, attachments.map((file) => file.name), senderType);
     writeLog("chat_send_start", {
       requestId: id,
       conversationId: input.conversationId,
@@ -1524,6 +1541,57 @@ app.whenReady().then(async () => {
     return true;
   });
   ipcMain.handle("window:action", (_event, action) => handleWindowAction(action));
+
+  // ── 产品形态门控（渲染层经 app:edition 获取同一份编译期对象：隐藏设备联动/本机模式/彩蛋等） ──
+  ipcMain.handle("app:edition", () => EDITION);
+
+  // ── Agent HTTP 桥（阉割版 Bridge Edition 专属，agentBridge:* 命名空间——既有 bridge:* 是 Agent SDK 桥安装机制，不可混用） ──
+  // 云端AI 走 curl → 桥（127.0.0.1 + Token + 人工放行队列）→ 放行后推 agentBridge:turn-start 给渲染层
+  // → 渲染层走既有 chat:send 链路（senderType=cloud-ai，主进程强制追加标记前缀）→ 回报终态 → 云端AI 轮询 /api/message 收回复
+  // 安全面：桥只收本机回环 + Token；云端AI 无法触达设备联动/打印 IPC（它们是渲染层调用面，且阉割版两者已关）
+  if (EDITION.gates.agentBridge) {
+    const { createAgentHttpBridge } = require("./agent-http-bridge.cjs");
+    agentBridgeInstance = createAgentHttpBridge({
+      logger: writeLog,
+      getPort: () => getSettings().agentBridgePort,
+      getGate: () => getSettings().agentBridgeGate,
+      tokenProvider: () => { try { return ensureAgentBridgeToken(); } catch (error) { writeLog("agent_bridge_token_error", { error: error.message }); return ""; } },
+      resolveTarget: () => {
+        // 目标对话：settings 指定 id 在场且存在 → 用之；否则取最新对话；再无 → 自动建「云端AI桥接」
+        const wanted = getAgentBridgeConversationId();
+        if (wanted) {
+          const found = getConversation(wanted);
+          if (found) return { conversationId: found.id };
+        }
+        const all = listConversations();
+        if (all.length) {
+          if (wanted !== all[0].id) setAgentBridgeConversationId(all[0].id);
+          return { conversationId: all[0].id };
+        }
+        const created = createConversation();
+        setAgentBridgeConversationId(created.id);
+        writeLog("agent_bridge_conversation_created", { conversationId: created.id });
+        return { conversationId: created.id };
+      },
+      notifyRenderer: (channel, payload) => {
+        if (window && !window.isDestroyed()) window.webContents.send(channel, payload);
+      }
+    });
+    agentBridgeInstance.start();
+    ipcMain.handle("agentBridge:info", () => agentBridgeInstance.info());
+    ipcMain.handle("agentBridge:approve", (_event, msgId) => agentBridgeInstance.approve(msgId));
+    ipcMain.handle("agentBridge:reject", (_event, msgId, reason) => agentBridgeInstance.reject(msgId, reason));
+    ipcMain.handle("agentBridge:report", (_event, payload) => agentBridgeInstance.reportResult(payload));
+    // set-config：改端口必须 stop 后再 start（start() 对已监听实例直通返回旧端口），否则新端口不生效
+    ipcMain.handle("agentBridge:set-config", async (_event, input) => {
+      setAgentBridgeConfig(input || {});
+      await agentBridgeInstance.stop();
+      const started = await agentBridgeInstance.start();
+      return { ...agentBridgeInstance.info(), started };
+    });
+    ipcMain.handle("agentBridge:set-target", (_event, conversationId) => { setAgentBridgeConversationId(conversationId); return agentBridgeInstance.info(); });
+  }
+
   createWindow();
   app.on("activate", () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
 

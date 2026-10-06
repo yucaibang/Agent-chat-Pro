@@ -91,9 +91,10 @@ async function runTests() {
   });
 
   await test("根修①：设置页密钥提示 innerHTML 后重新绑定注册链接", () => {
-    const i = settingsBlock.indexOf("keyHint.innerHTML = config.hint;");
+    // v3.21.x 后 keyHint 赋值抽进 applyCloudProviderChange 函数（原在两 listener 之间）——改全局定位
+    const i = rendererSrc.indexOf("keyHint.innerHTML = config.hint;");
     assert.ok(i >= 0, "应有 keyHint.innerHTML = config.hint;");
-    const seg = settingsBlock.slice(i, i + 200);
+    const seg = rendererSrc.slice(i, i + 200);
     assert.ok(/bindExternalLinks\(keyHint\)/.test(seg), "innerHTML 赋值后必须 bindExternalLinks(keyHint)（漏接即窗口劫持）");
   });
 

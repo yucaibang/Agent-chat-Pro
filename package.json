@@ -11,6 +11,7 @@
     "obfuscate:check": "node scripts/obfuscate.cjs check",
     "build:win:nsis": "node scripts/build-pipeline.cjs nsis",
     "build:win:portable": "node scripts/build-pipeline.cjs portable",
+    "build:win:bridge": "node scripts/build-pipeline.cjs bridge",
     "build:mac": "electron-builder --mac",
     "build:linux": "electron-builder --linux",
     "verify:fuses": "node scripts/set-fuses.cjs",
