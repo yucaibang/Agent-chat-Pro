@@ -6,7 +6,7 @@ const path = require("path");
 const { randomUUID } = require("crypto");
 const { spawnSync } = require("child_process"); // v3.16.1 print:detect 调 reg/tasklist
 const { getConnection, getSettings, getAtomcodeToken, getSshConnection, getCloudAiConfig, sameSshTarget, saveSettings, setModelAdminPassword, switchSshProfile, trustHostFingerprint, verifyModelAdminPassword, ensureAgentBridgeToken, getAgentBridgeConversationId, setAgentBridgeConversationId, setAgentBridgeConfig } = require("./settings.cjs");
-const { connectWithRetry, downloadRemoteFile, ensureDeviceControlKey, exec, finalizeDeviceControl, getAgentSdkBridgeStatus, getClaudeModelStatus, installAgentSdkBridge, markDeviceControlDisabled, readDeviceControlIpTrack, readRemoteFile, runClaude, uninstallAgentSdkBridge, updateClaudeAutoCompactWindow, updateClaudeModel, updateClaudeModelEntry, verifyConnection } = require("./ssh.cjs");
+const { connect, connectWithRetry, downloadRemoteFile, ensureDeviceControlKey, exec, finalizeDeviceControl, getAgentSdkBridgeStatus, getClaudeModelStatus, installAgentSdkBridge, markDeviceControlDisabled, readDeviceControlIpTrack, readRemoteFile, runClaude, uninstallAgentSdkBridge, updateClaudeAutoCompactWindow, updateClaudeModel, updateClaudeModelEntry, verifyConnection } = require("./ssh.cjs");
 const { copyLocalFile, getLocalClaudeModelStatus, readLocalFile, runLocalClaude, updateLocalAutoCompactWindow, updateLocalClaudeModel, updateLocalClaudeModelEntry, validatedWorkingDirectory: validatedLocalWorkdir, verifyLocalConnection } = require("./local.cjs");
 const { runAtomCodeChat, verifyAtomCodeConnection } = require("./daemon-chat.cjs");
 // v3.19.0 F3：SSH 远程适配器（qwen/codex/hermes 三家远端 CLI 跑法）
@@ -401,6 +401,53 @@ app.whenReady().then(async () => {
     const current = getSettings();
     const signal = safeSignal("tool-permission-signal", () => signalMonitor.createToolPermission({ requestId: randomUUID(), connectionMode: current.connectionMode, automatic: Boolean(enabled) }));
     return toolPermissionService.setAutomaticMode(enabled, signal);
+  });
+  // ── v3.22.0 云办公二期：沙箱网络切换 / 状态查询（SSH→NAS docker network 插拔；命令即时生效） ──
+  const SANDBOX_SSH_CONFIG = () => {
+    const sshConn = getSshConnection();
+    return { host: sshConn.host, port: sshConn.port, username: sshConn.username, password: sshConn.password, hostFingerprint: sshConn.hostFingerprint };
+  };
+  ipcMain.handle("sandbox:setNetwork", async (_event, enabled) => {
+    try {
+      const verb = enabled ? "connect" : "disconnect";
+      const client = await connect(SANDBOX_SSH_CONFIG(), () => false, writeLog);
+      let result;
+      try {
+        result = await exec(client, `docker network ${verb} bridge sandbox`, { timeoutMs: 20 * 1000, label: "沙箱联网切换" });
+      } finally {
+        try { client.end(); } catch { /* 已断开 */ }
+      }
+      if (result.code !== 0) throw new Error(String(result.stderr || result.stdout || "沙箱联网切换失败").trim());
+      saveSettings({ ...getSettings(), cloudSandboxNetworkEnabled: Boolean(enabled) });
+      writeLog("cloud_sandbox_network_toggled", { enabled, verb });
+      return { ok: true, networkEnabled: Boolean(enabled) };
+    } catch (error) {
+      writeLog("cloud_sandbox_network_failed", { enabled, error: error.message });
+      return { ok: false, error: error.message };
+    }
+  });
+  ipcMain.handle("sandbox:status", async () => {
+    let client;
+    try {
+      client = await connect(SANDBOX_SSH_CONFIG(), () => false, writeLog);
+    } catch (error) {
+      return { ok: false, error: `SSH 连接失败：${error.message}` };
+    }
+    try {
+      const state = await exec(client, "docker inspect sandbox --format '{{.State.Running}}' 2>/dev/null || printf missing", { timeoutMs: 20 * 1000, label: "沙箱状态" });
+      const networks = await exec(client, "docker inspect sandbox --format '{{range $k, $_ := .NetworkSettings.Networks}}{{$k}} {{end}}' 2>/dev/null", { timeoutMs: 20 * 1000, label: "沙箱网络" });
+      const stateText = String(state.stdout || "").trim();
+      const networkList = String(networks.stdout || "").trim().split(/\s+/).filter(Boolean);
+      return {
+        ok: true,
+        container: stateText === "missing" ? "missing" : stateText === "true" ? "running" : "stopped",
+        networkOn: networkList.includes("bridge")
+      };
+    } catch (error) {
+      return { ok: false, error: error.message };
+    } finally {
+      try { client.end(); } catch { /* 已断开 */ }
+    }
   });
   // ── 模型管理 IPC ──
   ipcMain.handle("model:status", async () => {
@@ -991,9 +1038,15 @@ app.whenReady().then(async () => {
       cloudMessages.push({ role: "user", content: message });
 
       // 工具执行（v3.14.0 云办公一期）：推理走云端 API，工具在本机工作目录内执行
+      // v3.22.0 云办公二期：cloudConfig.sandboxEnabled 开启时文件/命令工具改经 SSH→NAS `docker exec sandbox`
+      // 在容器内 /workspace 执行（容器默认断网 + internal 隔离网络；宿主本机零执行面）。
+      // ⚠ 沙箱执行器声明必须先于 runCloudWithTools 定义（闭包体引用静态前置——TDZ 禁形态守门，铁律 §9）
       const toolsEnabled = Boolean(cloudConfig.toolsEnabled);
       const allowCommand = toolsEnabled && Boolean(cloudConfig.runCommandEnabled);
-      if (toolsEnabled && !validatedLocalWorkdir(cloudConfig.workingDirectory)) {
+      const sandboxOn = toolsEnabled && Boolean(cloudConfig.sandboxEnabled);
+      let sandboxSshClient = null;
+      const sandboxExecutor = { enabled: false, run: null };
+      if (toolsEnabled && !validatedLocalWorkdir(cloudConfig.workingDirectory) && !sandboxOn) {
         throw new Error("已开启工具执行，请先在设置中配置云端模式的工作目录。");
       }
       const cloudTools = toolsEnabled ? toolDefinitions(allowCommand) : undefined;
@@ -1047,6 +1100,31 @@ app.whenReady().then(async () => {
       // 旧版 lastUsage 每轮被覆盖+渲染层只记输出，用户 200 万 token 烧穿而计数器只显示 4652 的主因之一。
       // ⚠ 声明位置必须先于 runCloudWithTools 定义（闭包体静态前置，规避混淆器语句重排 TDZ 事故形态——铁律 §9）
       const usageTotal = { prompt: 0, completion: 0, total: 0, requests: 0 };
+      // ── v3.22.0 沙箱执行器：懒建立 SSH 连接（runCloudWithTools 调用先行建立，finally 统一清理）──
+      if (sandboxOn) {
+        const sshConn = getSshConnection(); // SSH 凭证缺失时抛「请先保存密码」中文提示
+        try {
+          sandboxSshClient = await connect(
+            { host: sshConn.host, port: sshConn.port, username: sshConn.username, password: sshConn.password, hostFingerprint: sshConn.hostFingerprint },
+            () => false, // 未信任主机不在此处弹信任询问——提示用户先在 SSH 页完成首次连接信任
+            writeLog
+          );
+        } catch (error) {
+          sandboxSshClient = null;
+          throw new Error(`沙箱执行需要 SSH 连接 NAS：${error.message}（首次使用请先在 SSH 页面完成一次连接以信任主机指纹）`);
+        }
+        sandboxExecutor.enabled = true;
+        sandboxExecutor.run = async ({ command, timeoutMs, stdin }) => {
+          try {
+            const result = await exec(sandboxSshClient, command, { timeoutMs, label: "沙箱命令", stdin });
+            return { code: result.code, stdout: result.stdout, stderr: result.stderr };
+          } catch (error) {
+            const seconds = Math.round(Number(timeoutMs) / 1000);
+            throw new Error(/超时/.test(error.message || "") ? `沙箱命令执行超时（${seconds} 秒），已终止。` : `沙箱执行失败：${error.message}`);
+          }
+        };
+        writeLog("cloud_sandbox_executor_ready", { requestId: id, host: sshConn.host, workdir: "/workspace" });
+      }
       const runCloudWithTools = async () => {
         let loopMessages = cloudMessages;
         // v3.19.0 F3：工具循环轮数上限可配（advanced.cloud.maxToolRounds，5~50 默认 25）
@@ -1112,7 +1190,7 @@ app.whenReady().then(async () => {
             emitToolCard(card);
             let output;
             try {
-              output = await executeToolCall({ id: call.id, name: call.name, arguments: call.arguments }, { workdir: cloudConfig.workingDirectory, allowCommand, onLog: writeLog });
+              output = await executeToolCall({ id: call.id, name: call.name, arguments: call.arguments }, { workdir: sandboxOn ? "/workspace" : cloudConfig.workingDirectory, allowCommand, onLog: writeLog, sandboxExecutor: sandboxOn ? sandboxExecutor : undefined });
               card.status = "completed";
               card.result = String(output).slice(0, 400);
               writeLog("cloud_tool_success", { requestId: id, tool: call.name, outputLength: String(output).length });
@@ -1188,6 +1266,8 @@ app.whenReady().then(async () => {
       } finally {
         if (draftTimer) clearTimeout(draftTimer);
         activeRequests.delete(id);
+        // v3.22.0：沙箱执行器 SSH 连接清理（成功/失败/取消三路径统一收口）
+        if (sandboxSshClient) { try { sandboxSshClient.end(); } catch { /* 已断开 */ } sandboxSshClient = null; }
       }
     }
 

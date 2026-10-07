@@ -490,6 +490,9 @@ function getSettings() {
     cloudToolsEnabled: Boolean(raw.cloudToolsEnabled),
     cloudRunCommandEnabled: Boolean(raw.cloudRunCommandEnabled),
     cloudWorkingDirectory: String(raw.cloudWorkingDirectory || "").trim(),
+    // 云办公二期 v3.22.0：NAS Docker 沙箱（容器名固定 sandbox；默认断网、临时联网可切换）
+    cloudSandboxEnabled: Boolean(raw.cloudSandboxEnabled),
+    cloudSandboxNetworkEnabled: Boolean(raw.cloudSandboxNetworkEnabled),
     // Agent HTTP 桥（阉割版 Bridge Edition 专用；主版字段在场但功能门控关闭；Token 不出此接口）
     agentBridgePort: normalizeAgentBridgePort(raw.agentBridgePort),
     agentBridgeGate: raw.agentBridgeGate === undefined ? true : Boolean(raw.agentBridgeGate),
@@ -598,6 +601,9 @@ function getCloudAiConfig() {
     toolsEnabled: Boolean(raw.cloudToolsEnabled),
     runCommandEnabled: Boolean(raw.cloudRunCommandEnabled),
     workingDirectory: String(raw.cloudWorkingDirectory || "").trim(),
+    // 云办公二期 v3.22.0：NAS Docker 沙箱执行（文件/命令工具一律经 SSH→容器内执行）
+    sandboxEnabled: Boolean(raw.cloudSandboxEnabled),
+    sandboxNetworkEnabled: Boolean(raw.cloudSandboxNetworkEnabled),
     maxTokens: raw.cloudAiMaxTokens || 4096,
     // v3.19.0 F3：高级设置（云端超时/重试/轮次）与 SSH 适配器选择随行
     advancedEffective: advancedEffective(sanitizeAdvanced(undefined, raw.advanced)),
@@ -672,6 +678,9 @@ function saveSettings(input) {
     cloudToolsEnabled: Boolean(input.cloudToolsEnabled),
     cloudRunCommandEnabled: Boolean(input.cloudRunCommandEnabled),
     cloudWorkingDirectory: String(input.cloudWorkingDirectory || "").trim(),
+    // 云办公二期 v3.22.0：NAS Docker 沙箱（容器名固定 sandbox）
+    cloudSandboxEnabled: Boolean(input.cloudSandboxEnabled),
+    cloudSandboxNetworkEnabled: Boolean(input.cloudSandboxNetworkEnabled),
     cloudAiMaxTokens: input.cloudAiMaxTokens || previous.cloudAiMaxTokens || 4096,
     cloudAiApiKeyEncrypted: previous.cloudAiApiKeyEncrypted || "",
     cloudAiApiKey: "",

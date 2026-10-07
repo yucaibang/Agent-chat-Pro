@@ -186,6 +186,9 @@ async function runConversationTests() {
   await test("truncate 旧数据（无 mid）按 at+role 兜底删除", () => {
     const conv = conversations.createConversation();
     conversations.addUserMessage(conv.id, "旧消息A");
+    // 稳定性：at 为毫秒精度，连续 add 可同毫秒致兜底 findIndex 提前命中前一条——强制等毫秒翻页错开
+    const t0 = Date.now();
+    while (Date.now() === t0) {}
     conversations.addUserMessage(conv.id, "旧消息B");
     const stored = conversations.getConversation(conv.id).messages;
     const anchor = { mid: "", at: stored[1].at, role: "user" };

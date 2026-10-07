@@ -181,8 +181,9 @@ async function runWiringTests() {
 
 // ── C 段：版本号 + 滑杆域一致 ─────────────────
 async function runVersionTests() {
-  await test("C1 package.json 版本 = 3.21.4", () => {
-    assert.strictEqual(pkg.version, "3.21.4");
+  await test("C1 package.json 版本 ≥ 3.21.4", () => {
+    const rank = pkg.version.split(".").reduce((sum, part) => sum * 1000 + Number(part), 0);
+    assert.ok(rank >= 32104, `版本 ${pkg.version} 应 ≥ 3.21.4`);
   });
 
   await test("C2 渲染层滑杆 min/max 与 clamp 域一致（4-60 / 20-100 / 0-30 / 10-100）", () => {

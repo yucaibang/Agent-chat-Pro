@@ -119,6 +119,9 @@ function settingsFromForm() {
     cloudToolsEnabled: document.querySelector("#cloud-tools-enabled")?.checked || false,
     cloudRunCommandEnabled: document.querySelector("#cloud-run-command-enabled")?.checked || false,
     cloudWorkingDirectory: document.querySelector("#cloud-working-directory")?.value || "",
+    // 云办公二期 v3.22.0：沙箱执行与临时联网状态
+    cloudSandboxEnabled: document.querySelector("#cloud-sandbox-enabled")?.checked || false,
+    cloudSandboxNetworkEnabled: document.querySelector("#cloud-sandbox-network-enabled")?.checked || false,
     // 代理设置
     proxyEnabled: document.querySelector("#proxy-enabled")?.checked || false,
     proxyType: document.querySelector("#proxy-type")?.value || "http",
@@ -189,6 +192,11 @@ function populateSettings(settings) {
   if (cloudToolsEnabled) cloudToolsEnabled.checked = Boolean(settings.cloudToolsEnabled);
   if (cloudRunCommandEnabled) cloudRunCommandEnabled.checked = Boolean(settings.cloudRunCommandEnabled);
   if (cloudWorkingDirectory) cloudWorkingDirectory.value = settings.cloudWorkingDirectory || "";
+  // 云办公二期 v3.22.0：沙箱执行与临时联网回填
+  const cloudSandboxEnabled = document.querySelector("#cloud-sandbox-enabled");
+  const cloudSandboxNetwork = document.querySelector("#cloud-sandbox-network-enabled");
+  if (cloudSandboxEnabled) cloudSandboxEnabled.checked = Boolean(settings.cloudSandboxEnabled);
+  if (cloudSandboxNetwork) cloudSandboxNetwork.checked = Boolean(settings.cloudSandboxNetworkEnabled);
   // 代理设置回填
   hasProxyPassword = Boolean(settings.hasProxyPassword);
   const proxyEnabled = document.querySelector("#proxy-enabled");
@@ -2461,6 +2469,46 @@ document.querySelector("#proxy-test")?.addEventListener("click", async () => {
   } finally {
     button.disabled = false;
     button.textContent = "测试代理连接";
+  }
+});
+
+// ── 云办公二期 v3.22.0：沙箱状态检测 + 临时联网切换（立即生效，非表单保存） ──
+document.querySelector("#cloud-sandbox-network-enabled")?.addEventListener("change", async () => {
+  const toggle = document.querySelector("#cloud-sandbox-network-enabled");
+  const hint = document.querySelector("#cloud-sandbox-status-text");
+  if (!toggle) return;
+  const wanted = toggle.checked;
+  toggle.disabled = true;
+  try {
+    const result = await window.agentChatPro.setSandboxNetwork(wanted);
+    if (!result.ok) {
+      toggle.checked = !wanted; // 切换失败回拨勾选态与实际网络一致
+      if (hint) hint.textContent = `联网切换失败：${result.error}`;
+    } else if (hint) {
+      hint.textContent = wanted ? "沙箱已临时连网（用完记得取消勾选恢复断网）。" : "沙箱已恢复断网（外网数据泄出通道已关闭）。";
+    }
+  } catch (error) {
+    toggle.checked = !wanted;
+    if (hint) hint.textContent = `联网切换失败：${error.message || error}`;
+  } finally {
+    toggle.disabled = false;
+  }
+});
+document.querySelector("#cloud-sandbox-status")?.addEventListener("click", async () => {
+  const hint = document.querySelector("#cloud-sandbox-status-text");
+  if (!hint) return;
+  hint.textContent = "检测中…";
+  try {
+    const status = await window.agentChatPro.getSandboxStatus();
+    if (!status.ok) {
+      hint.textContent = `沙箱状态检测失败：${status.error}`;
+      return;
+    }
+    const stateText = status.container === "running" ? "运行中" : status.container === "stopped" ? "已停止" : "未安装（容器不存在）";
+    const networkText = status.container === "missing" ? "" : status.networkOn ? " · 已临时连网" : " · 断网隔离中";
+    hint.textContent = `沙箱容器：${stateText}${networkText}`;
+  } catch (error) {
+    hint.textContent = `沙箱状态检测失败：${error.message || error}`;
   }
 });
 

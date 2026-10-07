@@ -256,6 +256,12 @@
             <p class="field-hint">所有文件工具只能访问该目录内的文件（含子目录），目录外的路径会被拒绝。</p>
             <label class="checkbox"><input id="cloud-run-command-enabled" type="checkbox" /><span>允许执行命令（run_command，有安全风险）</span></label>
             <p class="field-hint">⚠️ 开启后 AI 可在工作目录内执行任意命令（默认 2 分钟超时）。AI 生成的命令可能删除文件或修改系统，请仅在可信任的任务中开启。</p>
+            <label class="checkbox"><input id="cloud-sandbox-enabled" type="checkbox" /><span>沙箱执行（v3.22.0：工具在 NAS Docker 容器内运行，推荐）</span></label>
+            <p class="field-hint">开启后文件读取/写入、列目录与命令执行改为在 NAS 的 Docker 沙箱容器（名称固定 sandbox）内进行，容器默认断网且与 NAS 系统隔离；工作目录概念变为沙箱内 /workspace（NAS 上持久化为 agent/sandbox/work）。需要 SSH 连接凭证（用于下发容器命令）。</p>
+            <label class="checkbox"><input id="cloud-sandbox-network-enabled" type="checkbox" /><span>沙箱临时联网（默认断网；勾选后立即连网，取消后立即断网）</span></label>
+            <p class="field-hint">默认断网：AI 生成的命令无法访问外网（防数据外泄）。需要下载依赖等联网操作时临时勾选，用完取消即可。联网状态立即生效，不需要重启容器。</p>
+            <button id="cloud-sandbox-status" type="button" class="secondary">检查沙箱状态</button>
+            <p class="field-hint" id="cloud-sandbox-status-text"></p>
           </details>
           <details id="proxy-settings" class="proxy-settings">
             <summary>🔧 代理设置（可选）</summary>

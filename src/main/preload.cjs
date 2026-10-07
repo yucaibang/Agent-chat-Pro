@@ -27,6 +27,9 @@ contextBridge.exposeInMainWorld("agentChatPro", {
   loadSettings: () => ipcRenderer.invoke("settings:load"),
   saveSettings: (settings) => ipcRenderer.invoke("settings:save", settings),
   setToolMode: (enabled) => ipcRenderer.invoke("settings:tool-mode", enabled),
+  // v3.22.0 云办公二期：沙箱状态查询与临时联网切换（立即生效动作，非表单保存）
+  getSandboxStatus: () => ipcRenderer.invoke("sandbox:status"),
+  setSandboxNetwork: (enabled) => ipcRenderer.invoke("sandbox:setNetwork", enabled),
   // ── 模型管理 IPC ──
   getModelStatus: () => ipcRenderer.invoke("model:status"),
   initializeModelAdminPassword: (input) => ipcRenderer.invoke("model:initialize-password", input),

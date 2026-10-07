@@ -1229,6 +1229,10 @@ function exec(client, command, options = {}) {
     client.exec(command, (error, openedStream) => {
       if (error) return finish(reject, error);
       stream = openedStream;
+      // v3.22.0：stdin 支持（write_file 内容经 stdin 流入沙箱容器内 cat 重定向——EOF 触发远端结束）
+      if (options.stdin != null) {
+        try { stream.end(String(options.stdin)); } catch { /* EOF 发送失败由后续 close 兜底 */ }
+      }
       stream.on("data", (data) => { stdout += data.toString("utf8"); });
       stream.stderr.on("data", (data) => { stderr += data.toString("utf8"); });
       stream.on("error", (streamError) => finish(reject, streamError));
@@ -1241,4 +1245,4 @@ function cleanError(value) {
   return value.replace(/\x1B\[[0-?]*[ -/]*[@-~]/g, "").trim();
 }
 
-module.exports = { buildAttachmentNote, buildDeviceConnectScript, cleanupRemoteAttachments, connectWithRetry, downloadRemoteFile, ensureDeviceControlKey, exec, finalizeDeviceControl, getAgentSdkBridgeStatus, getClaudeModelStatus, handleToolPayload, installAgentSdkBridge, loadDeviceTemplate, markDeviceControlDisabled, mimeFromPath, readDeviceControlIpTrack, readRemoteFile, runClaude, safeRemoteFileName, shellQuote, uninstallAgentSdkBridge, updateClaudeAutoCompactWindow, updateClaudeModel, updateClaudeModelEntry, verifyConnection, withTimeout, writeSftp };
+module.exports = { buildAttachmentNote, buildDeviceConnectScript, connect, cleanupRemoteAttachments, connectWithRetry, downloadRemoteFile, ensureDeviceControlKey, exec, finalizeDeviceControl, getAgentSdkBridgeStatus, getClaudeModelStatus, handleToolPayload, installAgentSdkBridge, loadDeviceTemplate, markDeviceControlDisabled, mimeFromPath, readDeviceControlIpTrack, readRemoteFile, runClaude, safeRemoteFileName, shellQuote, uninstallAgentSdkBridge, updateClaudeAutoCompactWindow, updateClaudeModel, updateClaudeModelEntry, verifyConnection, withTimeout, writeSftp };
