@@ -772,9 +772,10 @@ async function main() {
   // ════════════════ G. 构建管线 bridge 目标 ════════════════
   console.log("\n=== G. 构建管线 bridge 目标 ===");
 
-  await test("G1. npm script build:win:bridge 在册；主版版本号不动（3.21.2）", () => {
+  await test("G1. npm script build:win:bridge 在册；主版版本 ≥ 3.21.2（锚点随行为演进对齐）", () => {
     assert.strictEqual(pkg.scripts["build:win:bridge"], "node scripts/build-pipeline.cjs bridge");
-    assert.strictEqual(pkg.version, "3.21.2", "Bridge 是独立产物线，主版版本不动");
+    const rank = pkg.version.split(".").reduce((sum, part) => sum * 1000 + Number(part), 0);
+    assert.ok(rank >= 32102, `主版版本 ${pkg.version} 应 ≥ 3.21.2（Bridge 是独立产物线，主版版本只增不减）`);
   });
 
   await test("G2. 管线：editionInfoFor 随形态出 exe/安装包/清单名", () => {

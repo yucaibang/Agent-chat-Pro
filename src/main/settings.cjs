@@ -365,6 +365,13 @@ function normalizeLocalEngine(value) {
   return value === "atomcode" || value === "custom" ? value : "claude";
 }
 
+/** 外观参数钳制（v3.21.4）：clamp 至滑杆合法域；非法/低于下限（含旧版 0-1 比例残留 0.15）回退默认值 */
+function clampAppearanceRange(value, min, max, fallback) {
+  const num = Number(value);
+  if (!Number.isFinite(num) || num < min) return fallback;
+  return Math.min(max, Math.max(min, Math.round(num)));
+}
+
 function normalizeAtomcodePort(value) {
   const port = Number(value);
   return Number.isInteger(port) && port >= 1 && port <= 65535 ? port : 13456;
@@ -501,8 +508,11 @@ function getSettings() {
     theme: raw.theme || "dark",
     // 背景设置
     backgroundImage: raw.backgroundImage || "",
-    backgroundBlur: raw.backgroundBlur || 0,
-    backgroundOpacity: raw.backgroundOpacity || 0.15,
+    backgroundBlur: clampAppearanceRange(raw.backgroundBlur, 0, 30, 0),
+    backgroundOpacity: clampAppearanceRange(raw.backgroundOpacity, 10, 100, 100),
+    // 毛玻璃参数（v3.21.4）：此前渲染层提交被落盘白名单静默丢弃（拖杆值重启丢失），补收
+    frostedBlur: clampAppearanceRange(raw.frostedBlur, 4, 60, 20),
+    frostedOpacity: clampAppearanceRange(raw.frostedOpacity, 20, 100, 85),
     frostedGlass: raw.frostedGlass || false,
     // 模式
     workModeId: raw.workModeId || "regular",
@@ -679,8 +689,11 @@ function saveSettings(input) {
     theme: input.theme || previous.theme || "dark",
     // 背景
     backgroundImage: input.backgroundImage !== undefined ? input.backgroundImage : previous.backgroundImage || "",
-    backgroundBlur: input.backgroundBlur !== undefined ? input.backgroundBlur : previous.backgroundBlur || 0,
-    backgroundOpacity: input.backgroundOpacity !== undefined ? input.backgroundOpacity : previous.backgroundOpacity || 0.15,
+    backgroundBlur: input.backgroundBlur !== undefined ? clampAppearanceRange(input.backgroundBlur, 0, 30, 0) : clampAppearanceRange(previous.backgroundBlur, 0, 30, 0),
+    backgroundOpacity: input.backgroundOpacity !== undefined ? clampAppearanceRange(input.backgroundOpacity, 10, 100, 100) : clampAppearanceRange(previous.backgroundOpacity, 10, 100, 100),
+    // 毛玻璃参数（v3.21.4）：渲染层滑杆提交落盘白名单（修复拖杆值重启丢失）
+    frostedBlur: input.frostedBlur !== undefined ? clampAppearanceRange(input.frostedBlur, 4, 60, 20) : clampAppearanceRange(previous.frostedBlur, 4, 60, 20),
+    frostedOpacity: input.frostedOpacity !== undefined ? clampAppearanceRange(input.frostedOpacity, 20, 100, 85) : clampAppearanceRange(previous.frostedOpacity, 20, 100, 85),
     frostedGlass: input.frostedGlass || previous.frostedGlass || false,
     // 模式
     workModeId: input.workModeId || previous.workModeId || "regular",

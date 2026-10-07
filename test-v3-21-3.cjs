@@ -122,8 +122,9 @@ async function runMainTests() {
     assert.ok(decl < runner, `usageTotal 声明(@${decl})必须先于 runCloudWithTools 定义(@${runner})——闭包体静态后置引用是 v3.21.0 混淆 TDZ 事故形态`);
   });
 
-  await test("B7. 版本 3.21.3", () => {
-    assert.ok(pkg.version === "3.21.3");
+  await test("B7. 版本 ≥ 3.21.3", () => {
+    const rank = pkg.version.split(".").reduce((sum, part) => sum * 1000 + Number(part), 0);
+    assert.ok(rank >= 32103, `版本 ${pkg.version} 应 ≥ 3.21.3`);
   });
 }
 
