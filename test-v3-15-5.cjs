@@ -241,15 +241,17 @@ async function runWiringTests() {
     assert.ok(mainSrc.includes("conversation_truncated"), "删除日志缺失");
   });
 
-  await test("main.cjs：emitRoundSeparator 定义 + 循环内 round>0 调用", () => {
+  await test("main.cjs：emitRoundSeparator 定义 + 循环内 round>0 调用（v3.21.3：改推 round 事件不再拼 --- 进正文）", () => {
     assert.ok(mainSrc.includes("emitRoundSeparator"), "emitRoundSeparator 缺失");
     assert.ok(mainSrc.includes('if (round > 0 && cloudCallbacks.emitRoundSeparator)'), "循环调用点缺失");
-    assert.ok(/separator = "\\n\\n---\\n\\n"/.test(mainSrc) || mainSrc.includes('"\\n\\n---\\n\\n"'), "分隔符缺失");
+    assert.ok(mainSrc.includes('type: "round"'), "应推 round 专用事件（v3.21.3 修复②）");
+    assert.ok(!mainSrc.includes("streamedText += separator"), "不应把分隔符累计进 streamedText（v3.21.3 修复②）");
   });
 
-  await test("main.cjs：分隔不经 onDelta（避免 streamedText 二次累计），直接推 chat:delta", () => {
+  await test("main.cjs：分隔不进正文流（v3.21.3：不再推 chat:delta 文本注入），渲染层画轮次徽标", () => {
     const emitBlock = mainSrc.slice(mainSrc.indexOf("emitRoundSeparator:"), mainSrc.indexOf("onStatus:"));
-    assert.ok(emitBlock.includes('sendWorkStatusSignal(event.sender, "chat:delta"'), "分隔应直接推 chat:delta");
+    assert.ok(emitBlock.includes('type: "round"'), "分隔应推 chat:event 的 round 事件");
+    assert.ok(!emitBlock.includes('sendWorkStatusSignal(event.sender, "chat:delta"'), "不应经 chat:delta 注入正文（v3.21.3 修复②）");
     assert.ok(!emitBlock.includes("cloudCallbacks.onDelta"), "不应经 onDelta 造成二次累计");
   });
 
@@ -274,9 +276,9 @@ async function runWiringTests() {
     assert.ok(block.includes("删除失败"), "失败应有提示且不删 DOM");
   });
 
-  await test("renderer：删除后按落库重算累计 token", () => {
+  await test("renderer：删除后按落库重算累计 token（v3.21.3：云端消息优先真实账目 tokensForMessage）", () => {
     const block = rendererSrc.slice(rendererSrc.indexOf('createContextMenuItem("🗑"'), rendererSrc.indexOf("} else if (kind === \"assistant\")"));
-    assert.ok(block.includes("estimateTokens(msg.text"), "token 重算缺失");
+    assert.ok(block.includes("tokensForMessage(msg"), "token 重算缺失");
     assert.ok(block.includes("updateTokenDisplay()"), "token 刷新缺失");
   });
 

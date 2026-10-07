@@ -51,7 +51,7 @@ const { listModes, getMode, createMode, updateMode, deleteMode, exportModes, imp
 const { buildCommandWithMode, buildBridgeStartWithMode, buildLocalArgsWithMode } = require("./modes/mode-params.cjs");
 const { NetworkManager, STATES } = require("./network/network-manager.cjs");
 const { LatencyMonitor } = require("./network/latency-monitor.cjs");
-const { sendCloudChat, buildMessages, verifyCloudConnection, testProxyConnectivity } = require("./cloud-chat.cjs");
+const { sendCloudChat, buildMessages, verifyCloudConnection, testProxyConnectivity, accumulateUsage } = require("./cloud-chat.cjs");
 // v3.21.0 云端「拉取模型列表」：官方 GET /models 实时拉取该密钥可用的全部模型
 const { fetchProviderModels } = require("./cloud-models.cjs");
 const { executeToolCall, toolDefinitions, MAX_TOOL_ROUNDS } = require("./cloud-tools.cjs");
@@ -383,6 +383,13 @@ app.whenReady().then(async () => {
         durationMs: Date.now() - startedAt
       });
       writeLog("settings_saved", { connectionMode: saved.connectionMode, host: saved.host, port: saved.port, username: saved.username, wakeName: saved.wakeName, dataDirectory: saved.dataDirectory });
+      // v3.21.3 修复③埋点：advanced 三组落盘形态摘要（真机排障：高级设置保存回退问题一眼可查）
+      writeLog("settings_advanced_saved", {
+        sshGroup: saved.advanced?.ssh ? "manual" : "auto",
+        externalGroup: saved.advanced?.external ? "manual" : "auto",
+        cloudGroup: saved.advanced?.cloud ? "manual" : "auto",
+        cloudRounds: saved.advanced?.cloud?.maxToolRounds ?? null
+      });
       return saved;
     } catch (error) {
       safeSignal("settings-save-failed", () => saveSignal.failed(error));
@@ -1013,13 +1020,11 @@ app.whenReady().then(async () => {
           sendWorkStatusSignal(event.sender, "chat:delta", { id, text });
           if (!draftTimer) draftTimer = setTimeout(persistDraft, 1000);
         },
-        // v3.15.5 修复3：工具循环跨轮分隔——每轮工具执行后插入分隔线，视觉区分各轮输出
-        //（不经 onDelta，避免 streamedText 二次累计；直接推 chat:delta 到前端）
-        emitRoundSeparator: () => {
-          if (!streamedText) return;
-          const separator = "\n\n---\n\n";
-          streamedText += separator;
-          sendWorkStatusSignal(event.sender, "chat:delta", { id, text: separator });
+        // v3.21.3 修复②：跨轮分隔不再把 markdown `---` 拼进 streamedText（v3.15.5 的做法会污染
+        // 正文/draft/会话历史，N 轮工具 = N 条 hr 横线堆叠，用户实报观感混乱）。改为推专用 round 事件，
+        // 渲染层在工具牌序列前画轻量「第 N 轮」徽标，正文零污染。
+        emitRoundSeparator: (round) => {
+          sendWorkStatusSignal(event.sender, "chat:event", { id, type: "round", round });
         },
         onStatus: (status) => sendWorkStatusSignal(event.sender, "chat:event", { id, type: "connection", status }),
         onUsage: (usage) => sendWorkStatusSignal(event.sender, "chat:event", { id, type: "usage", usage }),
@@ -1038,6 +1043,10 @@ app.whenReady().then(async () => {
       }, messages, cloudCallbacks);
 
       // 工具循环（agent loop）：tool_calls → 本机执行 → 结果回填 → 再请求，直到纯文本回复或达轮数上限
+      // v3.21.3 修复①：跨轮 usage 累计器——财务真实账目 = Σ每轮(输入+输出)。
+      // 旧版 lastUsage 每轮被覆盖+渲染层只记输出，用户 200 万 token 烧穿而计数器只显示 4652 的主因之一。
+      // ⚠ 声明位置必须先于 runCloudWithTools 定义（闭包体静态前置，规避混淆器语句重排 TDZ 事故形态——铁律 §9）
+      const usageTotal = { prompt: 0, completion: 0, total: 0, requests: 0 };
       const runCloudWithTools = async () => {
         let loopMessages = cloudMessages;
         // v3.19.0 F3：工具循环轮数上限可配（advanced.cloud.maxToolRounds，5~50 默认 25）
@@ -1049,15 +1058,33 @@ app.whenReady().then(async () => {
         const maxToolRounds = Number.isInteger(Number(advancedCloud.maxToolRounds))
           && Number(advancedCloud.maxToolRounds) >= 5 && Number(advancedCloud.maxToolRounds) <= 50
           ? Number(advancedCloud.maxToolRounds) : MAX_TOOL_ROUNDS;
+        // v3.21.3 修复①：跨轮 usage 累计器——财务真实账目 = Σ每轮(输入+输出)。
+        // 旧版 lastUsage 每轮被覆盖+渲染层只记输出，用户 200 万 token 烧穿而计数器只显示 4652 的主因之一。
+        const withCumulativeUsage = (result) => ({
+          ...result,
+          usage: usageTotal.requests
+            ? {
+                inputTokens: usageTotal.prompt, outputTokens: usageTotal.completion, totalTokens: usageTotal.total,
+                cumulative: true, requests: usageTotal.requests,
+                prompt_tokens: usageTotal.prompt, completion_tokens: usageTotal.completion, total_tokens: usageTotal.total
+              }
+            : (result.usage || null)
+        });
         for (let round = 0; round <= maxToolRounds; round += 1) {
-          // v3.15.5 修复3：round>0 时上一轮工具已执行完，插入跨轮分隔线（首轮不插）
-          if (round > 0 && cloudCallbacks.emitRoundSeparator) cloudCallbacks.emitRoundSeparator();
+          // v3.21.3 修复②：round>0 时上一轮工具已执行完，推跨轮标记事件（首轮不推；不再注入正文分隔线）
+          if (round > 0 && cloudCallbacks.emitRoundSeparator) cloudCallbacks.emitRoundSeparator(round);
           const promise = requestOnce(loopMessages);
           activeRequests.set(id, { promise, cancel: () => { promise.cancel?.(); }, conversationId: input.conversationId });
           const result = await promise;
-          if (result.cancelled) return { ...result, tools: collectedTools };
+          // v3.21.3 修复①：本轮请求结束后把最终 usage 计入累计，并推「轮末累计」事件供渲染层以真实账目替换估算
+          const roundUsageDelta = accumulateUsage(usageTotal, result.usage);
+          if (roundUsageDelta > 0) {
+            writeLog("cloud_round_usage", { requestId: id, round, promptTokens: usageTotal.prompt, completionTokens: usageTotal.completion, totalTokens: usageTotal.total, requests: usageTotal.requests });
+            sendWorkStatusSignal(event.sender, "chat:event", { id, type: "usage", usage: { inputTokens: usageTotal.prompt, outputTokens: usageTotal.completion, totalTokens: usageTotal.total, cumulative: true, requests: usageTotal.requests } });
+          }
+          if (result.cancelled) return withCumulativeUsage({ ...result, tools: collectedTools });
           const toolCalls = toolsEnabled ? (result.toolCalls || []) : [];
-          if (!toolCalls.length) return { ...result, tools: collectedTools };
+          if (!toolCalls.length) return withCumulativeUsage({ ...result, tools: collectedTools });
 
           const toolCallsRaw = toolCalls.map((call, index) => {
             let input = {};
@@ -1123,7 +1150,9 @@ app.whenReady().then(async () => {
             writeLog("cloud_repetition_collapsed", { requestId: id, conversationId: input.conversationId, collapsed: cancelledRepetition.collapsed, removed: cancelledRepetition.removed, originalLength: streamedText.length, phase: "cancelled" });
           }
           const cancelledText = (cancelledRepetition.collapsed ? cancelledRepetition.text : streamedText) || "已停止。";
-          addAssistantMessage(input.conversationId, cancelledText, "", [], collectedTools, id, "cloud");
+          // v3.21.3 修复①：取消时已发生的真实消耗同样入账（usageTotal 为空则不挂）
+          addAssistantMessage(input.conversationId, cancelledText, "", [], collectedTools, id, "cloud",
+            usageTotal.requests ? { inputTokens: usageTotal.prompt, outputTokens: usageTotal.completion, totalTokens: usageTotal.total, cumulative: true } : undefined);
           writeLog("work_status_signal", statusSignalEntry({ requestId: id, direction: "main-received", signal: "request-outcome", disposition: "cancelled", eventType: "lifecycle", eventStatus: "cancelled" }));
           sendWorkStatusSignal(event.sender, "chat:event", normalizeAndObserveStatusEvent({ id, type: "lifecycle", status: "cancelled" }, { connectionMode: "cloud" }));
           return { id, cancelled: true, text: cancelledText, sessionId: "", tools: collectedTools, files: [] };
@@ -1135,9 +1164,13 @@ app.whenReady().then(async () => {
           writeLog("cloud_repetition_collapsed", { requestId: id, conversationId: input.conversationId, collapsed: repetition.collapsed, removed: repetition.removed, originalLength: streamedText.length });
         }
         const finalText = repetition.collapsed ? repetition.text : streamedText;
-        addAssistantMessage(input.conversationId, finalText || "（无输出）", "", [], collectedTools, id, "cloud");
+        // v3.21.3 修复①：落库挂累计 usage（conversationStats 聚合输入/输出/总计真实账目；形态驼峰对齐）
+        const cumulativeUsage = usageTotal.requests
+          ? { inputTokens: usageTotal.prompt, outputTokens: usageTotal.completion, totalTokens: usageTotal.total, cumulative: true }
+          : undefined;
+        addAssistantMessage(input.conversationId, finalText || "（无输出）", "", [], collectedTools, id, "cloud", cumulativeUsage);
         const stats = conversationStats(getConversation(input.conversationId));
-        writeLog("chat_send_success", { requestId: id, conversationId: input.conversationId, textLength: finalText.length, toolCallCount: collectedTools.length, connectionMode: "cloud" });
+        writeLog("chat_send_success", { requestId: id, conversationId: input.conversationId, textLength: finalText.length, toolCallCount: collectedTools.length, connectionMode: "cloud", usageTokens: usageTotal.total });
         writeLog("work_status_signal", statusSignalEntry({ requestId: id, direction: "main-received", signal: "request-outcome", disposition: "completed", eventType: "lifecycle", eventStatus: "finished" }));
         sendWorkStatusSignal(event.sender, "chat:event", normalizeAndObserveStatusEvent({ id, type: "lifecycle", status: "finished" }, { connectionMode: "cloud" }));
         return { id, text: finalText, usage: result.usage, stopReason: result.stopReason, sessionId: "", tools: collectedTools, files: [], stats, repetition: { collapsed: repetition.collapsed, removed: repetition.removed } };

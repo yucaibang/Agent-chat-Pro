@@ -235,8 +235,9 @@ async function main() {
 
   console.log("\n=== E. 版本 ===");
 
-  await test("E1. package.json 3.21.2", () => {
-    assert.strictEqual(pkg.version, "3.21.2");
+  await test("E1. package.json 版本为 semver 形态（v3.21.3 起按先例放宽不写死——版本升级后历史测试仍需全绿）", () => {
+    assert.ok(/^\d+\.\d+\.\d+$/.test(pkg.version), `version=${pkg.version}`);
+    console.log("  （当前版本：" + pkg.version + "）");
   });
 
   console.log("\n=== F. 历史测试复跑 ===");

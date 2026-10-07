@@ -120,12 +120,37 @@ function buildChatBody(messages, options = {}) {
       return { role: msg.role, content: msg.text || msg.content || "" };
     }),
     stream: true,
-    max_tokens: options.maxTokens || 4096
+    max_tokens: options.maxTokens || 4096,
+    // v3.21.3 修复①：OpenAI 兼容流式默认不回 usage 块（token 计量只剩估算值）。
+    // 标准字段 stream_options.include_usage 会让端点在最后一个 chunk 附带完整 usage；
+    // 主流 OpenAI 兼容端点（智谱/DeepSeek/Kimi/OpenAI/Groq/硅基流动/豆包）均支持，未知字段在中转站一般被忽略。
+    // Anthropic 分支不走此函数（原生 message_delta 自带 usage）。
+    stream_options: { include_usage: true }
   };
   if (Array.isArray(options.tools) && options.tools.length) body.tools = options.tools;
   if (options.temperature !== undefined) body.temperature = options.temperature;
   if (options.topP !== undefined) body.topP = options.topP;
   return body;
+}
+
+/**
+ * v3.21.3 修复①：云端工具循环的 usage 跨轮累计器（纯函数，供 main.cjs 工具循环复用与单测）。
+ * ⚠️ 财务口径说明（v3.21.3 修正 v3.15.1 的旧理解）：云端 AI 工具循环每一轮请求都会把
+ * 全部上下文（历史+工具结果）重新计一次输入费用——服务商账单就是按「每轮完整请求」计的，
+ * 所以真实消耗必须 Σ每轮 (input + output) 累加，而不是只记本轮输出。
+ * usage 字段三风格兼容（camelCase / snake_case 均可）。
+ * @returns {number} 本次累计到的增量（total_tokens），供日志或断言；无效 usage 返回 0
+ */
+function accumulateUsage(total, usage) {
+  if (!usage || typeof usage !== "object") return 0;
+  const prompt = Number(usage.promptTokens ?? usage.prompt_tokens ?? usage.inputTokens ?? usage.input_tokens ?? 0) || 0;
+  const completion = Number(usage.completionTokens ?? usage.completion_tokens ?? usage.outputTokens ?? usage.output_tokens ?? 0) || 0;
+  if (!prompt && !completion) return 0;
+  total.prompt += prompt;
+  total.completion += completion;
+  total.total += prompt + completion;
+  total.requests += 1;
+  return prompt + completion;
 }
 
 /** 将对话历史转为 API 消息格式 */
@@ -599,4 +624,4 @@ function verifyCloudConnection(config, onLog) {
   });
 }
 
-module.exports = { sendCloudChat, buildMessages, verifyCloudConnection, friendlyError, testProxyConnectivity, buildChatBody, buildAnthropicBody, translateHttpError };
+module.exports = { sendCloudChat, buildMessages, verifyCloudConnection, friendlyError, testProxyConnectivity, buildChatBody, buildAnthropicBody, translateHttpError, accumulateUsage };

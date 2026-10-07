@@ -678,6 +678,14 @@ function setStatus(text, isError = false) {
 }
 
 // ── Token 计数器更新 ──
+// v3.21.3 修复①：单条消息 token 口径——云端消息带累计 usage（cumulative）时用服务商真实账目，
+// 其余（含 SSH/local 与无 usage 旧消息）维持估算文本
+function tokensForMessage(msg) {
+  if (msg?.usage && msg.usage.cumulative === true) {
+    return Number(msg.usage.totalTokens ?? msg.usage.total_tokens ?? 0) || 0;
+  }
+  return estimateTokens(msg.text || "");
+}
 function estimateTokens(text) {
   // 粗略估算：英文约 4 字符/token，中文约 1.5 字符/token，混合取约 2.5
   if (!text) return 0;
@@ -832,6 +840,21 @@ async function renderAssistant(item, text) {
     });
     pre.append(copy);
   });
+}
+
+// v3.21.3 修复②：跨轮徽标（历史不做轮次重建——工具牌连排天然分组；本轮流式实时插入）
+function appendRoundMark(answer, round) {
+  if (!answer) return;
+  const node = document.createElement("div");
+  node.className = "round-mark";
+  node.textContent = `— 第 ${Number(round) || 1} 轮工具 —`;
+  answer.append(node);
+  if (isNearBottom()) elements.messages.scrollTop = elements.messages.scrollHeight;
+}
+
+// v3.21.3 修复②：v3.15.5~v3.21.2 期间注入正文的独立 `---` 分隔行剥除（只对带工具牌的云端消息调用）
+function stripSeparatorLines(text) {
+  return String(text || "").replace(/^[ \t]*-{3,}[ \t]*\n/gm, "\n").replace(/^[ \t]*-{3,}[ \t]*$/gm, "");
 }
 
 function renderTool(item, tool) {
@@ -1361,7 +1384,8 @@ async function loadConversation(id) {
       (message.tools || []).forEach((tool) => renderTool(item, tool));
       finalizeToolList(item, message.tools || []);
       renderReturnedFiles(item, message.files || []);
-      renderAssistant(item, message.text);
+      // v3.21.3 修复②：带工具牌的云端历史消息——剥掉 v3.15.5 起注入正文的孤立 `---` 分隔行（不再堆横线）
+      renderAssistant(item, (message.tools || []).length ? stripSeparatorLines(message.text) : message.text);
     }
   });
   // v3.15.0 bug1：切回正在处理的对话——把后台流式元素重新挂载（同一引用，后续 delta 无缝衔接）
@@ -1381,10 +1405,10 @@ async function loadConversation(id) {
   elements.composer.setAttribute("aria-busy", String(streamingOngoing));
   elements.send.classList.toggle("busy", streamingOngoing);
   elements.send.title = streamingOngoing ? "停止生成（Esc）" : "发送";
-  // 从历史消息估算累计 token
+  // 从历史消息估算累计 token（v3.21.3 修复①：云端消息优先用落库的真实累计账目）
   conversationTokens = 0;
   for (const msg of conversation.messages) {
-    conversationTokens += estimateTokens(msg.text || "");
+    conversationTokens += tokensForMessage(msg);
   }
   resetStreamingTokens();
   updateTokenDisplay();
@@ -1925,19 +1949,15 @@ elements.form.addEventListener("submit", async (event) => {
 });
 // ── v3.19.0 F3：高级设置事件绑定 ──
 document.querySelector("#adv-network-manual").addEventListener("click", async () => {
-  const latest = await window.agentChatPro.loadSettings();
-  const effective = latest.advancedEffective || {};
-  await saveAdvancedGroup(
-    { ssh: { ...(effective.ssh || {}) }, external: { n2n: { ...(effective.external?.n2n || {}) } } },
-    "网络设置已切换为手动（按当前实值落底，行为不变）。"
-  );
+  // v3.21.3 修复③：以输入框当前值为准落底。旧实现用 effective（落盘实值）覆盖提交——
+  // 用户改了 40 还没点保存就点「切换为手动」时，40 被旧实值 25 覆盖回输入框（实报「改 40 点保存回 25」现场）
+  await saveAdvancedGroup(advNetworkPatch(), "网络设置已切换为手动（按当前输入框值落底）。");
 });
 document.querySelector("#adv-network-auto").addEventListener("click", () => saveAdvancedGroup({ ssh: null, external: null }, "网络设置已恢复自动识别。"));
 document.querySelector("#adv-network-save").addEventListener("click", () => saveAdvancedGroup(advNetworkPatch(), "网络设置已保存，下一次请求/建隧道生效。"));
 document.querySelector("#adv-cloud-manual").addEventListener("click", async () => {
-  const latest = await window.agentChatPro.loadSettings();
-  const effective = latest.advancedEffective || {};
-  await saveAdvancedGroup({ cloud: { ...(effective.cloud || {}) } }, "云端模型设置已切换为手动（按当前实值落底，行为不变）。");
+  // v3.21.3 修复③：同上——以输入框当前值为准，不再吞用户已改未存的值
+  await saveAdvancedGroup(advCloudPatch(), "云端模型设置已切换为手动（按当前输入框值落底）。");
 });
 document.querySelector("#adv-cloud-auto").addEventListener("click", () => saveAdvancedGroup({ cloud: null }, "云端模型设置已恢复自动识别。"));
 document.querySelector("#adv-cloud-save").addEventListener("click", () => saveAdvancedGroup(advCloudPatch(), "云端模型设置已保存。"));
@@ -2729,12 +2749,26 @@ window.agentChatPro.onChatEvent((event) => {
     renderTool(answer, event.tool);
     // v3.15.0 智能滚动：仅当用户停在底部附近才跟随
     if (isNearBottom()) elements.messages.scrollTop = elements.messages.scrollHeight;
+  } else if (event.type === "round" && answer) {
+    // v3.21.3 修复②：跨轮标记——主进程不再注入正文分隔线，这里画轻量轮次徽标
+    appendRoundMark(answer, event.round);
   } else if (event.type === "usage") {
     // v3.15.1：后台任务的 usage 不挪用当前对话的 token 计量（切回该对话时按消息重算兜底）
     if (streamingConversationId !== conversationId) return;
     // 处理 usage 事件：用实际 token 数据替换估算值
     if (event.usage) {
       const usage = event.usage;
+      // v3.21.3 修复①：轮末累计事件（主进程工具循环跨轮累计器）——服务商真实账目直接替换估算。
+      // 财务口径 = Σ每轮(输入+输出)：每一轮请求都把全部上下文重算一次输入费用，input 必须计入。
+      if (usage.cumulative === true) {
+        const realTotal = Number(usage.totalTokens ?? usage.total_tokens ?? 0) || 0;
+        if (realTotal) {
+          streamingTokens = 0;
+          confirmedTokens = realTotal;
+          updateTokenDisplay();
+        }
+        return;
+      }
       // 三种字段风格兼容（v3.12.1 修复：SSH/local 模式 protocol 已归一为驼峰，
       // 旧代码只读下划线 → 确认值恒 0；OpenAI 风格为 prompt_tokens/completion_tokens）
       const inputTokens = Number(usage.inputTokens ?? usage.input_tokens ?? usage.prompt_tokens ?? 0) || 0;
@@ -3549,12 +3583,12 @@ function showMessageContextMenu(event, item, kind) {
       if (!elements.messages.querySelector(".message")) {
         elements.empty.hidden = false;
       }
-      // 按落库消息重算累计 token（删除的消息不再计入）
+      // 按落库消息重算累计 token（删除的消息不再计入；v3.21.3 修复①：云端消息优先真实账目）
       conversationTokens = 0;
       try {
         const stored = await window.agentChatPro.getConversation(conversationId);
         for (const msg of stored?.messages || []) {
-          conversationTokens += estimateTokens(msg.text || "");
+          conversationTokens += tokensForMessage(msg);
         }
       } catch {}
       updateTokenDisplay();
