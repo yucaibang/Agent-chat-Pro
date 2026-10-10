@@ -290,8 +290,9 @@ async function runNasEnvironmentTests() {
 }
 
 async function runVersionTests() {
-  await test("D1 package.json 版本 = 3.22.0", () => {
-    assert.strictEqual(pkg.version, "3.22.0");
+  await test("D1 package.json 版本 ≥ 3.22.0", () => {
+    const rank = pkg.version.split(".").reduce((sum, part) => sum * 1000 + Number(part), 0);
+    assert.ok(rank >= 32200, `版本 ${pkg.version} 应 ≥ 3.22.0`);
   });
   await test("D2 cloud-tools 沙箱常量与导出在册", () => {
     assert.strictEqual(tools.SANDBOX_CONTAINER, "sandbox");

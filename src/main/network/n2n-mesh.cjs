@@ -3,7 +3,11 @@
 const { Client } = require("ssh2");
 const { spawn } = require("child_process");
 const net = require("net");
+const fs = require("fs");
 const { Transport } = require("./transport-base.cjs");
+
+/** v3.23.0：edge 兜底绝对路径（一键部署落盘点；PATH 找不到 edge 时自动改用） */
+const EDGE_FALLBACK_PATH = "C:\\n2n\\edge.exe";
 
 /**
  * N2N 虚拟局域网 Transport — 通过 N2N 虚拟网络 SSH 到 NAS。
@@ -25,6 +29,31 @@ const { Transport } = require("./transport-base.cjs");
 
 /** 每个超级节点入口上次成功的传输模式（"udp" | "tcp"），进程内记忆 */
 const MODE_CACHE = new Map();
+
+/** edge 启动参数构造（v3.23.0 抽为模块级纯函数：PATH 启动与兜底重试共用） */
+function edgeSpawnArgs(options, isTcp = false) {
+  const args = [
+    "-l", `${options.supernodeAddr}:${options.supernodePort}`,
+    "-c", options.community,
+    "-f"  // foreground mode (we manage the process lifecycle)
+  ];
+  if (isTcp) {
+    // -S2：不 P2P，全流量经 supernode 中继且 edge↔supernode 走 TCP
+    // （适配 supernode 经 FRP TCP 隧道暴露：UDP 无法穿过 TCP 隧道）
+    args.push("-S2");
+  }
+  if (options.key) {
+    args.push("-k", options.key);
+  }
+  // v3.19.0 F3：手动加密方式 / 压缩 / 头加密（空值=n2n 默认行为，不带参数）
+  if (options.cipher && /^A[2-5]$/.test(options.cipher)) {
+    args.push(`-A${options.cipher}`);
+  }
+  if (options.compression === "lzo1x") args.push("-z1");
+  if (options.compression === "zstd") args.push("-z2");
+  if (options.headerEncryption) args.push("-H");
+  return args;
+}
 
 class N2nMeshTransport extends Transport {
   constructor() {
@@ -191,50 +220,46 @@ class N2nMeshTransport extends Transport {
   }
 
   _startEdgeProcess(options, onLog, isTcp = false) {
+    const args = edgeSpawnArgs(options, isTcp);
     return new Promise((resolve, reject) => {
-      const args = [
-        "-l", `${options.supernodeAddr}:${options.supernodePort}`,
-        "-c", options.community,
-        "-f"  // foreground mode (we manage the process lifecycle)
-      ];
-      if (isTcp) {
-        // -S2：不 P2P，全流量经 supernode 中继且 edge↔supernode 走 TCP
-        // （适配 supernode 经 FRP TCP 隧道暴露：UDP 无法穿过 TCP 隧道）
-        args.push("-S2");
-      }
-      if (options.key) {
-        args.push("-k", options.key);
-      }
-      // v3.19.0 F3：手动加密方式 / 压缩 / 头加密（空值=n2n 默认行为，不带参数）
-      if (options.cipher && /^A[2-5]$/.test(options.cipher)) {
-        args.push(`-A${options.cipher}`);
-      }
-      if (options.compression === "lzo1x") args.push("-z1");
-      if (options.compression === "zstd") args.push("-z2");
-      if (options.headerEncryption) args.push("-H");
-
-      const timeout = setTimeout(() => {
-        reject(new Error("N2N edge 启动超时，请确保已安装 n2n（edge 命令）。"));
-      }, 10_000);
-
+      // 声明前置守门口径（铁律 §9）：回调闭包内的引用一律指向前置 let，
+      // 不允许函数体静态引用其后的 const/let 声明（n2n-mesh 零白名单命中目标）
       let resolved = false;
       let lastStderr = "";
+      let timer = null;     // 超时计时器（finish 里清除）
+      let current = null;   // 当前活跃 edge 实例（fallback 重试后随之切换）
+      let spawnEdge = null; // 启动调度（wire 的 error 分支经此触兜底重试）
 
-      try {
-        const edge = spawn("edge", args, {
-          stdio: ["ignore", "pipe", "pipe"],
-          detached: false
-        });
+      const finish = (error, value) => {
+        if (resolved) return;
+        resolved = true;
+        if (timer) { clearTimeout(timer); timer = null; }
+        if (error) reject(error);
+        else resolve(value);
+      };
 
+      timer = setTimeout(() => {
+        finish(new Error("N2N edge 启动超时，请确保已安装 n2n（edge 命令）。"));
+      }, 10_000);
+
+      const wire = (edge, fallbackEligible) => {
         edge.once("error", (error) => {
-          clearTimeout(timeout);
-          if (!resolved) {
-            resolved = true;
-            if (error.code === "ENOENT") {
-              reject(new Error("未找到 n2n edge 命令，请先安装 n2n。"));
-            } else {
-              reject(new Error(`N2N edge 启动失败：${error.message}`));
+          if (resolved) return;
+          // v3.23.0：PATH 找不到 edge（ENOENT）且一键部署落盘点存在 → 用绝对路径重试一次
+          if (error.code === "ENOENT" && fallbackEligible && fs.existsSync(EDGE_FALLBACK_PATH)) {
+            onLog?.("n2n_mesh_edge_fallback", { from: "edge (PATH)", to: EDGE_FALLBACK_PATH });
+            try {
+              spawnEdge(EDGE_FALLBACK_PATH, false);
+              return;
+            } catch (spawnError) {
+              finish(new Error(`N2N edge 启动失败：${spawnError.message}`));
+              return;
             }
+          }
+          if (error.code === "ENOENT") {
+            finish(new Error("未找到 n2n edge 命令，请先安装 n2n（可在设置页 N2N 参数区点「一键部署」自动安装）。"));
+          } else {
+            finish(new Error(`N2N edge 启动失败：${error.message}`));
           }
         });
 
@@ -242,32 +267,38 @@ class N2nMeshTransport extends Transport {
           lastStderr = data.toString().trim();
           // edge 就绪的标志：看到 "edge is running" 或类似日志
           if (!resolved && (/edge.*running|joined.*community|virtual.*ip|tap.*device/i.test(lastStderr))) {
-            clearTimeout(timeout);
-            resolved = true;
-            resolve(edge);
+            finish(null, edge);
           }
         });
 
         edge.on("exit", (code) => {
-          clearTimeout(timeout);
           if (!resolved) {
-            resolved = true;
-            reject(new Error(`N2N edge 进程退出（代码 ${code}）：${lastStderr}`));
+            finish(new Error(`N2N edge 进程退出（代码 ${code}）：${lastStderr}`));
           }
         });
+      };
 
+      spawnEdge = (exe, fallbackEligible) => {
+        const edge = spawn(exe, args, {
+          stdio: ["ignore", "pipe", "pipe"],
+          detached: false
+        });
+        current = edge;
+        wire(edge, fallbackEligible);
+        return edge;
+      };
+
+      try {
+        spawnEdge("edge", true);
         // 如果10秒内没有识别到就绪日志，也视为启动成功
-        // 因为 edge 可能已就绪但日志格式不同
+        // 因为 edge 可能已就绪但日志格式不同（对 fallback 后的实例同样生效）
         setTimeout(() => {
-          if (!resolved && !edge.killed) {
-            clearTimeout(timeout);
-            resolved = true;
-            resolve(edge);
+          if (!resolved && current && !current.killed && current.pid) {
+            finish(null, current);
           }
         }, 5_000);
       } catch (error) {
-        clearTimeout(timeout);
-        reject(new Error(`N2N edge 启动失败：${error.message}`));
+        finish(new Error(`N2N edge 启动失败：${error.message}`));
       }
     });
   }
@@ -392,7 +423,7 @@ class N2nMeshTransport extends Transport {
     if (/ETIMEDOUT|超时/i.test(msg)) return "N2N 虚拟网络连接超时，请检查 N2N 配置和 NAS 状态。";
     if (/ENOTFOUND/i.test(msg)) return "N2N 目标地址解析失败。";
     if (/EHOSTUNREACH/i.test(msg)) return "N2N 虚拟网络中目标不可达。";
-    if (/ENOENT|未找到.*edge/i.test(msg)) return "未找到 n2n edge 命令，请先安装 n2n。";
+    if (/ENOENT|未找到.*edge/i.test(msg)) return "未找到 n2n edge 命令（C:\\n2n 也没有）。可在设置页 N2N 参数区点「一键部署」自动安装。";
     if (/PROTOCOL|handshake/i.test(msg)) return "SSH 握手失败，N2N 隧道可能不稳定。";
     return msg;
   }

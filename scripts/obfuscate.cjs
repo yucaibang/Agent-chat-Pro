@@ -63,6 +63,7 @@ const OBFUSCATE_FILES = {
     "main/network/derp-relay.cjs",
     "main/network/p2p-nat.cjs",
     "main/network/n2n-mesh.cjs",
+    "main/network/n2n-doctor.cjs",  // N2N 体检 + 一键部署（v3.23.0）
     "main/network/network-manager.cjs",
     "main/network/latency-monitor.cjs",
     "main/modes/mode-defaults.cjs",

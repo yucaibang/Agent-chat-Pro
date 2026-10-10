@@ -115,6 +115,11 @@ contextBridge.exposeInMainWorld("agentChatPro", {
   networkConnect: (config) => ipcRenderer.invoke("network:connect", config),
   networkDisconnect: () => ipcRenderer.invoke("network:disconnect"),
   persistNetworkState: () => ipcRenderer.invoke("network:persist-state"),
+  // ── N2N 体检 + 一键部署 IPC（v3.23.0）──
+  runN2nDoctor: (payload) => ipcRenderer.invoke("n2n:doctor", payload),
+  onN2nDoctorItem: (handler) => ipcRenderer.on("n2n:doctor:item", (_event, item) => handler(item)),
+  runN2nDeploy: (payload) => ipcRenderer.invoke("n2n:deploy", payload),
+  onN2nDeployLine: (handler) => ipcRenderer.on("n2n:deploy:line", (_event, line) => handler(line)),
   // ── 模式管理 IPC ──
   listModes: () => ipcRenderer.invoke("modes:list"),
   getMode: (id) => ipcRenderer.invoke("modes:get", id),

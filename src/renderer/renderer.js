@@ -3370,6 +3370,131 @@ document.querySelector("#toggle-access-password").addEventListener("click", () =
   input.focus();
 });
 
+// ── v3.23.0：N2N 体检 + 一键部署（检测哪坏、缺哪补哪、日志上屏） ──
+
+const N2N_DOCTOR_LEVEL_MARKS = { ok: "✓", warn: "△", fail: "✗", skip: "—" };
+
+function n2nDoctorItemNode(item) {
+  const row = document.createElement("div");
+  row.className = `n2n-check n2n-check-${item.level}`;
+  const mark = document.createElement("span");
+  mark.className = "n2n-check-mark";
+  mark.textContent = N2N_DOCTOR_LEVEL_MARKS[item.level] || "·";
+  const body = document.createElement("div");
+  body.className = "n2n-check-body";
+  const title = document.createElement("strong");
+  title.textContent = item.title;
+  const detail = document.createElement("small");
+  detail.textContent = item.detail;
+  body.appendChild(title);
+  body.appendChild(detail);
+  if (item.hint) {
+    const hint = document.createElement("small");
+    hint.className = "n2n-hint";
+    hint.textContent = item.hint;
+    body.appendChild(hint);
+  }
+  row.appendChild(mark);
+  row.appendChild(body);
+  return row;
+}
+
+function appendN2nDeployLine(line) {
+  const box = document.querySelector("#n2n-deploy-log");
+  if (!box) return;
+  box.hidden = false;
+  box.textContent += line + "\n";
+  box.scrollTop = box.scrollHeight;
+}
+
+// N2N 表单当前值 → 体检/部署 payload（地址为空时不带，远端回落默认入口）
+function collectN2nFormPayload() {
+  const addrInput = document.querySelector("#n2n-supernode-addr");
+  const portInput = document.querySelector("#n2n-supernode-port");
+  return {
+    n2n: {
+      supernodeAddr: addrInput ? addrInput.value.trim() : "",
+      supernodePort: Number(portInput && portInput.value) || 7777
+    }
+  };
+}
+
+let n2nDoctorRunning = false;
+let n2nDeployRunning = false;
+
+document.querySelector("#n2n-doctor-run")?.addEventListener("click", async () => {
+  if (n2nDoctorRunning || n2nDeployRunning) return;
+  const button = document.querySelector("#n2n-doctor-run");
+  const box = document.querySelector("#n2n-doctor-result");
+  n2nDoctorRunning = true;
+  button.disabled = true;
+  button.textContent = "⏳ 体检中…";
+  box.hidden = false;
+  box.textContent = "";
+  const status = document.createElement("div");
+  status.className = "n2n-doctor-status";
+  status.textContent = "正在体检（最多约 15 秒）…";
+  box.appendChild(status);
+  try {
+    const result = await window.agentChatPro.runN2nDoctor(collectN2nFormPayload());
+    status.remove();
+    const verdict = document.createElement("div");
+    verdict.className = result.ok ? "n2n-verdict n2n-verdict-ok" : "n2n-verdict n2n-verdict-fail";
+    verdict.textContent = result.ok ? `✅ ${result.nextAction}` : `⚠️ ${result.nextAction}`;
+    box.appendChild(verdict);
+  } catch (error) {
+    status.textContent = `体检失败：${error.message}`;
+  } finally {
+    n2nDoctorRunning = false;
+    button.disabled = false;
+    button.textContent = "🔍 N2N 体检";
+  }
+});
+
+document.querySelector("#n2n-deploy-run")?.addEventListener("click", async () => {
+  if (n2nDoctorRunning || n2nDeployRunning) return;
+  const button = document.querySelector("#n2n-deploy-run");
+  n2nDeployRunning = true;
+  button.disabled = true;
+  button.textContent = "⏳ 部署中…";
+  const logBox = document.querySelector("#n2n-deploy-log");
+  logBox.hidden = false;
+  logBox.textContent = "";
+  try {
+    const payload = collectN2nFormPayload();
+    const result = await window.agentChatPro.runN2nDeploy(payload);
+    if (result.canceled) {
+      appendN2nDeployLine("── 已取消部署 ──");
+    } else if (result.ok) {
+      appendN2nDeployLine("✅ 部署完成——无需重启，可直接连接。");
+    } else {
+      appendN2nDeployLine("⚠️ 部署未完全成功——按上方日志处理后再试。");
+    }
+    if (Array.isArray(result.summary)) result.summary.forEach((line) => appendN2nDeployLine("· " + line));
+  } catch (error) {
+    appendN2nDeployLine(`✗ 部署失败：${error.message}`);
+  } finally {
+    n2nDeployRunning = false;
+    button.disabled = false;
+    button.textContent = "⚡ 一键部署";
+  }
+});
+
+// 体检逐项实时上屏（顶层注册一次，点击触发期间推送逐项插入）
+window.agentChatPro?.onN2nDoctorItem?.((item) => {
+  const box = document.querySelector("#n2n-doctor-result");
+  if (!box) return;
+  box.hidden = false;
+  const status = box.querySelector(".n2n-doctor-status");
+  if (status) status.remove();
+  box.appendChild(n2nDoctorItemNode(item));
+});
+
+// 部署逐行实时上屏
+window.agentChatPro?.onN2nDeployLine?.((line) => {
+  appendN2nDeployLine(String(line ?? ""));
+});
+
 // ── 网络状态更新 ──────────────────────────────────
 
 function updateNetworkStatus(status) {

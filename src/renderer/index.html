@@ -421,6 +421,14 @@
               <label>超级节点端口<input id="n2n-supernode-port" type="number" value="7777" min="1" max="65535" /></label>
               <label>社区名<input id="n2n-community" placeholder="社区标识" /></label>
               <label>加密密钥<input id="n2n-key" type="password" placeholder="可选" /></label>
+              <div class="n2n-tools">
+                <div class="device-control-actions">
+                  <button type="button" id="n2n-doctor-run" class="secondary">🔍 N2N 体检</button>
+                  <button type="button" id="n2n-deploy-run" class="secondary">⚡ 一键部署</button>
+                </div>
+                <div id="n2n-doctor-result" class="n2n-doctor-result" hidden></div>
+                <pre id="n2n-deploy-log" class="n2n-deploy-log" hidden></pre>
+              </div>
             </details>
           </div>
         </details>

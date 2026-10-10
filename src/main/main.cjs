@@ -51,6 +51,8 @@ const { listModes, getMode, createMode, updateMode, deleteMode, exportModes, imp
 const { buildCommandWithMode, buildBridgeStartWithMode, buildLocalArgsWithMode } = require("./modes/mode-params.cjs");
 const { NetworkManager, STATES } = require("./network/network-manager.cjs");
 const { LatencyMonitor } = require("./network/latency-monitor.cjs");
+// v3.23.0 N2N 体检 + 一键部署（检测哪坏、缺哪补哪、stderr 上屏）
+const { runN2nDoctor, runN2nDeploy } = require("./network/n2n-doctor.cjs");
 const { sendCloudChat, buildMessages, verifyCloudConnection, testProxyConnectivity, accumulateUsage } = require("./cloud-chat.cjs");
 // v3.21.0 云端「拉取模型列表」：官方 GET /models 实时拉取该密钥可用的全部模型
 const { fetchProviderModels } = require("./cloud-models.cjs");
@@ -728,6 +730,37 @@ app.whenReady().then(async () => {
       return status;
     } catch (error) {
       writeLog("device_control_uninstall_failed", { error });
+      throw error;
+    }
+  });
+  // ── v3.23.0 N2N 体检 + 一键部署（检测哪坏、缺哪补哪、逐行 stderr 上屏） ──
+  ipcMain.handle("n2n:doctor", async (_event, payload = {}) => {
+    const sender = _event.sender;
+    return runN2nDoctor(payload, (item) => {
+      if (!sender.isDestroyed()) sender.send("n2n:doctor:item", item);
+    });
+  });
+  ipcMain.handle("n2n:deploy", async (_event, payload = {}) => {
+    const sender = _event.sender;
+    const answer = await dialog.showMessageBox(window, {
+      type: "info",
+      title: "N2N 一键部署",
+      message: "开始自动安装 N2N 环境？",
+      detail: "将执行：解压 edge 到 C:\\n2n → 安装 TAP 虚拟网卡驱动（需 Windows 管理员授权）→ 写用户 PATH → 自检。约 30 秒，每步日志会展示在设置页 N2N 参数区内。",
+      buttons: ["取消", "开始部署"],
+      defaultId: 1,
+      cancelId: 0
+    });
+    if (answer.response !== 1) return { canceled: true, steps: [], summary: ["已取消部署"] };
+    writeLog("n2n_deploy_start", { platform: process.platform });
+    try {
+      const result = await runN2nDeploy(payload, (line) => {
+        if (!sender.isDestroyed()) sender.send("n2n:deploy:line", line);
+      });
+      writeLog("n2n_deploy_done", { ok: result.ok });
+      return result;
+    } catch (error) {
+      writeLog("n2n_deploy_failed", { error: error.message });
       throw error;
     }
   });
