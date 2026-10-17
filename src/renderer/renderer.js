@@ -2039,16 +2039,29 @@ sidebarToggle.addEventListener("click", () => {
   syncSidebarToggle();
 });
 
-// ── v3.24.6 开发面板：折叠记忆（对照 sidebar-collapsed 惯例）+ 折叠窄条点开 + 主备模式 pill ──
-if (localStorage.getItem("acp-dev-panel-collapsed") === "1") document.body.classList.add("dev-collapsed");
-document.querySelector("#dev-collapse")?.addEventListener("click", () => {
-  document.body.classList.add("dev-collapsed");
-  localStorage.setItem("acp-dev-panel-collapsed", "1");
-});
-document.querySelector("#dev-rail")?.addEventListener("click", () => {
-  document.body.classList.remove("dev-collapsed");
-  localStorage.setItem("acp-dev-panel-collapsed", "0");
-});
+// ── v3.24.7 开发面板插件化：设置中心「插件」页安装/移除，默认未安装，即时生效；折叠仅会话内有效（v3.24.6 真机「隐藏后展不开」教训——折叠状态不再跨重启记忆，重启一律回展开态） ──
+const devPanelInstallKey = "acp-plugin-devpanel";
+function renderDevPanelPluginCard(installed) {
+  const badge = document.querySelector("#devpanel-badge");
+  const install = document.querySelector("#install-devpanel");
+  const uninstall = document.querySelector("#uninstall-devpanel");
+  if (!badge || !install || !uninstall) return;
+  badge.textContent = installed ? "已启用" : "未安装";
+  badge.classList.toggle("installed", installed);
+  install.hidden = installed;
+  uninstall.hidden = !installed;
+}
+function devPanelApply(installed) {
+  document.body.classList.toggle("devpanel-absent", !installed);
+  if (installed) document.body.classList.remove("dev-collapsed");  // 安装/重启一律展开态
+  renderDevPanelPluginCard(installed);
+}
+devPanelApply(localStorage.getItem(devPanelInstallKey) === "1");
+document.querySelector("#install-devpanel")?.addEventListener("click", () => { localStorage.setItem(devPanelInstallKey, "1"); devPanelApply(true); });
+document.querySelector("#uninstall-devpanel")?.addEventListener("click", () => { localStorage.setItem(devPanelInstallKey, "0"); devPanelApply(false); });
+// 折叠开合（会话内有效，不落盘）
+document.querySelector("#dev-collapse")?.addEventListener("click", () => document.body.classList.add("dev-collapsed"));
+document.querySelector("#dev-rail")?.addEventListener("click", () => document.body.classList.remove("dev-collapsed"));
 const devPanelRoleSaved = localStorage.getItem("acp-dev-panel-role") === "lead" ? "lead" : "assist";
 renderDevPanelRole(devPanelRoleSaved);
 document.querySelector("#dev-role-assist")?.addEventListener("click", () => renderDevPanelRole("assist"));

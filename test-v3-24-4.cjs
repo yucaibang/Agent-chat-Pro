@@ -189,7 +189,7 @@ async function runVmSmokeTests() {
       set() { return true; }
     });
   }
-  /** 子树选择器匹配（.class / #id / tag 三形态；v3.24.6 H 组思考块子树查询需要） */
+  /** 子树选择器匹配（.class / #id / tag 三形态；v3.24.7 H 组思考块子树查询需要） */
   function elementMatches(el, sel) {
     const raw = String(sel || "").trim();
     if (!raw || !el || typeof el !== "object") return false;
@@ -284,7 +284,7 @@ async function runVmSmokeTests() {
     matchMedia: () => ({ matches: false, media: "", addEventListener() {}, addListener() {}, removeListener() {} }),
     open: () => null, close() {},
     navigator: { clipboard: { writeText: async () => {} }, userAgent: "smoke" },
-    // v3.24.6 I 组：localStorage 升级为带真存储的 stub（供折叠/模式记忆断言读取写入值）
+    // v3.24.7 I 组：localStorage 升级为带真存储的 stub（供折叠/模式记忆断言读取写入值）
     localStorage: {
       store: new Map(),
       getItem(k) { return this.store.has(String(k)) ? this.store.get(String(k)) : null; },
@@ -328,7 +328,7 @@ async function runVmSmokeTests() {
   sandbox.globalThis = sandbox;
 
   const vm = require("vm");
-  const source = rendererSrc + "\n;globalThis.__acpSmoke = { collectClampedFields, ADV_FIELD_LABELS, ensureThinkingBlock, appendThinkingDelta, finalizeThinkingSummary, renderStaticThinking, thinkDepthLabel, THINK_DEPTH_TIERS, devPanelAccount, devPanelItems, devPanelToolPath, devPanelBasename, devPanelClock, renderDevPanel, renderDevPanelRole, DEV_PANEL_ROLE_DESC };";
+  const source = rendererSrc + "\n;globalThis.__acpSmoke = { collectClampedFields, ADV_FIELD_LABELS, ensureThinkingBlock, appendThinkingDelta, finalizeThinkingSummary, renderStaticThinking, thinkDepthLabel, THINK_DEPTH_TIERS, devPanelAccount, devPanelItems, devPanelToolPath, devPanelBasename, devPanelClock, renderDevPanel, renderDevPanelRole, DEV_PANEL_ROLE_DESC, devPanelApply, renderDevPanelPluginCard };";
   await test("D1 renderer.js vm 假 DOM 全量求值零异常（v3.24.4 新代码含在内）", () => {
     let error = null;
     try { vm.createContext(sandbox); vm.runInContext(source, sandbox, { filename: "renderer.js" }); }
@@ -359,7 +359,7 @@ async function runVmSmokeTests() {
     assert.deepStrictEqual(fixed2, []);
   });
 
-/* ── H 组（v3.24.6）：思考块元信息（⏱ 耗时 + 🧠 程度标签，豆包同款五档） ── */
+/* ── H 组（v3.24.7）：思考块元信息（⏱ 耗时 + 🧠 程度标签，豆包同款五档） ── */
 
 async function runThinkMetaTests() {
   console.log("── H 组：思考块元信息（耗时+程度标签） ──");
@@ -430,7 +430,7 @@ async function runThinkMetaTests() {
 
   await runThinkMetaTests();
 
-/* ── I 组（v3.24.6）：开发面板（右侧实时观察 AI 编辑文件；三模式共用工具事件流） ── */
+/* ── I 组（v3.24.7）：开发面板（右侧实时观察 AI 编辑文件；三模式共用工具事件流） ── */
 
 async function runDevPanelTests() {
   console.log("── I 组：开发面板（账本+DOM 渲染+折叠/模式记忆） ──");
@@ -508,7 +508,7 @@ async function runDevPanelTests() {
     assert.ok(String(feed.children[0].children[0].className).includes("edit"), "写文件完成转绿点");
   });
 
-  await test("I4 折叠开合 + 主备模式 pill：点击→body.dev-collapsed + localStorage 记忆", () => {
+  await test("I4 折叠开合（仅会话内，不落盘）+ 主备模式 pill 记忆", () => {
     const body = getFake("body");
     const ls = sandbox.localStorage;
     body.classList.remove("dev-collapsed");
@@ -516,12 +516,11 @@ async function runDevPanelTests() {
     assert.ok(collapseBtn._listeners && collapseBtn._listeners.click, "渲染器应绑定折叠钮");
     collapseBtn._listeners.click();
     assert.strictEqual(body.classList.contains("dev-collapsed"), true, "点击折叠钮应加 dev-collapsed");
-    assert.strictEqual(ls.getItem("acp-dev-panel-collapsed"), "1", "折叠应记忆");
+    assert.strictEqual(ls.getItem("acp-dev-panel-collapsed"), null, "折叠不再落盘（v3.24.6 真机「隐藏后展不开」教训，v3.24.7 起重启一律回展开态）");
     const rail = getFake("#dev-rail");
     assert.ok(rail._listeners && rail._listeners.click, "窄条应绑定展开钮");
     rail._listeners.click();
     assert.strictEqual(body.classList.contains("dev-collapsed"), false, "点窄条应展开");
-    assert.strictEqual(ls.getItem("acp-dev-panel-collapsed"), "0");
     const leadBtn = getFake("#dev-role-lead"), assistBtn = getFake("#dev-role-assist"), desc = getFake("#dev-role-desc");
     assert.ok(assistBtn.classList.contains("active"), "初始化默认人主机辅");
     assert.ok(desc.textContent.startsWith("人主机辅"), `初始描述：${desc.textContent}`);
@@ -543,19 +542,86 @@ async function runDevPanelTests() {
     assert.ok(html.includes("人主机辅") && html.includes("机主人辅"), "主备 pill 文案");
     assert.ok(html.includes("AI 只是帮忙检查漏洞") && html.includes("用户用来监督和观察"), "主备描述文案");
     assert.ok(html.includes('id="dev-rail"') && html.includes('id="dev-rail-dot"'), "折叠窄条");
+    const railTag = html.split("\n").find((l) => l.includes('id="dev-rail"') && l.includes("<aside"));
+    assert.ok(railTag && !railTag.includes("hidden"), "v3.24.7 修复①：窄条不再带 hidden 属性（显隐全权交给 CSS 类）");
     const css = fs.readFileSync(path.join(ROOT, "src/renderer/styles.css"), "utf8");
     assert.ok(css.includes(".dev-panel"), "面板样式");
-    assert.ok(css.includes("body.dev-collapsed .dev-panel"), "折叠隐藏规则");
-    assert.ok(css.includes(".dev-rail"), "窄条样式");
+    assert.ok(css.includes("body.dev-collapsed .dev-panel"), "折叠隐藏面板规则");
+    assert.ok(css.includes("body.dev-collapsed .dev-rail { display: flex"), "修复②：折叠态窄条显式显示规则");
+    assert.ok(css.includes("body:not(.dev-collapsed) .dev-rail { display: none; }"), "展开态隐藏窄条");
+    assert.ok(css.includes(".dev-rail-arrow"), "窄条展开箭头");
     assert.ok(css.includes("dev-pulse"), "呼吸动画");
     assert.ok(css.includes(".dev-feed-row"), "活动流行样式");
     assert.ok(rendererSrc.includes("if (devPanelAccount(event.tool)) renderDevPanel()"), "tool 分支挂点（三模式共用通道）");
-    assert.ok(rendererSrc.includes("acp-dev-panel-collapsed") && rendererSrc.includes("acp-dev-panel-role"), "两项记忆键");
+    assert.ok(rendererSrc.includes("acp-dev-panel-role"), "模式记忆键保留");
+    assert.ok(!rendererSrc.includes("acp-dev-panel-collapsed"), "折叠持久化键应彻底清除（重启一律展开）");
     assert.ok(rendererSrc.includes("DEV_PANEL_WRITE_TOOLS") && rendererSrc.includes("DEV_PANEL_READ_TOOLS"), "写读工具集");
   });
 }
 
+/* ── J 组（v3.24.7）：开发面板插件化（设置中心「插件」页安装/移除，默认未安装，即时生效） ── */
+
+async function runDevPanelPluginTests() {
+  console.log("── J 组：开发面板插件化（安装/移除 + 默认未安装 + 即时生效） ──");
+
+  await test("J1 devPanelApply 插件启停：body.devpanel-absent 切换 + 安装时强制展开态", () => {
+    const body = getFake("body");
+    const apply = sandbox.__acpSmoke.devPanelApply;
+    apply(false);
+    assert.strictEqual(body.classList.contains("devpanel-absent"), true, "未安装应挂 devpanel-absent");
+    assert.strictEqual(sandbox.localStorage.getItem("acp-plugin-devpanel"), null, "默认未安装不预写键");
+    apply(true);
+    assert.strictEqual(body.classList.contains("devpanel-absent"), false, "安装应摘 devpanel-absent");
+    assert.strictEqual(body.classList.contains("dev-collapsed"), false, "安装/重启应一律回展开态");
+    body.classList.add("dev-collapsed");
+    apply(true);
+    assert.strictEqual(body.classList.contains("dev-collapsed"), false, "已折叠状态安装后应强制展开");
+    apply(false);
+    assert.strictEqual(body.classList.contains("devpanel-absent"), true, "移除后应重新挂 devpanel-absent");
+  });
+
+  await test("J2 插件卡片：徽章已启用/未安装 + 安装/移除按钮显隐 + 点击链路落盘", () => {
+    const badge = getFake("#devpanel-badge");
+    const install = getFake("#install-devpanel");
+    const uninstall = getFake("#uninstall-devpanel");
+    const ls = sandbox.localStorage;
+    sandbox.__acpSmoke.renderDevPanelPluginCard(false);
+    assert.strictEqual(badge.textContent, "未安装");
+    assert.strictEqual(badge.classList.contains("installed"), false);
+    assert.strictEqual(install.hidden, false, "未安装应显示安装钮");
+    assert.strictEqual(uninstall.hidden, true, "未安装应隐藏移除钮");
+    install._listeners.click();  // 安装点击链路
+    assert.strictEqual(ls.getItem("acp-plugin-devpanel"), "1", "安装应落盘");
+    assert.strictEqual(badge.textContent, "已启用");
+    assert.strictEqual(install.hidden, true, "已安装应隐藏安装钮");
+    assert.strictEqual(uninstall.hidden, false, "已安装应显示移除钮");
+    uninstall._listeners.click();  // 移除点击链路
+    assert.strictEqual(ls.getItem("acp-plugin-devpanel"), "0", "移除应落盘 0");
+    assert.strictEqual(badge.textContent, "未安装");
+    assert.strictEqual(install.hidden, false);
+    assert.strictEqual(uninstall.hidden, true);
+  });
+
+  await test("J3 初始化默认未安装 + 文件级锚：设置中心插件卡片 DOM、devpanel-absent 规则、旧折叠键清除", () => {
+    const body = getFake("body");
+    assert.strictEqual(body.classList.contains("devpanel-absent"), true, "求值顶层默认未安装（devPanelApply(false)）");
+    assert.ok(getFake("#dev-role-assist").classList.contains("active"), "默认人主机辅照常初始化");
+    const html = fs.readFileSync(path.join(ROOT, "src/renderer/index.html"), "utf8");
+    assert.ok(html.includes('id="devpanel-settings"') && html.includes("开发面板（可选）"), "插件页应有开发面板卡片");
+    assert.ok(html.includes('id="devpanel-badge"') && html.includes('id="install-devpanel"') && html.includes('id="uninstall-devpanel"'), "徽章与双按钮");
+    assert.ok(html.includes("SSH / 云端 / 本机三模式"), "插件描述三模式");
+    assert.ok(html.includes("即时生效，无需重启"), "描述应写明即时生效");
+    const css = fs.readFileSync(path.join(ROOT, "src/renderer/styles.css"), "utf8");
+    assert.ok(css.includes("body.devpanel-absent .dev-panel, body.devpanel-absent .dev-rail { display: none !important; }"), "未安装应整体隐藏（面板+窄条）");
+    assert.ok(!rendererSrc.includes("acp-dev-panel-collapsed"), "v3.24.6 折叠持久化键应清除");
+    assert.ok(rendererSrc.includes("acp-plugin-devpanel"), "新插件安装键在册");
+    assert.ok(rendererSrc.includes("devpanel-absent"), "body 类开关在册");
+  });
+}
+
   await runDevPanelTests();
+
+  await runDevPanelPluginTests();
 }
 
 /* ── E 组：saveSettings 集成链真测（mock electron 真实 IO，复刻 v3-19-0 手法） ── */
@@ -652,8 +718,8 @@ async function runRegressionGuardTests() {
   await runVmSmokeTests();
   await runIntegrationTests();
   await runRegressionGuardTests();
-  await test("G1 package.json 版本 = 3.24.6", () => {
-    assert.strictEqual(pkg.version, "3.24.6");
+  await test("G1 package.json 版本 = 3.24.7", () => {
+    assert.strictEqual(pkg.version, "3.24.7");
   });
   console.log(`\n=== test-v3-24-4.cjs：${passed} 通过 / ${failed} 失败 ===`);
   if (failures.length) { console.log(failures.map((item) => `  ✗ ${item}`).join("\n")); process.exitCode = 1; }

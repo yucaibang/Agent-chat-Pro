@@ -210,7 +210,8 @@
           <div class="dev-feed" id="dev-feed"></div>
         </div>
       </aside>
-      <aside class="dev-rail" id="dev-rail" hidden title="展开开发面板">
+      <aside class="dev-rail" id="dev-rail" title="展开开发面板">
+        <span class="dev-rail-arrow">«</span>
         <span class="dev-rail-dot" id="dev-rail-dot"></span>
         <span class="dev-rail-label" id="dev-rail-label">开发</span>
       </aside>
@@ -528,6 +529,20 @@
               <button type="button" id="refresh-bridge" class="secondary">刷新状态</button>
               <button type="button" id="uninstall-bridge" class="secondary danger-button" hidden>移除 Bridge</button>
               <button type="button" id="install-bridge" class="primary">安装增强 Bridge</button>
+            </div>
+          </div>
+        </details>
+        <details id="devpanel-settings">
+          <summary>开发面板（可选）</summary>
+          <div class="device-control-card">
+            <div class="device-control-heading">
+              <div><strong>开发面板</strong><small>右侧实时观察 AI 正在编辑的文件与编程进度</small></div>
+              <span id="devpanel-badge" class="control-badge">未安装</span>
+            </div>
+            <p id="devpanel-info" class="hint">安装后主界面右侧常驻开发面板：实时观察 AI 编辑中的文件与进度，支持 SSH / 云端 / 本机三模式；可折叠为窄条小进度。纯界面插件，安装/移除即时生效，无需重启。</p>
+            <div class="device-control-actions">
+              <button type="button" id="uninstall-devpanel" class="secondary danger-button" hidden>移除开发面板</button>
+              <button type="button" id="install-devpanel" class="primary">安装开发面板</button>
             </div>
           </div>
         </details>

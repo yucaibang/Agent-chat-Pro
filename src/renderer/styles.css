@@ -1093,8 +1093,15 @@ body:not(.dev-collapsed).sidebar-collapsed .main { width: min(980px, calc(100% -
 .dev-feed-name { flex: 1 1 auto; min-width: 0; font-family: ui-monospace, monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dev-feed-op { flex: 0 0 auto; opacity: .55; font-size: 11px; }
 .dev-feed-time { flex: 0 0 auto; opacity: .45; font-size: 11px; font-variant-numeric: tabular-nums; }
-.dev-rail { width: 38px; flex: 0 0 38px; height: 100%; background: var(--bg-sidebar); border-left: 1px solid var(--border-sidebar); display: flex; flex-direction: column; align-items: center; padding-top: 12px; gap: 10px; cursor: pointer; }
+.dev-rail { width: 38px; flex: 0 0 38px; height: 100%; background: var(--bg-sidebar); border-left: 1px solid var(--border-sidebar); display: flex; flex-direction: column; align-items: center; gap: 10px; cursor: pointer; padding-top: 12px; transition: background .15s ease; }
 body:not(.dev-collapsed) .dev-rail { display: none; }
+/* v3.24.7 修复①：折叠态窄条显式显示规则（旧版只有 hidden 属性兜着 + 显隐半失控 → 真机「隐藏后展不开」） */
+body.dev-collapsed .dev-rail { display: flex; }
+.dev-rail:hover { background: color-mix(in srgb, var(--accent, #4f8ef7) 10%, transparent); }
+.dev-rail-arrow { flex: 0 0 auto; font-size: 14px; opacity: .55; }
+.dev-rail:hover .dev-rail-arrow { opacity: 1; }
+/* v3.24.7 插件化：开发面板默认未安装——设置中心「插件」页安装/移除即时生效 */
+body.devpanel-absent .dev-panel, body.devpanel-absent .dev-rail { display: none !important; }
 .dev-rail-dot { flex: 0 0 auto; width: 8px; height: 8px; border-radius: 50%; background: #64748b; }
 .dev-rail-dot.busy { background: #16a34a; animation: dev-pulse 1.2s ease-in-out infinite; }
 .dev-rail-label { writing-mode: vertical-rl; letter-spacing: 2px; font-size: 11px; opacity: .6; }

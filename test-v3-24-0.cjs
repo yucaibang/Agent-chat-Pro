@@ -539,7 +539,7 @@ async function runIconFixTests() {
 
   await test("E3 常显思考徽标整体移除（v3.24.1 用户拍板：🧠 徽标难看不常显，挡位只进面板）", () => {
     assert.ok(!rendererSrc.includes("function refreshThinkingBadge"), "徽标函数应删除");
-    // v3.24.6 思考元信息标题（用户拍板豆包同款）复用 🧠 字面：限定仅思考块模板可用，常显徽标场景仍禁止
+    // v3.24.7 思考元信息标题（用户拍板豆包同款）复用 🧠 字面：限定仅思考块模板可用，常显徽标场景仍禁止
     const brainCount = rendererSrc.split("🧠").length - 1;
     assert.ok(brainCount <= 2 && brainCount >= 1, `🧠 仅限思考元信息标题（1~2 处模板），实际 ${brainCount} 处`);
     assert.ok(!/refreshThinkingBadge\(/.test(rendererSrc), "徽标调用点应全部清除");
@@ -816,7 +816,7 @@ async function runVmSmokeTests() {
     edition: "main", productName: "Agent Chat Pro", gates: gatesStub,
     conversations: [], items: [], messages: [], tools: [], files: [], entries: [],
     results: [], valid: true, invalidKeys: [], ok: true, path: "",
-    lastConnectionMode: "", version: "3.24.6",
+    lastConnectionMode: "", version: "3.24.7",
     host: "", port: 22, username: "", wakeName: "", clientLabel: "",
     workingDirectory: "", dataDirectory: "", skipPermissions: false,
     showSignalLights: true, connectionMode: "cloud", localEngine: "claude",
@@ -966,7 +966,7 @@ async function runVmSmokeTests() {
   await runV3243Tests();
   await runVmSmokeTests();
   await test("G1 package.json 版本 = 3.24.3", () => {
-    assert.strictEqual(pkg.version, "3.24.6");
+    assert.strictEqual(pkg.version, "3.24.7");
   });
   console.log(`\n=== test-v3-24-0.cjs：${passed} 通过 / ${failed} 失败 ===`);
   if (failures.length) { console.log(failures.map((item) => `  ✗ ${item}`).join("\n")); process.exitCode = 1; }
