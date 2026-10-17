@@ -493,7 +493,7 @@ textarea::placeholder { color: var(--text-muted); }
 .composer-mode-trigger.automatic { color: #efb86f; background: #413322; }
 .composer-mode-trigger.safe { color: #6db3f2; background: #1a2a3a; }
 .composer-mode-selector { position: relative; }
-.composer-mode-popup { position: absolute; bottom: 100%; right: 0; margin-bottom: 6px; border: 1px solid var(--border-popover); border-radius: 10px; background: var(--bg-mode-dropdown); box-shadow: var(--shadow-dropdown); z-index: 70; padding: 6px; min-width: 220px; }
+.composer-mode-popup { position: absolute; bottom: 100%; right: 0; margin-bottom: 6px; border: 1px solid var(--border-popover); border-radius: 10px; background: var(--bg-mode-dropdown); box-shadow: var(--shadow-dropdown); z-index: 70; padding: 6px; min-width: 300px; }
 .composer-mode-list { display: flex; flex-direction: column; gap: 2px; max-height: 280px; overflow-y: auto; }
 .composer-mode-item { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: 7px; cursor: pointer; color: var(--text-secondary); font-size: 13px; transition: background .12s; }
 .composer-mode-item:hover { background: var(--bg-active); }
@@ -980,21 +980,53 @@ textarea { resize: vertical; min-height: 60px; }
 
 /* ── v3.24.0 输入栏思考调节面板（Codex 风格：上=模型名，下滑条按模型原生挡位；底部=工作模式 chips） ── */
 /* v3.24.1：顶部行布局（模型名+↻重置）、挡位 chips 渐进色、挡位名视觉焦点（对齐参考产品浮层设计） */
+/* v3.24.2：面板加宽 + 挡位条重做（粗条轨道 + eco 绿系/其他挡蓝系双渐变 + 滑动过渡动画 + 最高挡彩蛋行） */
 .think-panel { padding: 4px 6px 8px; }
 .think-model-row { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
 .think-model { font-size: 12.5px; font-weight: 600; color: var(--text-primary); padding: 6px 6px 10px; letter-spacing: .2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1 1 auto; }
 .think-reset { flex: 0 0 auto; margin: 4px 4px 0 0; padding: 2px 7px; border: 0; border-radius: 6px; background: transparent; color: var(--text-secondary); font-size: 13px; line-height: 1.4; cursor: pointer; transition: all .12s; }
 .think-reset:hover { background: var(--bg-input); color: var(--accent, #4f8ef7); }
-.think-slider { width: 100%; accent-color: var(--accent, #4f8ef7); margin: 2px 0 6px; }
+/* v3.24.2 挡位条重做（用户拍板参考 IMG_2679）：粗条轨道 + 三层背景渐变 + 滑动过渡动画
+   层序（上→下）：① 蓝系已选填充层（白→浅蓝→蓝→深蓝，--fill 控长=滑块位置比例）
+                 ② eco 绿系颗粒层（浅绿小点 repeat 平铺，--eco 控显隐）
+                 ③ eco 绿系整轨渐变层（深绿→绿→浅绿→白）
+   底色 = 深灰（默认挡/未填充态）。--fill 由渲染层 renderSliderTheme 按挡位 inline 设置，
+   .think-slider.eco { --eco:100% } 切绿系；background-size 过渡 = 滑块平滑动画（Chromium 原生）。 */
+.think-slider {
+  -webkit-appearance: none; appearance: none;
+  width: 100%; height: 12px; border-radius: 7px; margin: 3px 0 8px;
+  background-color: #2b323b;
+  background-image:
+    linear-gradient(90deg, #f8fafc 0%, #7dd3fc 34%, #38bdf8 67%, #0c4a6e 100%),
+    radial-gradient(rgba(134, 239, 172, .5) 1px, transparent 1.4px),
+    linear-gradient(90deg, #14532d 0%, #16a34a 32%, #86efac 62%, #f0fdf4 100%);
+  background-repeat: no-repeat, repeat, no-repeat;
+  background-size: var(--fill, 0%) 100%, var(--eco, 0%) 100%, var(--eco, 0%) 100%;
+  transition: background-size .22s ease;
+  cursor: pointer;
+}
+.think-slider.eco { --eco: 100%; }
 .think-slider:disabled { opacity: .4; cursor: not-allowed; }
+.think-slider::-webkit-slider-thumb {
+  -webkit-appearance: none; appearance: none;
+  width: 18px; height: 18px; border-radius: 50%;
+  background: #fff; border: 2px solid #4b5563;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, .35);
+  margin-top: -3px;
+  transition: transform .18s ease, box-shadow .18s ease, border-color .18s ease;
+}
+.think-slider::-webkit-slider-thumb:active { transform: scale(1.18); }
+.think-slider.blue::-webkit-slider-thumb { border-color: #38bdf8; }
+.think-slider.blue::-webkit-slider-thumb:active { box-shadow: 0 0 0 5px rgba(56, 189, 248, .25); }
+.think-slider.eco::-webkit-slider-thumb { border-color: #16a34a; }
+.think-slider.eco::-webkit-slider-thumb:active { box-shadow: 0 0 0 5px rgba(22, 163, 74, .25); }
 .think-levels { display: flex; justify-content: space-between; gap: 4px; padding: 0 2px; }
-.think-level { font-size: 11.5px; color: var(--text-secondary); cursor: default; white-space: nowrap; transition: color .12s; }
-/* v3.24.1：挡位强度渐进色（参考产品轨道点：灰白→浅绿→绿→深绿） */
-.think-level:nth-child(1) { color: #98a2b3; }
-.think-level:nth-child(2) { color: #5aa974; }
-.think-level:nth-child(3) { color: #2f9e5f; }
-.think-level:nth-child(4) { color: #1f7a4d; }
-.think-level.active { color: var(--accent, #4f8ef7); font-weight: 700; }
+.think-level { font-size: 11.5px; cursor: default; white-space: nowrap; transition: color .2s; }
+.think-level.active { font-weight: 700; }
+/* v3.24.2：chips 颜色改由渲染层按挡位序列插值（eco=深绿/默认=灰白/其余蓝系四阶），nth-child 硬编码渐进移除 */
+/* 最高挡彩蛋行（拉到最高挡：2s 随机文案，淡入淡出） */
+.think-egg { padding: 4px 6px 2px; font-size: 12px; text-align: center; color: #facc15; opacity: 0; transform: translateY(3px); transition: opacity .26s ease, transform .26s ease; }
+.think-egg.show { opacity: 1; transform: translateY(0); }
 .think-unsupported { font-size: 12px; color: var(--text-secondary); opacity: .8; }
 .think-meta { font-size: 11.5px; color: var(--text-secondary); line-height: 1.55; padding: 8px 6px 0; opacity: .9; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* v3.24.1：当前挡位名视觉焦点（对齐参考产品浮层「轻度」蓝字） */

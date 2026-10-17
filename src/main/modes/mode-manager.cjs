@@ -183,7 +183,8 @@ function validateMaxTokens(value) {
 }
 
 function validateThinkingLevel(value) {
-  return ["none", "low", "medium", "high"].includes(value) ? value : "none";
+  // v3.24.2：加入 eco 挡（节能零思考注入，CLI 与默认同=不传 --thinking-level）
+  return ["eco", "none", "low", "medium", "high"].includes(value) ? value : "none";
 }
 
 function validateHallucination(value) {

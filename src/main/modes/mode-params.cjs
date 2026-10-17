@@ -12,7 +12,8 @@ const { getMode } = require("./mode-manager.cjs");
 const { shellQuote } = require("../protocol.cjs");
 
 // v3.24.1：SSH/本机思考挡位合法值域（与 mode-manager validateThinkingLevel 同域）
-const THINKING_LEVEL_VALUES = ["none", "low", "medium", "high"];
+// v3.24.2：加入 eco 挡（节能零注入；挡位序列 eco 最前）
+const THINKING_LEVEL_VALUES = ["eco", "none", "low", "medium", "high"];
 
 /**
  * 清理模型名 — 移除上下文窗口标记等非标准后缀。

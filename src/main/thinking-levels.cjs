@@ -28,12 +28,14 @@ function levelLabel(level) {
   return `${SS[raw.id] || raw.id}`;
 }
 
-/** SSH / 本机 claude 引擎挡位（模式 thinkingLevel 同款语义，none=不传 --thinking-level） */
+/** SSH / 本机 claude 引擎挡位（模式 thinkingLevel 同款语义，none=不传 --thinking-level）
+ *  v3.24.2：eco 挡插最前（节能零注入，CLI 与 off 同=不传参），挡位文案统一 默认/轻度/中等/最高 */
 const SSH_LEVELS = [
-  { id: "off", label: "关", hint: "不传 --thinking-level（CLI 默认）" },
-  { id: "low", label: "低", hint: "较浅思考，省 token 且更快" },
-  { id: "medium", label: "中", hint: "常规深度（Claude 默认档位）" },
-  { id: "high", label: "高", hint: "最深思考，适合复杂任务" }
+  { id: "eco", label: "ECO", hint: "零思考注入，最省 token（CLI 与默认挡一致）" },
+  { id: "off", label: "默认", hint: "不传 --thinking-level（CLI 默认）" },
+  { id: "low", label: "轻度", hint: "较浅思考，省 token 且更快" },
+  { id: "medium", label: "中等", hint: "常规深度（Claude 默认档位）" },
+  { id: "high", label: "最高", hint: "最深思考，适合复杂任务" }
 ];
 
 /** Anthropic 原生分支挡位：预算数字挡（budget_tokens），off=关闭 extended thinking */

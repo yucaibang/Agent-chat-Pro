@@ -2863,15 +2863,19 @@ function closeComposerModePopup() {
 
 // v3.24.0 输入栏模式选择 → 思考调节（Codex 风格面板：上=模型名，下滑条按模型原生挡位；底部=工作模式快捷 chips）。
 // 挡位表主进程 thinking-levels.cjs 维护（provider+model 匹配，四字段族映射注入）；SSH/本机 claude 走工作模式 thinkingLevel。
+// v3.24.2：挡位序 eco 最前（用户拍板）→ 默认 → 强度递增；文案统一 轻度/中等/最高
 const THINK_SSH_LEVELS = [
+  { id: "eco", label: "ECO", hint: "零思考注入，最省 token（CLI 与默认挡一致）" },
   { id: "off", label: "默认", hint: "不传 --thinking-level（CLI 默认）" },
-  { id: "low", label: "低", hint: "较浅思考，更快更省 token" },
-  { id: "medium", label: "中", hint: "常规深度" },
-  { id: "high", label: "高", hint: "最深思考，适合复杂任务" }
+  { id: "low", label: "轻度", hint: "较浅思考，省 token 且更快" },
+  { id: "medium", label: "中等", hint: "常规深度（Claude 默认档位）" },
+  { id: "high", label: "最高", hint: "最深思考，适合复杂任务" }
 ];
-const THINK_CLAUDE_LEVEL_IDS = { off: "none", low: "low", medium: "medium", high: "high" };
-// v3.24.1：落库值域（none/low/medium/high，与 mode.thinkingLevel 同域）→ UI 挡位 id（off/low/medium/high）
-const THINK_CLAUDE_LEVEL_REVERSE = { none: "off", low: "low", medium: "medium", high: "high" };
+const THINK_CLAUDE_LEVEL_IDS = { eco: "eco", off: "none", low: "low", medium: "medium", high: "high" };
+// v3.24.1：落库值域（eco/none/low/medium/high，与 mode.thinkingLevel 同域）→ UI 挡位 id
+const THINK_CLAUDE_LEVEL_REVERSE = { eco: "eco", none: "off", low: "low", medium: "medium", high: "high" };
+// v3.24.2：最高挡彩蛋（随机三选一，2s 后消失）
+const THINK_EGG_LINES = ["更高的工作质量", "燃烧你的钱包吧！", "更快的消耗额度"];
 
 async function refreshComposerModePopup() {
   const modelEl = document.querySelector("#think-model");
@@ -2932,6 +2936,71 @@ async function refreshComposerModePopup() {
   const resetBtn = document.querySelector("#think-reset");
   if (resetBtn) resetBtn.onclick = resetChoice;
 
+  // ── v3.24.2 挡位条主题（用户拍板细节）──
+  // eco=绿系整轨渐变（深绿→绿→浅绿→白，白段浅绿颗粒）；其他挡（默认除外）=蓝系按滑距填充（白→浅蓝→蓝→深蓝）；默认=素灰。
+  // 填充长度走 CSS background-size 变量 + transition（Electron Chromium 原生平滑动画）。
+  const renderSliderTheme = (slider, levels) => {
+    const index = Number(slider.value);
+    const active = levels[index] || levels[0];
+    if (!active || active.id === "off") {
+      slider.classList.remove("eco", "blue");
+      slider.style.setProperty("--fill", "0%");
+      return;
+    }
+    if (active.id === "eco") {
+      slider.classList.add("eco");
+      slider.classList.remove("blue");
+      slider.style.setProperty("--fill", "0%");
+      return;
+    }
+    const ratio = levels.length > 1 ? index / (levels.length - 1) : 1;
+    slider.classList.add("blue");
+    slider.classList.remove("eco");
+    slider.style.setProperty("--fill", `${(ratio * 100).toFixed(1)}%`);
+  };
+  // 挡位 chips 颜色与轨道色系统一：eco=深绿；默认=灰白；其余按 index 蓝系四阶插值（白→浅蓝→蓝→深蓝）
+  const THINK_CHIP_RAMP = [[203, 213, 225], [125, 211, 252], [56, 189, 248], [12, 74, 110]];
+  const chipColor = (index, count) => {
+    if (index === 1 || count <= 2) return "rgb(203, 213, 225)";
+    const t = Math.max(0, Math.min(1, (index - 1) / Math.max(1, count - 2)));
+    const s = t * 3;
+    const seg = Math.min(2, Math.floor(s));
+    const frac = s - seg;
+    const c = THINK_CHIP_RAMP[seg];
+    const n = THINK_CHIP_RAMP[seg + 1];
+    const mix = (a, b, t2) => Math.round(a + (b - a) * t2);
+    return `rgb(${mix(c[0], n[0], frac)}, ${mix(c[1], n[1], frac)}, ${mix(c[2], n[2], frac)})`;
+  };
+  const renderChips = (row, levels, activeIndex) => {
+    row.replaceChildren();
+    levels.forEach((level, index) => {
+      const chip = document.createElement("span");
+      chip.className = `think-level${index === activeIndex ? " active" : ""}`;
+      chip.textContent = level.label;
+      chip.title = level.hint || "";
+      chip.style.color = level.id === "eco" ? "rgb(22, 101, 52)" : chipColor(index, levels.length);
+      row.append(chip);
+    });
+  };
+  // 最高挡彩蛋：拉到最高挡瞬间，面板下方随机文案显示 2s 后淡出
+  let thinkEggTimer = null;
+  const showThinkEgg = () => {
+    const egg = document.querySelector("#think-egg");
+    if (!egg) return;
+    egg.textContent = THINK_EGG_LINES[Math.floor(Math.random() * THINK_EGG_LINES.length)];
+    egg.hidden = false;
+    requestAnimationFrame(() => egg.classList.add("show"));
+    if (thinkEggTimer) clearTimeout(thinkEggTimer);
+    thinkEggTimer = setTimeout(() => {
+      egg.classList.remove("show");
+      setTimeout(() => { egg.hidden = true; }, 260);
+    }, 2000);
+  };
+  const maybeShowThinkEgg = (levels, index) => {
+    const active = levels[index];
+    if (active && index === levels.length - 1 && active.id !== "eco") showThinkEgg();
+  };
+
   const buildSlider = async () => {
     levelsRow.replaceChildren();
     meta.innerHTML = "";
@@ -2952,22 +3021,21 @@ async function refreshComposerModePopup() {
         if (meta) meta.textContent = "思考挡位按模型原生支持显示；未列出时不注入任何思考参数。";
         return;
       }
-      const levels = profile.levels;
+      // v3.24.2：ECO 挡显示层前置（各家挡位表不动——注入器 hasChoice 对 eco 零注入，天然安全）；
+      // 未选挡位（服务商默认）时滑块对位 off/默认挡，不再落在 eco
+      const levels = [{ id: "eco", label: "ECO", hint: "零思考注入，最省 token（服务商默认挡位）" }, ...profile.levels];
       slider.disabled = false;
       slider.min = 0;
       slider.max = String(levels.length - 1);
       slider.step = 1;
-      slider.value = String(Math.max(0, levels.findIndex((l) => l.id === choice)));
-      levels.forEach((level, index) => {
-        const chip = document.createElement("span");
-        chip.className = `think-level${index === Number(slider.value) ? " active" : ""}`;
-        chip.textContent = level.label;
-        chip.title = level.hint || "";
-        levelsRow.append(chip);
-      });
+      const defaultIdx = Math.max(0, levels.findIndex((l) => l.id === "off"));
+      slider.value = String(choice ? Math.max(0, levels.findIndex((l) => l.id === choice)) : defaultIdx);
+      renderSliderTheme(slider, levels);
+      renderChips(levelsRow, levels, Number(slider.value));
       const active = levels[Number(slider.value)] || levels[0];
       renderMeta(active, Boolean(choice));
-      slider.onchange = () => applyChoice(levels[Number(slider.value)].id);
+      slider.oninput = () => renderSliderTheme(slider, levels);
+      slider.onchange = () => { applyChoice(levels[Number(slider.value)].id); maybeShowThinkEgg(levels, Number(slider.value)); };
     } else {
       // SSH / 本机 claude 引擎：挡位=会话偏好（settings.thinkingChoices.ssh[工作模式]），
       // 未调整时用模式默认挡位（内置三模式 none/medium/none 继续生效）
@@ -2976,10 +3044,10 @@ async function refreshComposerModePopup() {
       const modes = Array.isArray(modesRaw) ? modesRaw : [];
       const mode = modes.find((m) => m.id === currentModeId);
       const engineClaude = currentConnectionMode === "ssh" || (currentConnectionMode === "local" && currentLocalEngine === "claude");
-      const modeLevel = (mode && mode.thinkingLevel === "high" ? "high" : mode && mode.thinkingLevel === "low" ? "low" : mode && mode.thinkingLevel === "none" ? "none" : "medium");
+      const modeLevel = (mode && ["eco", "high", "low", "none"].includes(mode.thinkingLevel)) ? mode.thinkingLevel : "medium";
       const modeKey = currentModeId || "regular";
       const sshChoice = String((((snapshot.thinkingChoices || {}).ssh || {})[modeKey]) || "").trim();
-      const levelValue = ["high", "medium", "low", "none"].includes(sshChoice) ? sshChoice : modeLevel;
+      const levelValue = ["eco", "high", "medium", "low", "none"].includes(sshChoice) ? sshChoice : modeLevel;
       const levelId = THINK_CLAUDE_LEVEL_REVERSE[levelValue] || "medium";
       modelEl.textContent = `${currentConnectionMode === "local" ? "💻 本机 " + (currentLocalEngine || "claude") : "🖥️ SSH 远程 Claude"} · ${mode?.name || "工作模式"}`;
       const levels = THINK_SSH_LEVELS;
@@ -2994,16 +3062,12 @@ async function refreshComposerModePopup() {
       slider.max = String(levels.length - 1);
       slider.step = 1;
       slider.value = String(Math.max(0, levels.findIndex((l) => l.id === levelId)));
-      levels.forEach((level, index) => {
-        const chip = document.createElement("span");
-        chip.className = `think-level${index === Number(slider.value) ? " active" : ""}`;
-        chip.textContent = level.label;
-        chip.title = level.hint || "";
-        levelsRow.append(chip);
-      });
+      renderSliderTheme(slider, levels);
+      renderChips(levelsRow, levels, Number(slider.value));
       const active = levels[Number(slider.value)] || levels[0];
       renderMeta(active, Boolean(sshChoice));
-      slider.onchange = () => applyChoice(levels[Number(slider.value)].id);
+      slider.oninput = () => renderSliderTheme(slider, levels);
+      slider.onchange = () => { applyChoice(levels[Number(slider.value)].id); maybeShowThinkEgg(levels, Number(slider.value)); };
     }
   };
 

@@ -81,6 +81,8 @@ const ENERGY_MAP = {
 /** 思考等级映射 */
 const THINKING_MAP = {
   none: "",
+  // v3.24.2：eco 挡=节能零思考注入，CLI 层与默认同（不传 --thinking-level，省 token 靠 CLI 默认策略）
+  eco: "",
   low: "--thinking-level low",
   medium: "--thinking-level medium",
   high: "--thinking-level high"

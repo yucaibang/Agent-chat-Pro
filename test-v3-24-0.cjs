@@ -4,6 +4,7 @@
  *   附 v3.24.1 组：装机 bug 修复（SSH/本机挡位改存 settings.thinkingChoices.ssh 偏好层，
  *   执行链 resolveMode 覆盖模式默认挡位，内置模式守卫零接触）+ 常显思考徽标移除 +
  *   挡位浮层对齐参考设计（↻重置 / 挡位名焦点 / chips 渐进色）。
+ *   附 v3.24.2 组：挡位条重做（挡序 eco 最前 / 滑条三层渐变蓝绿双系 / chips JS 插值 / 最高挡彩蛋）。
  * 背景：模式切换后输入栏图标恒护盾（providerSettings 双写互踩）；云端各家思考参数是四字段族
  *   并存（reasoning_effort / thinking.type / enable_thinking / thinking_budget），挡位随模型各异。
  * 覆盖：thinking-levels 纯函数真测（匹配链+挡位集+注入行为）+
@@ -221,7 +222,7 @@ async function runLevelsTests() {
   await test("A14 levelLabel 与 SSH_LEVELS 在册", () => {
     assert.strictEqual(levels.levelLabel("low"), "低");
     assert.strictEqual(levels.levelLabel({ id: "medium", label: "中" }), "中");
-    assert.ok(levels.SSH_LEVELS.length === 4 && levels.SSH_LEVELS[0].id === "off");
+    assert.ok(levels.SSH_LEVELS.length === 5 && levels.SSH_LEVELS[0].id === "eco" && levels.SSH_LEVELS[1].id === "off", "v3.24.2：5 挡且 eco 最前（承接 W1）");
     assert.strictEqual(levels.ANTHROPIC_BUDGET.high, 24576);
   });
 }
@@ -578,8 +579,8 @@ async function runV3241Tests() {
     assert.ok(rendererSrc.includes("ssh: sshChoices }"), "applyChoice SSH/本机分支落 thinkingChoices.ssh");
     assert.ok(rendererSrc.includes('[modeKey]: THINK_CLAUDE_LEVEL_IDS[choiceId] || "none"'), "按工作模式记忆挡位（off→none 同域落盘）");
     assert.ok(!rendererSrc.includes("await window.agentChatPro.updateMode(mode.isBuiltIn ? mode.id : mode.id"), "旧路径（updateMode 传模式定义+三元死代码）应清除");
-    assert.ok(rendererSrc.includes("THINK_CLAUDE_LEVEL_REVERSE = { none: \"off\""), "落库值域→UI 挡位 id 反向映射在册");
-    assert.ok(rendererSrc.includes('const levelValue = ["high", "medium", "low", "none"].includes(sshChoice) ? sshChoice : modeLevel;'), "面板读取：偏好高于模式默认挡位");
+    assert.ok(rendererSrc.includes('THINK_CLAUDE_LEVEL_REVERSE = { eco: "eco", none: "off"'), "落库值域→UI 挡位 id 反向映射在册（v3.24.2 值域含 eco）");
+    assert.ok(rendererSrc.includes('const levelValue = ["eco", "high", "medium", "low", "none"].includes(sshChoice) ? sshChoice : modeLevel;'), "面板读取：偏好高于模式默认挡位（v3.24.2 值域含 eco）");
   });
 
   await test("V4 renderer：↻ 重置（清偏好回默认挡位）+ 挡位名视觉焦点接线", () => {
@@ -592,7 +593,8 @@ async function runV3241Tests() {
   await test("V5 index.html/styles.css：顶部行+重置钮+渐进色+焦点样式在册", () => {
     assert.ok(htmlSrc.includes('id="think-reset"') && htmlSrc.includes("think-model-row"), "骨架：顶部行+重置钮");
     assert.ok(stylesSrc.includes(".think-model-row") && stylesSrc.includes(".think-reset:hover"), "重置钮样式");
-    assert.ok(stylesSrc.includes(".think-level:nth-child(4)") && stylesSrc.includes(".think-meta-level"), "挡位渐进色 + 焦点样式");
+    assert.ok(stylesSrc.includes(".think-level.active") && stylesSrc.includes(".think-meta-level"), "挡位聚焦样式在册（v3.24.2 起渐进色改 JS 插值，nth-child 死样式清除）");
+    assert.ok(!stylesSrc.includes(".think-level:nth-child"), "nth-child 硬编码渐进色应清除（chips 改渲染层上色）");
     assert.ok(!stylesSrc.includes(".composer-mode-trigger.unsupported {"), "徽标态死样式应清除（清理注释提及不算）");
   });
 
@@ -600,6 +602,79 @@ async function runV3241Tests() {
     assert.ok(modeManagerSrc.includes('throw new Error("内置模式不可修改。")'), "内置模式守卫保留");
     assert.ok(modeManagerSrc.includes('throw new Error("内置模式不可删除。")'), "内置模式删除守卫保留");
     assert.ok(!JSON.stringify(modeManagerSrc).includes("builtinOverrides"), "不应引入内置 override 落盘机制（方案 A′ 守卫零接触）");
+  });
+}
+
+/* ── W 组：v3.24.2 挡位条重做（eco 挡序 / 三层渐变 / 彩蛋） ── */
+
+async function runV3242Tests() {
+  console.log("── W 组：v3.24.2 挡位条重做 ──");
+
+  await test("W1 挡序 eco 最前 + 文案用户拍板（SSH_LEVELS/THINK_SSH_LEVELS/值域三处同链）", () => {
+    // 用户拍板原话锚：eco→默认→轻度→中等→最高
+    assert.deepStrictEqual(levels.SSH_LEVELS.map((l) => l.id), ["eco", "off", "low", "medium", "high"], "SSH_LEVELS 挡序 eco 最前");
+    assert.deepStrictEqual(levels.SSH_LEVELS.map((l) => l.label), ["ECO", "默认", "轻度", "中等", "最高"], "挡位文案：ECO/默认/轻度/中等/最高");
+    assert.deepStrictEqual(rendererSrc.slice(rendererSrc.indexOf("const THINK_SSH_LEVELS"), rendererSrc.indexOf("THINK_CLAUDE_LEVEL_IDS")).includes('{ id: "eco", label: "ECO"'), true, "渲染层挡位表 eco 最前");
+    assert.ok(rendererSrc.includes('const THINK_SSH_LEVELS = [\n  { id: "eco"'), "渲染层挡位序列首项 eco");
+    assert.ok(modeParamsSrc.includes('const THINKING_LEVEL_VALUES = ["eco", "none", "low", "medium", "high"]'), "mode-params 值域含 eco");
+    assert.ok(modeManagerSrc.includes('"eco", "none", "low", "medium", "high"'), "mode-manager validateThinkingLevel 值域含 eco");
+  });
+
+  await test("W2 THINKING_MAP.eco 零 flag + eco 注入安全（云/SSH 双链）", () => {
+    const defaultsSrc = fs.readFileSync(path.join(ROOT, "src", "main", "modes", "mode-defaults.cjs"), "utf8");
+    assert.ok(defaultsSrc.includes('eco: ""'), "THINKING_MAP.eco = 空串（CLI 与默认挡一致，不传 --thinking-level）");
+    // 云端注入器真测：eco 不在任何家族挡位表 → hasChoice=false → 零注入
+    const body = { model: "glm-5", messages: [] };
+    assert.strictEqual(levels.applyOpenAiThinking(body, { provider: "zhipu", model: "glm-5", choice: "eco" }), false, "GLM-5 eco 挡零注入");
+    assert.ok(!("thinking" in body) && !("reasoning_effort" in body), "请求体不残留思考参数");
+    const body2 = { model: "deepseek-chat", messages: [] };
+    assert.strictEqual(levels.applyOpenAiThinking(body2, { provider: "deepseek", model: "deepseek-chat", choice: "eco" }), false, "DeepSeek eco 挡零注入");
+    // Anthropic 原生链：eco 非预算挡 → 关
+    assert.strictEqual(levels.applyAnthropicThinking({ max_tokens: 8192 }, { provider: "anthropic", model: "claude-sonnet-4", choice: "eco" }), false, "Anthropic eco 挡零注入");
+  });
+
+  await test("W3 云端 eco 显示层前置 + 空偏好对位默认挡（挡位表不动，注入天然安全）", () => {
+    assert.ok(rendererSrc.includes('const levels = [{ id: "eco", label: "ECO", hint: "零思考注入，最省 token（服务商默认挡位）" }, ...profile.levels];'), "云端 levels 前置拼装 eco（profile 原表零改动）");
+    assert.ok(rendererSrc.includes('const defaultIdx = Math.max(0, levels.findIndex((l) => l.id === "off"));'), "空偏好（服务商默认）对位 off 挡，不落 eco");
+    assert.ok(rendererSrc.includes("slider.value = String(choice ? Math.max(0, levels.findIndex((l) => l.id === choice)) : defaultIdx);"), "有偏好按记忆对位");
+  });
+
+  await test("W4 挡位条主题接线：renderSliderTheme/chips 上色/双分支挂接（蓝绿双系 + 滑动动画）", () => {
+    assert.ok(rendererSrc.includes("const renderSliderTheme = (slider, levels) => {"), "轨道主题 helper");
+    assert.ok(rendererSrc.includes('slider.classList.add("eco")') && rendererSrc.includes('slider.classList.add("blue")'), "eco/blue 双主题类切换");
+    assert.ok(rendererSrc.includes('slider.style.setProperty("--fill"'), "--fill 填充变量（蓝系按滑距）");
+    assert.ok(rendererSrc.includes("const THINK_CHIP_RAMP = [[203, 213, 225], [125, 211, 252], [56, 189, 248], [12, 74, 110]];"), "chips 蓝系四阶渐变表");
+    assert.ok(rendererSrc.includes('chip.style.color = level.id === "eco" ? "rgb(22, 101, 52)" : chipColor(index, levels.length);'), "chips JS 插值上色（eco=深绿）");
+    assert.ok(rendererSrc.includes("slider.oninput = () => renderSliderTheme(slider, levels);"), "oninput 即时换色");
+    assert.ok(rendererSrc.includes("slider.onchange = () => { applyChoice(levels[Number(slider.value)].id); maybeShowThinkEgg(levels, Number(slider.value)); };"), "onchange 落盘+彩蛋（云/SSH 同款）");
+    assert.strictEqual(rendererSrc.split("slider.onchange = () => { applyChoice(levels[Number(slider.value)].id); maybeShowThinkEgg(levels, Number(slider.value)); };").length - 1, 2, "云端与 SSH 分支都挂接");
+  });
+
+  await test("W5 最高挡彩蛋（用户拍板三选一文案 + 2s 淡出 + 通用判定）", () => {
+    assert.ok(rendererSrc.includes('const THINK_EGG_LINES = ["更高的工作质量", "燃烧你的钱包吧！", "更快的消耗额度"];'), "三选一文案原文（用户原话）");
+    assert.ok(rendererSrc.includes('if (active && index === levels.length - 1 && active.id !== "eco") showThinkEgg();'), "判定：最后一挡且非 eco（云端任意挡位表通用）");
+    assert.ok(rendererSrc.includes('egg.textContent = THINK_EGG_LINES[Math.floor(Math.random() * THINK_EGG_LINES.length)];'), "随机三选一");
+    assert.ok(rendererSrc.includes("}, 2000);") && rendererSrc.includes('setTimeout(() => { egg.hidden = true; }, 260);'), "2s 后淡出（260ms transition 收尾）");
+    assert.ok(htmlSrc.includes('<div class="think-egg" id="think-egg" hidden></div>'), "index.html 彩蛋行在册");
+    assert.ok(stylesSrc.includes(".think-egg.show { opacity: 1; transform: translateY(0); }"), "淡入淡出样式");
+  });
+
+  await test("W6 三层渐变轨道 CSS（用户拍板：蓝系白→浅蓝→蓝→深蓝 / eco 绿系深绿→白带颗粒 / 粗条+动画）", () => {
+    assert.ok(stylesSrc.includes("linear-gradient(90deg, #f8fafc 0%, #7dd3fc 34%, #38bdf8 67%, #0c4a6e 100%)"), "①蓝系填充层（白→浅蓝→蓝→深蓝）");
+    assert.ok(stylesSrc.includes("radial-gradient(rgba(134, 239, 172, .5) 1px, transparent 1.4px)"), "②eco 浅绿颗粒层（repeat 平铺）");
+    assert.ok(stylesSrc.includes("linear-gradient(90deg, #14532d 0%, #16a34a 32%, #86efac 62%, #f0fdf4 100%)"), "③eco 整轨渐变层（深绿→绿→浅绿→白）");
+    assert.ok(stylesSrc.includes("background-size: var(--fill, 0%) 100%, var(--eco, 0%) 100%, var(--eco, 0%) 100%;"), "三变量控长显隐");
+    assert.ok(stylesSrc.includes("transition: background-size .22s ease;"), "滑动过渡动画（Chromium 原生）");
+    assert.ok(stylesSrc.includes(".think-slider.eco { --eco: 100%; }"), "eco 类切绿系");
+    assert.ok(stylesSrc.includes("height: 12px; border-radius: 7px;"), "粗条轨道（IMG_2679：做宽做粗）");
+    assert.ok(stylesSrc.includes(".think-slider::-webkit-slider-thumb:active { transform: scale(1.18); }"), "拖动放大手感");
+    assert.ok(stylesSrc.includes(".composer-mode-popup") && stylesSrc.includes("min-width: 300px;"), "面板加宽（220→300px）");
+  });
+
+  await test("W7 渲染层 SSH 挡位值域含 eco（面板读取 + 反向映射 + levelValue）", () => {
+    assert.ok(rendererSrc.includes('const THINK_CLAUDE_LEVEL_REVERSE = { eco: "eco", none: "off", low: "low", medium: "medium", high: "high" };'), "落库值域→UI id 反向映射含 eco");
+    assert.ok(rendererSrc.includes('const THINK_CLAUDE_LEVEL_IDS = { eco: "eco", off: "none", low: "low", medium: "medium", high: "high" };'), "UI id→落库值域含 eco（off→none 同域）");
+    assert.ok(rendererSrc.includes('const modeLevel = (mode && ["eco", "high", "low", "none"].includes(mode.thinkingLevel)) ? mode.thinkingLevel : "medium";'), "模式默认挡读取（medium 缺省即回 medium，语义等价）");
   });
 }
 
@@ -713,7 +788,7 @@ async function runVmSmokeTests() {
     edition: "main", productName: "Agent Chat Pro", gates: gatesStub,
     conversations: [], items: [], messages: [], tools: [], files: [], entries: [],
     results: [], valid: true, invalidKeys: [], ok: true, path: "",
-    lastConnectionMode: "", version: "3.24.1",
+    lastConnectionMode: "", version: "3.24.2",
     host: "", port: 22, username: "", wakeName: "", clientLabel: "",
     workingDirectory: "", dataDirectory: "", skipPermissions: false,
     showSignalLights: true, connectionMode: "cloud", localEngine: "claude",
@@ -859,9 +934,10 @@ async function runVmSmokeTests() {
   await runWiringTests();
   await runIconFixTests();
   await runV3241Tests();
+  await runV3242Tests();
   await runVmSmokeTests();
-  await test("G1 package.json 版本 = 3.24.1", () => {
-    assert.strictEqual(pkg.version, "3.24.1");
+  await test("G1 package.json 版本 = 3.24.2", () => {
+    assert.strictEqual(pkg.version, "3.24.2");
   });
   console.log(`\n=== test-v3-24-0.cjs：${passed} 通过 / ${failed} 失败 ===`);
   if (failures.length) { console.log(failures.map((item) => `  ✗ ${item}`).join("\n")); process.exitCode = 1; }
