@@ -5,6 +5,7 @@
  *   执行链 resolveMode 覆盖模式默认挡位，内置模式守卫零接触）+ 常显思考徽标移除 +
  *   挡位浮层对齐参考设计（↻重置 / 挡位名焦点 / chips 渐进色）。
  *   附 v3.24.2 组：挡位条重做（挡序 eco 最前 / 滑条三层渐变蓝绿双系 / chips JS 插值 / 最高挡彩蛋）。
+ *   附 v3.24.3 组：SSH/本机挡位浮层顶行补模型型号（模式配置 > 远程生效模型 TTL 缓存渐显）+ thumb 胶囊化。
  * 背景：模式切换后输入栏图标恒护盾（providerSettings 双写互踩）；云端各家思考参数是四字段族
  *   并存（reasoning_effort / thinking.type / enable_thinking / thinking_budget），挡位随模型各异。
  * 覆盖：thinking-levels 纯函数真测（匹配链+挡位集+注入行为）+
@@ -678,6 +679,31 @@ async function runV3242Tests() {
   });
 }
 
+/* ── X 组：v3.24.3 顶行模型型号 + thumb 胶囊化 ── */
+
+async function runV3243Tests() {
+  console.log("── X 组：v3.24.3 顶行模型型号 + thumb 胶囊化 ──");
+
+  await test("X1 SSH/本机顶行补模型型号（模式配置优先 > 远程生效模型 TTL 渐显 + stamp 防竞态）", () => {
+    assert.ok(rendererSrc.includes("let thinkModelCache = null;") && rendererSrc.includes("let thinkModelStamp = 0;"), "模块级缓存与重建计数");
+    assert.ok(rendererSrc.includes("const THINK_MODEL_TTL = 5 * 60 * 1000;"), "5 分钟 TTL（防面板开合反复建 SSH 连接）");
+    assert.ok(rendererSrc.includes('return raw.replace(/\\[[^\\]]*\\]$/g, "").trim();'), "modeConfig.model 同款 sanitize（去 [1m] 等后缀）");
+    assert.ok(rendererSrc.includes("const status = await window.agentChatPro.getModelStatus();"), "远程/本机生效模型探测（main.cjs 按连接方式分派）");
+    assert.ok(rendererSrc.includes("const stamp = ++thinkModelStamp;"), "面板重建计数入口（buildSlider 顶部）");
+    assert.ok(rendererSrc.includes("if (stamp !== thinkModelStamp || !remoteModel) return;"), "过期回包/空型号不写顶行（防竞态）");
+    assert.ok(rendererSrc.includes("modelEl.textContent = `${baseLabel} · ${modeModel}`;"), "模式显式配置直接显示");
+    assert.ok(rendererSrc.includes("modelEl.textContent = `${baseLabel} · ${remoteModel}`;"), "远程型号后台渐显追加");
+  });
+
+  await test("X2 thumb 两端半圆长条（用户拍板胶囊形；原 18px 正圆清除）", () => {
+    assert.ok(stylesSrc.includes("width: 26px; height: 14px; border-radius: 9999px;"), "thumb 胶囊形（26×14 两端半圆）");
+    assert.ok(stylesSrc.includes("margin-top: -1px;"), "14px 高度与 12px 轨道居中");
+    assert.ok(!/(?:thumb \{\s*[\s\S]{0,120}?)border-radius: 50%/.test(stylesSrc), "旧正圆 thumb 应清除（border-radius: 50% 不再用于 thumb）");
+    assert.ok(stylesSrc.includes(".think-slider::-webkit-slider-thumb:active { transform: scale(1.18); }"), "拖动放大手感保留");
+    assert.ok(stylesSrc.includes(".think-slider.blue::-webkit-slider-thumb { border-color: #38bdf8; }") && stylesSrc.includes(".think-slider.eco::-webkit-slider-thumb { border-color: #16a34a; }"), "蓝绿双系描边保留");
+  });
+}
+
 /* ── F 组：vm 假 DOM 冒烟（renderer 改动必过） ── */
 
 async function runVmSmokeTests() {
@@ -788,7 +814,7 @@ async function runVmSmokeTests() {
     edition: "main", productName: "Agent Chat Pro", gates: gatesStub,
     conversations: [], items: [], messages: [], tools: [], files: [], entries: [],
     results: [], valid: true, invalidKeys: [], ok: true, path: "",
-    lastConnectionMode: "", version: "3.24.2",
+    lastConnectionMode: "", version: "3.24.3",
     host: "", port: 22, username: "", wakeName: "", clientLabel: "",
     workingDirectory: "", dataDirectory: "", skipPermissions: false,
     showSignalLights: true, connectionMode: "cloud", localEngine: "claude",
@@ -935,9 +961,10 @@ async function runVmSmokeTests() {
   await runIconFixTests();
   await runV3241Tests();
   await runV3242Tests();
+  await runV3243Tests();
   await runVmSmokeTests();
-  await test("G1 package.json 版本 = 3.24.2", () => {
-    assert.strictEqual(pkg.version, "3.24.2");
+  await test("G1 package.json 版本 = 3.24.3", () => {
+    assert.strictEqual(pkg.version, "3.24.3");
   });
   console.log(`\n=== test-v3-24-0.cjs：${passed} 通过 / ${failed} 失败 ===`);
   if (failures.length) { console.log(failures.map((item) => `  ✗ ${item}`).join("\n")); process.exitCode = 1; }

@@ -1009,10 +1009,11 @@ textarea { resize: vertical; min-height: 60px; }
 .think-slider:disabled { opacity: .4; cursor: not-allowed; }
 .think-slider::-webkit-slider-thumb {
   -webkit-appearance: none; appearance: none;
-  width: 18px; height: 18px; border-radius: 50%;
+  /* v3.24.3：thumb 改两端半圆的长条（胶囊形，用户拍板「两边半圆的长条」；原 18px 正圆） */
+  width: 26px; height: 14px; border-radius: 9999px;
   background: #fff; border: 2px solid #4b5563;
   box-shadow: 0 1px 4px rgba(0, 0, 0, .35);
-  margin-top: -3px;
+  margin-top: -1px;
   transition: transform .18s ease, box-shadow .18s ease, border-color .18s ease;
 }
 .think-slider::-webkit-slider-thumb:active { transform: scale(1.18); }

@@ -2877,6 +2877,31 @@ const THINK_CLAUDE_LEVEL_REVERSE = { eco: "eco", none: "off", low: "low", medium
 // v3.24.2：最高挡彩蛋（随机三选一，2s 后消失）
 const THINK_EGG_LINES = ["更高的工作质量", "燃烧你的钱包吧！", "更快的消耗额度"];
 
+// v3.24.3：SSH/本机挡位浮层顶行补模型型号（装机反馈「没显示模型型号」）——
+// 型号来源优先级：模式显式 modelConfig.model（构建命令同款 sanitize 去 [后缀]）> 远程/本机 Claude 实际生效模型
+// （getModelStatus 读 ~/.claude/settings.json——SSH 走远端 cat、本机走 fs，main.cjs 按连接方式分派）；
+// 5 分钟 TTL 缓存防面板开合反复建 SSH 连接；拿不到/未连接静默不追加（只显模式名）。
+// stamp 防竞态：面板任何重建（切模式/切连接方式/换挡渲染）都作废旧异步结果，过期回包不写 modelEl。
+let thinkModelCache = null; // { model: string, at: number }
+let thinkModelStamp = 0;
+const THINK_MODEL_TTL = 5 * 60 * 1000;
+const thinkModeModelText = (mode) => {
+  const raw = String(mode?.modelConfig?.model || "").trim();
+  return raw.replace(/\[[^\]]*\]$/g, "").trim();
+};
+const fetchThinkRemoteModel = async () => {
+  const cached = thinkModelCache;
+  if (cached && Date.now() - cached.at < THINK_MODEL_TTL) return cached.model;
+  try {
+    const status = await window.agentChatPro.getModelStatus();
+    const model = String(status?.model || "").trim();
+    thinkModelCache = { model, at: Date.now() };
+    return model;
+  } catch {
+    return cached ? cached.model : ""; // 拉取失败：有过期缓存沿用旧值，否则空
+  }
+};
+
 async function refreshComposerModePopup() {
   const modelEl = document.querySelector("#think-model");
   const slider = document.querySelector("#think-slider");
@@ -3002,6 +3027,7 @@ async function refreshComposerModePopup() {
   };
 
   const buildSlider = async () => {
+    const stamp = ++thinkModelStamp; // v3.24.3：面板重建计数（作废旧型号异步回包）
     levelsRow.replaceChildren();
     meta.innerHTML = "";
     const resetBtnEl = document.querySelector("#think-reset");
@@ -3049,7 +3075,19 @@ async function refreshComposerModePopup() {
       const sshChoice = String((((snapshot.thinkingChoices || {}).ssh || {})[modeKey]) || "").trim();
       const levelValue = ["eco", "high", "medium", "low", "none"].includes(sshChoice) ? sshChoice : modeLevel;
       const levelId = THINK_CLAUDE_LEVEL_REVERSE[levelValue] || "medium";
-      modelEl.textContent = `${currentConnectionMode === "local" ? "💻 本机 " + (currentLocalEngine || "claude") : "🖥️ SSH 远程 Claude"} · ${mode?.name || "工作模式"}`;
+      // v3.24.3：顶行补模型型号——模式显式配置优先（thinkModeModelText 去 [后缀]），否则后台拉远程/本机生效模型渐显
+      const engineLabel = currentConnectionMode === "local" ? "💻 本机 " + (currentLocalEngine || "claude") : "🖥️ SSH 远程 Claude";
+      const baseLabel = `${engineLabel} · ${mode?.name || "工作模式"}`;
+      const modeModel = thinkModeModelText(mode);
+      if (modeModel) {
+        modelEl.textContent = `${baseLabel} · ${modeModel}`;
+      } else {
+        modelEl.textContent = baseLabel;
+        fetchThinkRemoteModel().then((remoteModel) => {
+          if (stamp !== thinkModelStamp || !remoteModel) return; // 面板已重建/拿不到 → 不追加
+          modelEl.textContent = `${baseLabel} · ${remoteModel}`;
+        });
+      }
       const levels = THINK_SSH_LEVELS;
       if (!engineClaude) {
         slider.disabled = true;
