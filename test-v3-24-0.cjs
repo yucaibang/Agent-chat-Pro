@@ -1,6 +1,9 @@
 "use strict";
 /**
  * v3.24.0 测试 — 模式图标修复 + 思考调节（Codex 风格挡位面板）+ AI 选择题提问 + 思考过程折叠显示
+ *   附 v3.24.1 组：装机 bug 修复（SSH/本机挡位改存 settings.thinkingChoices.ssh 偏好层，
+ *   执行链 resolveMode 覆盖模式默认挡位，内置模式守卫零接触）+ 常显思考徽标移除 +
+ *   挡位浮层对齐参考设计（↻重置 / 挡位名焦点 / chips 渐进色）。
  * 背景：模式切换后输入栏图标恒护盾（providerSettings 双写互踩）；云端各家思考参数是四字段族
  *   并存（reasoning_effort / thinking.type / enable_thinking / thinking_budget），挡位随模型各异。
  * 覆盖：thinking-levels 纯函数真测（匹配链+挡位集+注入行为）+
@@ -25,6 +28,8 @@ const CONVERSATIONS_PATH = path.join(ROOT, "src", "main", "conversations.cjs");
 const PROTOCOL_PATH = path.join(ROOT, "src", "main", "protocol.cjs");
 const SSH_PATH = path.join(ROOT, "src", "main", "ssh.cjs");
 const LOCAL_PATH = path.join(ROOT, "src", "main", "local.cjs");
+const MODE_PARAMS_PATH = path.join(ROOT, "src", "main", "modes", "mode-params.cjs");
+const MODE_MANAGER_PATH = path.join(ROOT, "src", "main", "modes", "mode-manager.cjs");
 const RENDERER_PATH = path.join(ROOT, "src", "renderer", "renderer.js");
 const HTML_PATH = path.join(ROOT, "src", "renderer", "index.html");
 const STYLES_PATH = path.join(ROOT, "src", "renderer", "styles.css");
@@ -55,6 +60,8 @@ const conversationsSrc = fs.readFileSync(CONVERSATIONS_PATH, "utf8");
 const protocolSrc = fs.readFileSync(PROTOCOL_PATH, "utf8");
 const sshSrc = fs.readFileSync(SSH_PATH, "utf8");
 const localSrc = fs.readFileSync(LOCAL_PATH, "utf8");
+const modeParamsSrc = fs.readFileSync(MODE_PARAMS_PATH, "utf8");
+const modeManagerSrc = fs.readFileSync(MODE_MANAGER_PATH, "utf8");
 const rendererSrc = fs.readFileSync(RENDERER_PATH, "utf8");
 const htmlSrc = fs.readFileSync(HTML_PATH, "utf8");
 const stylesSrc = fs.readFileSync(STYLES_PATH, "utf8");
@@ -466,8 +473,8 @@ async function runWiringTests() {
     assert.ok(cloudSrc.includes("onReasoning"), "思考流回调");
   });
 
-  await test("D9 renderer：面板/徽标/事件分支/历史重放/特化卡在册", () => {
-    assert.ok(rendererSrc.includes("function refreshThinkingBadge"), "思考徽标函数");
+  await test("D9 renderer：面板/事件分支/历史重放/特化卡在册（v3.24.1 徽标移除）", () => {
+    assert.ok(!rendererSrc.includes("function refreshThinkingBadge"), "v3.24.1 常显思考徽标应已移除");
     assert.ok(rendererSrc.includes("THINK_SSH_LEVELS"), "SSH 挡位表");
     assert.ok(rendererSrc.includes("getThinkingProfile"), "挡位表桥调用");
     assert.ok(rendererSrc.includes('event.type === "thinking"'), "思考事件分支");
@@ -485,10 +492,12 @@ async function runWiringTests() {
     assert.ok(rendererSrc.includes("think-modes"), "模式 chips 容器");
   });
 
-  await test("D10 index.html：think-panel 骨架六元素", () => {
+  await test("D10 index.html：think-panel 骨架六元素（v3.24.1 + 重置钮/顶部行）", () => {
     for (const id of ["think-panel", "think-model", "think-slider", "think-levels", "think-meta", "think-modes"]) {
       assert.ok(htmlSrc.includes(`id="${id}"`), `缺 #${id}`);
     }
+    assert.ok(htmlSrc.includes('id="think-reset"'), "v3.24.1 缺 #think-reset 重置钮");
+    assert.ok(htmlSrc.includes("think-model-row"), "v3.24.1 缺顶部行容器");
   });
 
   await test("D11 styles.css：面板/折叠块/选择题卡三类样式在册", () => {
@@ -518,24 +527,79 @@ async function runIconFixTests() {
     assert.ok(!/setToolModeAppearance\(/.test(body), "populateSettings 里不应再有全局开关覆盖调用（注释命中不算）");
   });
 
-  await test("E2 updateModeDisplay 不再用 mode.icon 覆盖输入栏按钮", () => {
+  await test("E2 updateModeDisplay 独占图标渲染（v3.24.1 徽标移除后 icon/title 回归，双写修复保留）", () => {
     const body = rendererSrc.slice(rendererSrc.indexOf("function updateModeDisplay"), rendererSrc.indexOf('document.querySelector("#mode-trigger").addEventListener'));
-    assert.ok(!body.includes("composerModeTrigger.textContent = mode.icon"), "图标渲染权应已移除");
-    assert.ok(body.includes("refreshThinkingBadge()"), "应改挂思考徽标刷新");
+    assert.ok(body.includes("composerModeTrigger.textContent = mode.icon"), "图标渲染权应回归 updateModeDisplay（v3.24.1）");
+    assert.ok(body.includes("composerModeTrigger.title ="), "模式名/描述 title 应回归");
+    assert.ok(!body.includes("refreshThinkingBadge()"), "徽标刷新调用应已移除");
     assert.ok(body.includes("composer-mode-trigger ${mode.skipPermissions ? \"automatic\" : \"safe\"}"), "按钮类名仍应随模式");
   });
 
-  await test("E3 refreshThinkingBadge 覆盖三语义（云端挡位/SSH 挡位/不支持置灰）", () => {
-    const fn = rendererSrc.slice(rendererSrc.indexOf("async function refreshThinkingBadge"), rendererSrc.indexOf("if (elements.composerModeTrigger) {\n  elements.composerModeTrigger.addEventListener"));
-    assert.ok(fn.includes("🧠"), "徽标图标");
-    assert.ok(fn.includes("getThinkingProfile"), "云端挡位拉取");
-    assert.ok(fn.includes("unsupported"), "不支持置灰");
-    assert.ok(fn.includes("thinkingChoices"), "挡位记忆读取");
-    assert.ok(fn.includes("--thinking-level"), "SSH 语义注明");
+  await test("E3 常显思考徽标整体移除（v3.24.1 用户拍板：🧠 徽标难看不常显，挡位只进面板）", () => {
+    assert.ok(!rendererSrc.includes("function refreshThinkingBadge"), "徽标函数应删除");
+    assert.ok(!rendererSrc.includes("🧠"), "🧠 徽标字面应清除");
+    assert.ok(!/refreshThinkingBadge\(/.test(rendererSrc), "徽标调用点应全部清除");
+    const body = rendererSrc.slice(rendererSrc.indexOf("function setToolModeAppearance"), rendererSrc.indexOf("async function changeToolMode"));
+    assert.ok(!body.includes("elements.composerModeTrigger"), "setToolModeAppearance 仍不碰输入栏按钮（双写修复语义保留，注释提及不算）");
   });
 
   await test("E4 setToolModeAppearance 自身保留（模式编辑面板仍用）", () => {
     assert.ok(rendererSrc.includes("function setToolModeAppearance"), "函数应保留");
+  });
+}
+
+/* ── V 组：v3.24.1 挡位偏好层修复 + 徽标移除 + 浮层参考设计 ── */
+
+async function runV3241Tests() {
+  console.log("── V 组：v3.24.1 挡位偏好层 + 徽标移除 + 浮层参考设计 ──");
+
+  await test("V1 mode-params.applyThinkingChoice 纯函数真测（偏好覆盖/无偏好保留/非法值忽略/空模式安全）", () => {
+    const fnBody = modeParamsSrc.slice(modeParamsSrc.indexOf("const THINKING_LEVEL_VALUES"), modeParamsSrc.indexOf("/** 读取 settings.thinkingChoices"));
+    const applyThinkingChoice = new Function(`${fnBody}\nreturn applyThinkingChoice;`)();
+    const mode = { id: "automated", thinkingLevel: "none", skipPermissions: false };
+    const overridden = applyThinkingChoice(mode, "automated", { ssh: { automated: "high" } });
+    assert.strictEqual(overridden.thinkingLevel, "high", "偏好应覆盖模式默认挡位");
+    assert.notStrictEqual(overridden, mode, "应返回副本不改入参");
+    assert.strictEqual(applyThinkingChoice(mode, "automated", { ssh: {} }).thinkingLevel, "none", "无偏好保留模式默认挡位");
+    assert.strictEqual(applyThinkingChoice(mode, "automated", { ssh: { automated: "ultra" } }).thinkingLevel, "none", "非法偏好值忽略");
+    assert.strictEqual(applyThinkingChoice(null, "x", { ssh: { x: "high" } }), null, "空模式安全透传");
+    assert.strictEqual(applyThinkingChoice({ id: "regular", thinkingLevel: "medium" }, "regular", { ssh: { regular: "low" } }).thinkingLevel, "low", "内置模式挡位同样走偏好（守卫零接触）");
+  });
+
+  await test("V2 mode-params.resolveMode 挡位偏好接线（SSH/Bridge/本机三链汇聚点 + 内置常量副本保护）", () => {
+    assert.ok(modeParamsSrc.includes("return applyThinkingChoice(mode, modeId, readThinkingChoices())"), "resolveMode 尾部挂偏好覆盖");
+    assert.ok(modeParamsSrc.includes("{ ...(getMode(modeId) || fallback) }"), "resolveMode 副本保护（不污染 BUILTIN_MODES 常量）");
+    assert.ok(modeParamsSrc.includes('require("../settings.cjs").getSettings()'), "延迟读 settings（依赖兜底，不污染纯函数测试）");
+    assert.ok(modeParamsSrc.includes("catch { return {}; }"), "settings 不可读时零偏好兜底");
+    assert.ok(/applyThinkingChoice[,\s}]/.test(modeParamsSrc.slice(modeParamsSrc.indexOf("module.exports"))), "module.exports 导出 applyThinkingChoice");
+  });
+
+  await test("V3 renderer：SSH/本机挡位改存偏好层（thinkingChoices.ssh[工作模式]），不再写模式定义", () => {
+    assert.ok(rendererSrc.includes("ssh: sshChoices }"), "applyChoice SSH/本机分支落 thinkingChoices.ssh");
+    assert.ok(rendererSrc.includes('[modeKey]: THINK_CLAUDE_LEVEL_IDS[choiceId] || "none"'), "按工作模式记忆挡位（off→none 同域落盘）");
+    assert.ok(!rendererSrc.includes("await window.agentChatPro.updateMode(mode.isBuiltIn ? mode.id : mode.id"), "旧路径（updateMode 传模式定义+三元死代码）应清除");
+    assert.ok(rendererSrc.includes("THINK_CLAUDE_LEVEL_REVERSE = { none: \"off\""), "落库值域→UI 挡位 id 反向映射在册");
+    assert.ok(rendererSrc.includes('const levelValue = ["high", "medium", "low", "none"].includes(sshChoice) ? sshChoice : modeLevel;'), "面板读取：偏好高于模式默认挡位");
+  });
+
+  await test("V4 renderer：↻ 重置（清偏好回默认挡位）+ 挡位名视觉焦点接线", () => {
+    assert.ok(rendererSrc.includes("const resetChoice = async () => {"), "重置处理器");
+    assert.ok(rendererSrc.includes("delete ssh[currentModeId || \"regular\"];") && rendererSrc.includes("delete cloud[`${provider}/${model}`];"), "双模式重置清除偏好键");
+    assert.ok(rendererSrc.includes('resetBtn.hidden = !hasMemory'), "有偏好记忆时才显示重置钮");
+    assert.ok(rendererSrc.includes('<b class="think-meta-level">${active.label}</b>'), "挡位名焦点 markup（label 来自内置挡位表，无用户输入）");
+  });
+
+  await test("V5 index.html/styles.css：顶部行+重置钮+渐进色+焦点样式在册", () => {
+    assert.ok(htmlSrc.includes('id="think-reset"') && htmlSrc.includes("think-model-row"), "骨架：顶部行+重置钮");
+    assert.ok(stylesSrc.includes(".think-model-row") && stylesSrc.includes(".think-reset:hover"), "重置钮样式");
+    assert.ok(stylesSrc.includes(".think-level:nth-child(4)") && stylesSrc.includes(".think-meta-level"), "挡位渐进色 + 焦点样式");
+    assert.ok(!stylesSrc.includes(".composer-mode-trigger.unsupported {"), "徽标态死样式应清除（清理注释提及不算）");
+  });
+
+  await test("V6 mode-manager 内置守卫原封不动（修复走偏好层，不松动模式定义防线）", () => {
+    assert.ok(modeManagerSrc.includes('throw new Error("内置模式不可修改。")'), "内置模式守卫保留");
+    assert.ok(modeManagerSrc.includes('throw new Error("内置模式不可删除。")'), "内置模式删除守卫保留");
+    assert.ok(!JSON.stringify(modeManagerSrc).includes("builtinOverrides"), "不应引入内置 override 落盘机制（方案 A′ 守卫零接触）");
   });
 }
 
@@ -649,7 +713,7 @@ async function runVmSmokeTests() {
     edition: "main", productName: "Agent Chat Pro", gates: gatesStub,
     conversations: [], items: [], messages: [], tools: [], files: [], entries: [],
     results: [], valid: true, invalidKeys: [], ok: true, path: "",
-    lastConnectionMode: "", version: "3.24.0",
+    lastConnectionMode: "", version: "3.24.1",
     host: "", port: 22, username: "", wakeName: "", clientLabel: "",
     workingDirectory: "", dataDirectory: "", skipPermissions: false,
     showSignalLights: true, connectionMode: "cloud", localEngine: "claude",
@@ -794,9 +858,10 @@ async function runVmSmokeTests() {
   await runAskUserTests();
   await runWiringTests();
   await runIconFixTests();
+  await runV3241Tests();
   await runVmSmokeTests();
-  await test("G1 package.json 版本 = 3.24.0", () => {
-    assert.strictEqual(pkg.version, "3.24.0");
+  await test("G1 package.json 版本 = 3.24.1", () => {
+    assert.strictEqual(pkg.version, "3.24.1");
   });
   console.log(`\n=== test-v3-24-0.cjs：${passed} 通过 / ${failed} 失败 ===`);
   if (failures.length) { console.log(failures.map((item) => `  ✗ ${item}`).join("\n")); process.exitCode = 1; }

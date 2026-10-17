@@ -979,23 +979,33 @@ textarea { resize: vertical; min-height: 60px; }
 [data-theme="light"] .n2n-deploy-log { color: #4a5560; }
 
 /* ── v3.24.0 输入栏思考调节面板（Codex 风格：上=模型名，下滑条按模型原生挡位；底部=工作模式 chips） ── */
+/* v3.24.1：顶部行布局（模型名+↻重置）、挡位 chips 渐进色、挡位名视觉焦点（对齐参考产品浮层设计） */
 .think-panel { padding: 4px 6px 8px; }
-.think-model { font-size: 12.5px; font-weight: 600; color: var(--text-primary); padding: 6px 6px 10px; letter-spacing: .2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.think-model-row { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+.think-model { font-size: 12.5px; font-weight: 600; color: var(--text-primary); padding: 6px 6px 10px; letter-spacing: .2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1 1 auto; }
+.think-reset { flex: 0 0 auto; margin: 4px 4px 0 0; padding: 2px 7px; border: 0; border-radius: 6px; background: transparent; color: var(--text-secondary); font-size: 13px; line-height: 1.4; cursor: pointer; transition: all .12s; }
+.think-reset:hover { background: var(--bg-input); color: var(--accent, #4f8ef7); }
 .think-slider { width: 100%; accent-color: var(--accent, #4f8ef7); margin: 2px 0 6px; }
 .think-slider:disabled { opacity: .4; cursor: not-allowed; }
 .think-levels { display: flex; justify-content: space-between; gap: 4px; padding: 0 2px; }
 .think-level { font-size: 11.5px; color: var(--text-secondary); cursor: default; white-space: nowrap; transition: color .12s; }
-.think-level.active { color: var(--accent, #4f8ef7); font-weight: 600; }
+/* v3.24.1：挡位强度渐进色（参考产品轨道点：灰白→浅绿→绿→深绿） */
+.think-level:nth-child(1) { color: #98a2b3; }
+.think-level:nth-child(2) { color: #5aa974; }
+.think-level:nth-child(3) { color: #2f9e5f; }
+.think-level:nth-child(4) { color: #1f7a4d; }
+.think-level.active { color: var(--accent, #4f8ef7); font-weight: 700; }
 .think-unsupported { font-size: 12px; color: var(--text-secondary); opacity: .8; }
 .think-meta { font-size: 11.5px; color: var(--text-secondary); line-height: 1.55; padding: 8px 6px 0; opacity: .9; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* v3.24.1：当前挡位名视觉焦点（对齐参考产品浮层「轻度」蓝字） */
+.think-meta-level { color: var(--accent, #4f8ef7); font-weight: 700; font-size: 12.5px; }
 .think-divider { height: 1px; background: var(--border-sidebar); margin: 10px 6px; opacity: .6; }
 .think-modes { display: flex; gap: 6px; padding: 0 6px; flex-wrap: wrap; }
 .think-mode-chip { flex: 1 1 auto; display: inline-flex; align-items: center; justify-content: center; gap: 4px; padding: 6px 10px; border-radius: 8px; border: 1px solid var(--border-sidebar); background: transparent; color: var(--text-secondary); font-size: 12px; cursor: pointer; transition: all .12s; }
 .think-mode-chip:hover { background: var(--bg-input); color: var(--text-primary); }
 .think-mode-chip.active { background: var(--accent, #4f8ef7); border-color: var(--accent, #4f8ef7); color: #fff; font-weight: 600; }
 .think-mode-chip-icon { font-size: 13px; }
-/* 输入栏触发按钮（思考徽标态） */
-.composer-mode-trigger.unsupported { opacity: .55; }
+/* v3.24.1：常显思考徽标移除，徽标态样式（.composer-mode-trigger.unsupported）一并清理 */
 /* ── v3.24.0 思考过程折叠块（气泡内 details） ── */
 .thinking-block { margin: 0 0 4px; padding: 6px 10px; border: 1px solid var(--border-sidebar); border-radius: 8px; background: var(--bg-deep); font-size: 12.5px; overflow: hidden; }
 [data-theme="light"] .thinking-block { background: #f0f2f5; }

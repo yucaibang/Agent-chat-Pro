@@ -241,8 +241,6 @@ function populateSettings(settings) {
   renderSshProfiles(settings);
   // v3.19.0 F3：高级设置三卡回填（自动/手动徽章 + 实值 + 适配器选中态）
   renderAdvancedPanels(settings);
-  // v3.24.0：输入栏思考徽标随设置刷新（云端 provider/model 变更、挡位记忆落库后即刻反映）
-  refreshThinkingBadge();
 }
 
 // ── v3.18.0 F4：SSH 多卡槽（AO 0.9.6 同构 + ACP 切槽即落库语义） ──
@@ -2872,6 +2870,8 @@ const THINK_SSH_LEVELS = [
   { id: "high", label: "高", hint: "最深思考，适合复杂任务" }
 ];
 const THINK_CLAUDE_LEVEL_IDS = { off: "none", low: "low", medium: "medium", high: "high" };
+// v3.24.1：落库值域（none/low/medium/high，与 mode.thinkingLevel 同域）→ UI 挡位 id（off/low/medium/high）
+const THINK_CLAUDE_LEVEL_REVERSE = { none: "off", low: "low", medium: "medium", high: "high" };
 
 async function refreshComposerModePopup() {
   const modelEl = document.querySelector("#think-model");
@@ -2891,29 +2891,52 @@ async function refreshComposerModePopup() {
         const cloudChoices = { ...((snapshot.thinkingChoices || {}).cloud || {}), [`${provider}/${model}`]: choiceId };
         await window.agentChatPro.saveSettings({ ...snapshot, thinkingChoices: { ...(snapshot.thinkingChoices || {}), cloud: cloudChoices } });
       } else {
-        const modes = await window.agentChatPro.listModes();
-        const mode = (modes || []).find((m) => m.id === currentModeId);
-        if (!mode) throw new Error("未找到当前工作模式");
-        const next = { ...mode, thinkingLevel: THINK_CLAUDE_LEVEL_IDS[choiceId] || "medium" };
-        const updated = await window.agentChatPro.updateMode(mode.isBuiltIn ? mode.id : mode.id, {
-          name: next.name, description: next.description, icon: next.icon,
-          skipPermissions: next.skipPermissions, maxTokens: next.maxTokens,
-          thinkingLevel: next.thinkingLevel, hallucinationControl: next.hallucinationControl,
-          energyPriority: next.energyPriority, systemPrompt: next.systemPrompt, modelConfig: next.modelConfig || {}
-        });
-        if (updated) {
-          window._cachedModes = (window._cachedModes || []).map((m) => (m.id === updated.id ? { ...m, thinkingLevel: updated.thinkingLevel } : m));
-          if (updated.id === currentModeId) updateModeDisplay(updated);
-        }
+        // v3.24.1：SSH/本机挡位=会话偏好，存 settings.thinkingChoices.ssh[工作模式]（与云端 cloud[provider/model] 同构）。
+        // 不再写模式定义——内置模式守卫拒改导致 v3.24.0 装机报「内置模式不可修改」（真机截图实锤）；
+        // 执行链 resolveMode 读偏好覆盖模式默认挡位（内置三模式 none/medium/none 默认继续生效）。
+        const snapshot = await window.agentChatPro.loadSettings();
+        const modeKey = currentModeId || "regular";
+        const sshChoices = { ...((snapshot.thinkingChoices || {}).ssh || {}), [modeKey]: THINK_CLAUDE_LEVEL_IDS[choiceId] || "none" };
+        await window.agentChatPro.saveSettings({ ...snapshot, thinkingChoices: { ...(snapshot.thinkingChoices || {}), ssh: sshChoices } });
       }
-      refreshThinkingBadge();
       await refreshComposerModePopup();
     } catch (error) { setConnection("思考挡位保存失败：" + error.message, "error"); }
   };
 
+  // v3.24.1：挡位名视觉焦点（参考产品浮层：当前挡位大字强调）+ ↻ 重置按钮可见性
+  const renderMeta = (active, hasMemory) => {
+    meta.innerHTML = active ? `当前挡位：<b class="think-meta-level">${active.label}</b>${active.hint ? ` · ${active.hint}` : ""}` : "";
+    const resetBtn = document.querySelector("#think-reset");
+    if (resetBtn) resetBtn.hidden = !hasMemory;
+  };
+  // ↻ 重置 = 清除当前模型/工作模式的挡位偏好记忆，回默认挡位（云端=服务商默认；SSH/本机=模式默认挡位）
+  const resetChoice = async () => {
+    try {
+      const snapshot = await window.agentChatPro.loadSettings();
+      const thinkingChoices = { ...(snapshot.thinkingChoices || {}) };
+      if (currentConnectionMode === "cloud") {
+        const provider = snapshot.cloudAiProvider || "zhipu";
+        const model = snapshot.cloudAiModel || "";
+        const cloud = { ...((thinkingChoices || {}).cloud || {}) };
+        delete cloud[`${provider}/${model}`];
+        thinkingChoices.cloud = cloud;
+      } else {
+        const ssh = { ...((thinkingChoices || {}).ssh || {}) };
+        delete ssh[currentModeId || "regular"];
+        thinkingChoices.ssh = ssh;
+      }
+      await window.agentChatPro.saveSettings({ ...snapshot, thinkingChoices });
+      await refreshComposerModePopup();
+    } catch (error) { setConnection("挡位重置失败：" + error.message, "error"); }
+  };
+  const resetBtn = document.querySelector("#think-reset");
+  if (resetBtn) resetBtn.onclick = resetChoice;
+
   const buildSlider = async () => {
     levelsRow.replaceChildren();
-    meta.textContent = "";
+    meta.innerHTML = "";
+    const resetBtnEl = document.querySelector("#think-reset");
+    if (resetBtnEl) resetBtnEl.hidden = true;
     if (currentConnectionMode === "cloud") {
       const snapshot = await window.agentChatPro.loadSettings();
       const provider = snapshot.cloudAiProvider || "zhipu";
@@ -2943,15 +2966,21 @@ async function refreshComposerModePopup() {
         levelsRow.append(chip);
       });
       const active = levels[Number(slider.value)] || levels[0];
-      meta.textContent = active.hint ? `当前挡位：${active.label} · ${active.hint}` : `当前挡位：${active.label}`;
+      renderMeta(active, Boolean(choice));
       slider.onchange = () => applyChoice(levels[Number(slider.value)].id);
     } else {
-      // SSH / 本机 claude 引擎：挡位跟工作模式 thinkingLevel
+      // SSH / 本机 claude 引擎：挡位=会话偏好（settings.thinkingChoices.ssh[工作模式]），
+      // 未调整时用模式默认挡位（内置三模式 none/medium/none 继续生效）
+      const snapshot = await window.agentChatPro.loadSettings();
       const modesRaw = window._cachedModes && window._cachedModes.length ? window._cachedModes : await window.agentChatPro.listModes();
       const modes = Array.isArray(modesRaw) ? modesRaw : [];
       const mode = modes.find((m) => m.id === currentModeId);
       const engineClaude = currentConnectionMode === "ssh" || (currentConnectionMode === "local" && currentLocalEngine === "claude");
-      const levelId = (mode && mode.thinkingLevel === "high" ? "high" : mode && mode.thinkingLevel === "low" ? "low" : mode && mode.thinkingLevel === "none" ? "off" : "medium");
+      const modeLevel = (mode && mode.thinkingLevel === "high" ? "high" : mode && mode.thinkingLevel === "low" ? "low" : mode && mode.thinkingLevel === "none" ? "none" : "medium");
+      const modeKey = currentModeId || "regular";
+      const sshChoice = String((((snapshot.thinkingChoices || {}).ssh || {})[modeKey]) || "").trim();
+      const levelValue = ["high", "medium", "low", "none"].includes(sshChoice) ? sshChoice : modeLevel;
+      const levelId = THINK_CLAUDE_LEVEL_REVERSE[levelValue] || "medium";
       modelEl.textContent = `${currentConnectionMode === "local" ? "💻 本机 " + (currentLocalEngine || "claude") : "🖥️ SSH 远程 Claude"} · ${mode?.name || "工作模式"}`;
       const levels = THINK_SSH_LEVELS;
       if (!engineClaude) {
@@ -2973,7 +3002,7 @@ async function refreshComposerModePopup() {
         levelsRow.append(chip);
       });
       const active = levels[Number(slider.value)] || levels[0];
-      meta.textContent = active.hint ? `当前挡位：${active.label} · ${active.hint}` : `当前挡位：${active.label}`;
+      renderMeta(active, Boolean(sshChoice));
       slider.onchange = () => applyChoice(levels[Number(slider.value)].id);
     }
   };
@@ -3005,46 +3034,8 @@ async function refreshComposerModePopup() {
   await buildSlider();
 }
 
-// v3.24.0：输入栏思考徽标（🧠 + 当前挡位短标；面板外常显）
-async function refreshThinkingBadge() {
-  const trigger = elements.composerModeTrigger;
-  if (!trigger) return;
-  try {
-    if (currentConnectionMode === "cloud") {
-      const snapshot = await window.agentChatPro.loadSettings();
-      const provider = snapshot.cloudAiProvider || "zhipu";
-      const model = snapshot.cloudAiModel || "";
-      const choice = String(((snapshot.thinkingChoices || {}).cloud || {})[`${provider}/${model}`] || "");
-      let profile = null;
-      try { profile = (await window.agentChatPro.getThinkingProfile({ provider, model })).profile; } catch {}
-      trigger.classList.remove("unsupported");
-      if (!profile || !Array.isArray(profile.levels) || !profile.levels.length) {
-        trigger.textContent = "🧠";
-        trigger.classList.add("unsupported");
-        trigger.title = `${provider} · ${model}
-该模型不支持思考调节`;
-        return;
-      }
-      const level = profile.levels.find((l) => l.id === choice);
-      trigger.textContent = level ? `🧠 ${level.label}` : "🧠 默认";
-      trigger.title = `☁️ ${provider} · ${model}\n思考挡位：${level ? level.label : "服务商默认"}${level && level.hint ? `\n${level.hint}` : ""}`;
-    } else {
-      const engineClaude = currentConnectionMode === "ssh" || (currentConnectionMode === "local" && currentLocalEngine === "claude");
-      trigger.classList.remove("unsupported");
-      if (!engineClaude) {
-        trigger.textContent = "🧠";
-        trigger.classList.add("unsupported");
-        trigger.title = "当前本机引擎不支持思考调节";
-        return;
-      }
-      const mode = (window._cachedModes || []).find((m) => m.id === currentModeId);
-      const labels = { none: "默认", low: "低", medium: "中", high: "高" };
-      const label = labels[mode?.thinkingLevel] || "默认";
-      trigger.textContent = `🧠 ${label}`;
-      trigger.title = `${mode?.name || "工作模式"}\n思考挡位：${label}（--thinking-level）`;
-    }
-  } catch { /* 徽标刷新失败静默（不影响对话） */ }
-}
+// v3.24.1：常显思考徽标已移除（用户拍板「难看」）——挡位只进面板看；
+// composerModeTrigger 图标渲染权回归 updateModeDisplay（v3.24.0「populateSettings 双写互踩」修复语义不变）
 
 if (elements.composerModeTrigger) {
   elements.composerModeTrigger.addEventListener("click", async (event) => {
@@ -3363,11 +3354,12 @@ function updateModeDisplay(mode) {
   document.querySelector("#mode-name").textContent = mode.name;
   document.querySelector("#mode-trigger").title = `${mode.name}：${mode.description}`;
   setToolModeAppearance(mode.skipPermissions);
-  // v3.24.0 修复：输入栏触发按钮的图标渲染权统一收归思考徽标（此前此处的 mode.icon 覆盖 +
-  // populateSettings 里 setToolModeAppearance(全局 skipPermissions) 双写互踩 = 模式切了图标仍护盾）
+  // v3.24.0 修复保留：populateSettings 里 setToolModeAppearance(全局 skipPermissions) 不再覆盖图标，
+  // 图标渲染权仍独占于此处（双写互踩不复发）；v3.24.1 徽标移除后图标/标题回归本函数渲染
   if (elements.composerModeTrigger) {
+    elements.composerModeTrigger.textContent = mode.icon;
+    elements.composerModeTrigger.title = `${mode.name}：${mode.description}`;
     elements.composerModeTrigger.className = `composer-mode-trigger ${mode.skipPermissions ? "automatic" : "safe"}`;
-    refreshThinkingBadge();
   }
   // 同步更新聊天区模式 badge
   const badge = document.querySelector("#chat-mode-badge");

@@ -11,6 +11,9 @@ const { BUILTIN_MODES, HALLUCINATION_MAP, ENERGY_MAP, THINKING_MAP } = require("
 const { getMode } = require("./mode-manager.cjs");
 const { shellQuote } = require("../protocol.cjs");
 
+// v3.24.1：SSH/本机思考挡位合法值域（与 mode-manager validateThinkingLevel 同域）
+const THINKING_LEVEL_VALUES = ["none", "low", "medium", "high"];
+
 /**
  * 清理模型名 — 移除上下文窗口标记等非标准后缀。
  * 例如: "glm-5.1:cloud[1m]" → "glm-5.1:cloud"
@@ -96,14 +99,37 @@ function buildBridgeStartWithMode(modeId, prompt, sessionId, config) {
 }
 
 /**
- * 解析模式配置 — 合并内置/自定义模式和全局设置。
+ * v3.24.1：挡位偏好覆盖（纯函数供直测）— settings.thinkingChoices.ssh[modeId] 高于模式默认挡位。
+ * 挡位属会话偏好（与云端 thinkingChoices.cloud[provider/model] 同构），不写模式定义——
+ * v3.24.0 装机 bug 修复：内置工作模式上调整挡位不再撞「内置模式不可修改」守卫。
+ * @param {object} mode - 模式对象（应为副本）
+ * @param {string} modeId - 工作模式 ID
+ * @param {object} thinkingChoices - settings.thinkingChoices（{ ssh: { [modeId]: level } }）
+ * @returns {object} 覆盖后的模式对象（无合法偏好时原样返回）
+ */
+function applyThinkingChoice(mode, modeId, thinkingChoices) {
+  if (!mode) return mode;
+  const choice = String((thinkingChoices?.ssh || {})[modeId] || "").trim();
+  if (THINKING_LEVEL_VALUES.includes(choice)) return { ...mode, thinkingLevel: choice };
+  return mode;
+}
+
+/** 读取 settings.thinkingChoices（settings.cjs 依赖 electron，延迟 require + 兜底，不污染纯函数测试） */
+function readThinkingChoices() {
+  try { return ((require("../settings.cjs").getSettings() || {}).thinkingChoices) || {}; }
+  catch { return {}; }
+}
+
+/**
+ * 解析模式配置 — 合并内置/自定义模式、全局设置和挡位偏好。
  * @param {string} modeId
  * @param {object} config - 全局连接配置
  * @returns {object} 最终的模式配置
  */
 function resolveMode(modeId, config) {
   const fallback = BUILTIN_MODES.regular;
-  const mode = getMode(modeId) || fallback;
+  // v3.24.1：保证副本——fallback 是 BUILTIN_MODES 常量引用，后续字段覆盖不得污染内置常量
+  const mode = { ...(getMode(modeId) || fallback) };
 
   // 全局 skipPermissions 可以覆盖模式设置
   if (config?.skipPermissions && !mode.skipPermissions) {
@@ -111,7 +137,8 @@ function resolveMode(modeId, config) {
     mode.permissionMode = "bypassPermissions";
   }
 
-  return mode;
+  // v3.24.1：挡位偏好覆盖（SSH/Bridge/本机三链共用此汇聚点；未调整时用模式默认挡位）
+  return applyThinkingChoice(mode, modeId, readThinkingChoices());
 }
 
 /**
@@ -166,4 +193,4 @@ function buildLocalArgsWithMode(modeId, sessionId, config) {
   return args;
 }
 
-module.exports = { buildCommandWithMode, buildBridgeStartWithMode, buildLocalArgsWithMode, resolveMode, getHallucinationParams, getEnergyParams, sanitizeModelName };
+module.exports = { buildCommandWithMode, buildBridgeStartWithMode, buildLocalArgsWithMode, resolveMode, applyThinkingChoice, getHallucinationParams, getEnergyParams, sanitizeModelName };
