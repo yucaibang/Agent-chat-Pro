@@ -230,7 +230,7 @@ const pkg = JSON.parse(fs.readFileSync(PACKAGE_PATH, "utf8"));
 async function runVersionTests() {
   await test("main.cjs cloud 分支 addAssistantMessage 落盘 connectionMode=cloud", () => {
     // v3.21.3 起签名挂累计 usage（cumulativeUsage），锚点放宽到模式标记
-    assert.ok(mainSrc.includes('id, "cloud", cumulativeUsage)'), "cloud 分支未落盘 cloud 模式");
+    assert.ok(mainSrc.includes('id, "cloud", cumulativeUsage'), "cloud 分支未落盘 cloud 模式"); // v3.24.0 挂 thinking 尾参，闭括号锚点放宽
   });
   await test("版本号 = 3.15.0（语义 ≥3.15.0 跟随）", () => {
     const rank = pkg.version.split(".").reduce((sum, part) => sum * 1000 + Number(part), 0);

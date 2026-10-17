@@ -125,6 +125,10 @@ contextBridge.exposeInMainWorld("agentChatPro", {
   getMode: (id) => ipcRenderer.invoke("modes:get", id),
   createMode: (input) => ipcRenderer.invoke("modes:create", input),
   updateMode: (id, input) => ipcRenderer.invoke("modes:update", id, input),
+  // v3.24.0 模型思考调节：挡位表查询（输入栏 Codex 风格面板按模型原生挡位渲染滑条）
+  getThinkingProfile: (payload) => ipcRenderer.invoke("thinking:profile", payload),
+  // v3.24.0 AI 选择题提问（ask_user）：气泡点选后把选择回传工具循环
+  answerAskUser: (payload) => ipcRenderer.invoke("ask-user:answer", payload),
   deleteMode: (id) => ipcRenderer.invoke("modes:delete", id),
   exportModes: () => ipcRenderer.invoke("modes:export"),
   importModes: (json) => ipcRenderer.invoke("modes:import", json),

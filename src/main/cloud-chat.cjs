@@ -5,6 +5,8 @@ const http = require("http");
 const { HttpsProxyAgent } = require("https-proxy-agent");
 const { SocksProxyAgent } = require("socks-proxy-agent");
 const { toAnthropicTools } = require("./cloud-tools.cjs");
+// v3.24.0 模型思考调节：挡位注入（四字段族映射）——注入前 resolve 挡位表，未命中零注入
+const { applyOpenAiThinking, applyAnthropicThinking } = require("./thinking-levels.cjs");
 
 /**
  * 云端 AI 聊天模块 — OpenAI 兼容 API + Anthropic Messages API
@@ -63,10 +65,14 @@ function buildAnthropicBody(messages, options = {}) {
     max_tokens: options.maxTokens || 4096,
     stream: true
   };
+  if (systemPrompt) body.system = systemPrompt;
+  // tools 注入：v3.24.0 加 thinking 注入时误删此段（历史回归测试揪出），恢复——
+  // Anthropic 分支工具执行（云办公/ask_user）全靠它，丢了=服务商报 400 或 AI 永远拿不到工具
   if (Array.isArray(options.tools) && options.tools.length) {
     body.tools = toAnthropicTools(options.tools);
   }
-  if (systemPrompt) body.system = systemPrompt;
+  // v3.24.0 模型思考调节：Anthropic 原生体 thinking.budget_tokens 数字挡注入（自动钳进 max_tokens）
+  if (options.thinking) applyAnthropicThinking(body, options.thinking.model ? options.thinking : { ...options.thinking, model: options.model });
   return body;
 }
 
@@ -87,6 +93,10 @@ function parseAnthropicSSE(line, callbacks) {
     if (eventType === "content_block_delta") {
       const text = parsed.delta?.text || "";
       if (text) return { delta: text };
+      // v3.24.0 思考过程显示：Anthropic extended thinking 增量（thinking_delta）
+      if (parsed.delta?.type === "thinking_delta" && parsed.delta?.thinking) {
+        return { thinking: parsed.delta.thinking };
+      }
       if (parsed.delta?.type === "input_json_delta") {
         return { toolUseDelta: { index: parsed.index || 0, partialJson: parsed.delta.partial_json || "" } };
       }
@@ -130,6 +140,8 @@ function buildChatBody(messages, options = {}) {
   if (Array.isArray(options.tools) && options.tools.length) body.tools = options.tools;
   if (options.temperature !== undefined) body.temperature = options.temperature;
   if (options.topP !== undefined) body.topP = options.topP;
+  // v3.24.0 模型思考调节：挡位注入（OpenAI 兼容四字段族——reasoning_effort/thinking.type/enable_thinking/thinking_budget）
+  if (options.thinking) applyOpenAiThinking(body, options.thinking);
   return body;
 }
 
@@ -187,9 +199,9 @@ function assembleAnthropicToolCalls(blocks) {
 
 /**
  * 发送云端 AI 聊天请求（流式）
- * @param {object} config - { apiKey, baseURL, model, maxTokens, provider, proxy }
+ * @param {object} config - { apiKey, baseURL, model, maxTokens, provider, proxy, thinking?(v3.24.0 {provider, choice}) }
  * @param {Array} messages - OpenAI 格式消息数组
- * @param {object} callbacks - { onDelta, onStatus, onUsage, onLog }
+ * @param {object} callbacks - { onDelta, onReasoning(v3.24.0 思考过程), onStatus, onUsage, onLog }
  * @returns {Promise<{text, usage}>}
  */
 function sendCloudChat(config, messages, callbacks = {}) {
@@ -205,7 +217,7 @@ function sendCloudChat(config, messages, callbacks = {}) {
     let url, body, headers;
     if (anthropic) {
       url = new URL(`${baseURL}/messages`);
-      body = buildAnthropicBody(messages, { model: config.model, maxTokens: config.maxTokens, tools: config.tools });
+      body = buildAnthropicBody(messages, { model: config.model, maxTokens: config.maxTokens, tools: config.tools, thinking: config.thinking });
       headers = {
         "Content-Type": "application/json",
         "x-api-key": config.apiKey,
@@ -214,7 +226,7 @@ function sendCloudChat(config, messages, callbacks = {}) {
       };
     } else {
       url = new URL(`${baseURL}/chat/completions`);
-      body = buildChatBody(messages, { model: config.model, maxTokens: config.maxTokens, tools: config.tools });
+      body = buildChatBody(messages, { model: config.model, maxTokens: config.maxTokens, tools: config.tools, thinking: config.thinking });
       headers = {
         "Content-Type": "application/json",
         "Authorization": `Bearer ${config.apiKey}`,
@@ -295,6 +307,7 @@ function sendCloudChat(config, messages, callbacks = {}) {
       }
 
       let fullText = "";
+      let fullReasoning = ""; // v3.24.0 思考过程流式暂存（显示用，不进上下文回填）
       let lastUsage = null;
       let buffer = "";
       let stopReason = "";
@@ -332,6 +345,11 @@ function sendCloudChat(config, messages, callbacks = {}) {
                 fullText += result.delta;
                 if (callbacks.onDelta) callbacks.onDelta(result.delta);
               }
+              // v3.24.0 思考过程：thinking_delta 片段流式外发
+              if (result.thinking) {
+                fullReasoning += result.thinking;
+                if (callbacks.onReasoning) callbacks.onReasoning(result.thinking);
+              }
               if (result.usage) {
                 lastUsage = result.usage;
                 if (callbacks.onUsage) callbacks.onUsage(result.usage);
@@ -358,6 +376,13 @@ function sendCloudChat(config, messages, callbacks = {}) {
                 fullText += delta.content;
                 if (callbacks.onDelta) callbacks.onDelta(delta.content);
               }
+              // v3.24.0 思考过程：OpenAI 兼容系思维链增量（reasoning_content 普遍/部分端点 reasoning）
+              const reasoningPiece = delta.reasoning_content ?? delta.reasoning;
+              if (reasoningPiece) {
+                const piece = String(reasoningPiece);
+                fullReasoning += piece;
+                if (callbacks.onReasoning) callbacks.onReasoning(piece);
+              }
               // 工具调用增量：按 index 拼接 id/name/arguments 分片
               if (Array.isArray(delta.tool_calls)) {
                 for (const piece of delta.tool_calls) {
@@ -382,7 +407,7 @@ function sendCloudChat(config, messages, callbacks = {}) {
       res.on("end", () => {
         // 取消后直接 resolve 已收到的文本
         if (cancelled) {
-          safeResolve({ text: fullText, cancelled: true });
+          safeResolve({ text: fullText, reasoning: fullReasoning, cancelled: true });
           return;
         }
 
@@ -393,6 +418,7 @@ function sendCloudChat(config, messages, callbacks = {}) {
             const result = parseAnthropicSSE(trimmed, callbacks);
             if (result) {
               if (result.delta) fullText += result.delta;
+              if (result.thinking) { fullReasoning += result.thinking; if (callbacks.onReasoning) callbacks.onReasoning(result.thinking); }
               if (result.usage) lastUsage = result.usage;
               if (result.stopReason) stopReason = result.stopReason;
               if (result.toolUseStart) {
@@ -412,6 +438,8 @@ function sendCloudChat(config, messages, callbacks = {}) {
                   const choice = parsed.choices?.[0];
                   const delta = choice?.delta || {};
                   if (delta.content) fullText += delta.content;
+                  const reasoningTail = delta.reasoning_content ?? delta.reasoning;
+                  if (reasoningTail) { fullReasoning += String(reasoningTail); if (callbacks.onReasoning) callbacks.onReasoning(String(reasoningTail)); }
                   if (Array.isArray(delta.tool_calls)) {
                     for (const piece of delta.tool_calls) {
                       const index = Number.isInteger(piece.index) ? piece.index : 0;
@@ -433,12 +461,12 @@ function sendCloudChat(config, messages, callbacks = {}) {
         }
         if (callbacks.onLog) callbacks.onLog("cloud_chat_success", { textLength: fullText.length, usage: lastUsage, stopReason, toolCallCount: anthropic ? anthropicToolBlocks.size : toolCallAccumulator.size });
         const toolCalls = anthropic ? assembleAnthropicToolCalls(anthropicToolBlocks) : assembleOpenAiToolCalls(toolCallAccumulator);
-        safeResolve({ text: fullText, usage: lastUsage, toolCalls, stopReason });
+        safeResolve({ text: fullText, reasoning: fullReasoning, usage: lastUsage, toolCalls, stopReason });
       });
 
       res.on("error", (error) => {
         if (cancelled) {
-          safeResolve({ text: fullText, cancelled: true });
+          safeResolve({ text: fullText, reasoning: fullReasoning, cancelled: true });
           return;
         }
         safeReject(new Error(`云端 AI 响应中断：${error.message}`));
@@ -448,12 +476,12 @@ function sendCloudChat(config, messages, callbacks = {}) {
       res.on("close", () => {
         if (!settled) {
           if (cancelled) {
-            safeResolve({ text: fullText, cancelled: true });
+            safeResolve({ text: fullText, reasoning: fullReasoning, cancelled: true });
           } else {
             // 流意外关闭但已收到部分数据 — 作为正常完成处理
             if (fullText.length > 0) {
               if (callbacks.onLog) callbacks.onLog("cloud_chat_close_with_data", { textLength: fullText.length });
-              safeResolve({ text: fullText, usage: lastUsage, toolCalls: anthropic ? assembleAnthropicToolCalls(anthropicToolBlocks) : assembleOpenAiToolCalls(toolCallAccumulator), stopReason });
+              safeResolve({ text: fullText, reasoning: fullReasoning, usage: lastUsage, toolCalls: anthropic ? assembleAnthropicToolCalls(anthropicToolBlocks) : assembleOpenAiToolCalls(toolCallAccumulator), stopReason });
             } else {
               safeReject(new Error("云端 AI 连接意外关闭，未收到任何数据。"));
             }

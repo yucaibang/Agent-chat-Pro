@@ -414,7 +414,7 @@ async function main() {
   await test("main.cjs 会话/落库带 engine 参数", () => {
     assert.ok(/sessionForMode\(conversation, config\.connectionMode, localEngine(?:, taskProfile)?(?:, taskRemoteAdapter)?\)/.test(mainSrc), "sessionForMode 未传引擎；v3.18.0 起允许尾参 taskProfile");
     assert.ok(/saveConversationSession\(input\.conversationId, sessionId, config\.connectionMode, localEngine(?:, taskProfile)?(?:, taskRemoteAdapter)?\)/.test(mainSrc), "saveConversationSession 未传引擎；v3.18.0 起允许尾参 taskProfile");
-    assert.ok(/addAssistantMessage\([^\n]+localEngine(?:, taskProfile)?(?:, taskRemoteAdapter)?\);/.test(mainSrc), "addAssistantMessage 未传引擎；v3.18.0 起允许尾参 taskProfile");
+    assert.ok(/addAssistantMessage\([^\n]+localEngine(?:, taskProfile)?(?:, taskRemoteAdapter)?(?:, [^)\n]+)?\);/.test(mainSrc), "addAssistantMessage 未传引擎；v3.24.0 起允许尾参 thinking");
   });
   await test("main.cjs 非 claude 引擎禁用压缩 + model 管理", () => {
     assert.ok(mainSrc.includes("当前本机引擎不支持上下文压缩"), "压缩守卫缺失");

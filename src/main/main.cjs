@@ -57,6 +57,11 @@ const { sendCloudChat, buildMessages, verifyCloudConnection, testProxyConnectivi
 // v3.21.0 云端「拉取模型列表」：官方 GET /models 实时拉取该密钥可用的全部模型
 const { fetchProviderModels } = require("./cloud-models.cjs");
 const { executeToolCall, toolDefinitions, MAX_TOOL_ROUNDS } = require("./cloud-tools.cjs");
+// v3.24.0 模型思考调节：挡位表 + 请求体注入（四字段族）；ask_user 提问约定拼进云端 system prompt
+const { resolveThinkingProfile, normalizeThinkingChoices } = require("./thinking-levels.cjs");
+const { ASK_USER_HINT, createAskUserRegistry, ASK_USER_TIMEOUT, ASK_USER_STOPPED } = require("./cloud-tools.cjs");
+// v3.24.0 ask_user 应答注册表（模块级单例；stop 请求 cancelAll 打断悬等）
+const askUserRegistry = createAskUserRegistry();
 const { collapseRepetition } = require("./repetition-guard.cjs"); // v3.15.5 修复1：复读检测折叠
 const {
   auditToolDetails
@@ -1066,7 +1071,8 @@ app.whenReady().then(async () => {
       const conversation = getConversation(input.conversationId);
       const modeConfig = input.workModeId ? await (async () => { try { return await getMode(input.workModeId); } catch { return null; } })() : null;
       // v3.20.0 F5：云端路 Agent plan——system prompt 幂等追加 ```plan 约定段（渲染层 extractPlanBlocks 解析）
-      const systemPrompt = appendPlanConvention(modeConfig?.systemPrompt || "");
+      // v3.24.0：再拼 ask_user 选择题提问约定（工具开放后告知 AI 何时该提问）
+      const systemPrompt = appendPlanConvention(modeConfig?.systemPrompt || "") + ASK_USER_HINT;
       const cloudMessages = buildMessages(conversation, systemPrompt);
       cloudMessages.push({ role: "user", content: message });
 
@@ -1087,6 +1093,7 @@ app.whenReady().then(async () => {
       const collectedTools = [];
 
       let streamedText = "";
+      let streamedReasoning = ""; // v3.24.0 思考过程累计（随消息落库）
       let draftTimer;
       const persistDraft = () => {
         draftTimer = undefined;
@@ -1112,11 +1119,19 @@ app.whenReady().then(async () => {
         emitRoundSeparator: (round) => {
           sendWorkStatusSignal(event.sender, "chat:event", { id, type: "round", round });
         },
+        // v3.24.0 思考过程：流式外发（渲染层气泡内折叠块实时刷新；随消息落库 msg.thinking）
+        onReasoning: (text) => {
+          streamedReasoning += String(text || "");
+          sendWorkStatusSignal(event.sender, "chat:event", { id, type: "thinking", text: String(text || "") });
+        },
         onStatus: (status) => sendWorkStatusSignal(event.sender, "chat:event", { id, type: "connection", status }),
         onUsage: (usage) => sendWorkStatusSignal(event.sender, "chat:event", { id, type: "usage", usage }),
         onToolEvent: emitToolCard,
         onLog: writeLog
       };
+      // v3.24.0：思考挡位选择（settings.thinkingChoices 按「provider/model」记忆；未选择=不注入=服务商默认）
+      const thinkingChoice = String(((settings.thinkingChoices || {}).cloud || {})[`${cloudConfig.provider}/${cloudConfig.model}`] || "").trim();
+      const thinkingContext = { provider: cloudConfig.provider, model: cloudConfig.model || "", choice: thinkingChoice };
       const requestOnce = (messages) => sendCloudChat({
         apiKey: cloudConfig.apiKey,
         baseURL: cloudConfig.baseURL,
@@ -1126,6 +1141,7 @@ app.whenReady().then(async () => {
         provider: cloudConfig.provider,
         proxy: cloudConfig.proxy,
         tools: cloudTools,
+        thinking: thinkingContext,
       }, messages, cloudCallbacks);
 
       // 工具循环（agent loop）：tool_calls → 本机执行 → 结果回填 → 再请求，直到纯文本回复或达轮数上限
@@ -1222,6 +1238,24 @@ app.whenReady().then(async () => {
             collectedTools.push(card);
             emitToolCard(card);
             let output;
+            // v3.24.0 AI 选择题提问（ask_user）：不进本机执行器——发气泡事件悬等用户点选，
+            // 停止请求 cancelAll 如实回填「用户已停止」；超时 8 分钟回填「未应答」由 AI 自行决定下一步。
+            if (call.name === "ask_user") {
+              const q = String(card.input?.question || "").trim();
+              const options = (Array.isArray(card.input?.options) ? card.input.options : [])
+                .map((option) => String(option || "").trim()).filter(Boolean).slice(0, 4);
+              if (!q || options.length < 2) {
+                output = "ask_user 参数不完整（question 必填且 options 至少 2 项）。请改用正文直接向用户说明。";
+              } else {
+                sendWorkStatusSignal(event.sender, "chat:event", { id, type: "ask-user", callId: call.id, question: q, options });
+                const answer = await askUserRegistry.wait(id, call.id, q, options);
+                if (answer === ASK_USER_STOPPED) {
+                  card.status = "completed"; card.result = "用户已停止"; emitToolCard(card);
+                  throw new Error("用户已停止当前任务");
+                }
+                output = answer === ASK_USER_TIMEOUT ? "（用户长时间未应答，请基于现有信息自行决定下一步，或明确说明被搁置的原因。）" : `用户选择：${answer}`;
+              }
+            } else {
             try {
               output = await executeToolCall({ id: call.id, name: call.name, arguments: call.arguments }, { workdir: sandboxOn ? "/workspace" : cloudConfig.workingDirectory, allowCommand, onLog: writeLog, sandboxExecutor: sandboxOn ? sandboxExecutor : undefined });
               card.status = "completed";
@@ -1232,6 +1266,7 @@ app.whenReady().then(async () => {
               card.result = String(error.message || error).slice(0, 400);
               output = `工具执行失败：${error.message}`;
               writeLog("cloud_tool_failed", { requestId: id, tool: call.name, error: error.message });
+            }
             }
             emitToolCard(card);
             if (isAnthropicProvider) {
@@ -1263,7 +1298,8 @@ app.whenReady().then(async () => {
           const cancelledText = (cancelledRepetition.collapsed ? cancelledRepetition.text : streamedText) || "已停止。";
           // v3.21.3 修复①：取消时已发生的真实消耗同样入账（usageTotal 为空则不挂）
           addAssistantMessage(input.conversationId, cancelledText, "", [], collectedTools, id, "cloud",
-            usageTotal.requests ? { inputTokens: usageTotal.prompt, outputTokens: usageTotal.completion, totalTokens: usageTotal.total, cumulative: true } : undefined);
+            usageTotal.requests ? { inputTokens: usageTotal.prompt, outputTokens: usageTotal.completion, totalTokens: usageTotal.total, cumulative: true } : undefined,
+            undefined, undefined, undefined, undefined, streamedReasoning);
           writeLog("work_status_signal", statusSignalEntry({ requestId: id, direction: "main-received", signal: "request-outcome", disposition: "cancelled", eventType: "lifecycle", eventStatus: "cancelled" }));
           sendWorkStatusSignal(event.sender, "chat:event", normalizeAndObserveStatusEvent({ id, type: "lifecycle", status: "cancelled" }, { connectionMode: "cloud" }));
           return { id, cancelled: true, text: cancelledText, sessionId: "", tools: collectedTools, files: [] };
@@ -1279,7 +1315,7 @@ app.whenReady().then(async () => {
         const cumulativeUsage = usageTotal.requests
           ? { inputTokens: usageTotal.prompt, outputTokens: usageTotal.completion, totalTokens: usageTotal.total, cumulative: true }
           : undefined;
-        addAssistantMessage(input.conversationId, finalText || "（无输出）", "", [], collectedTools, id, "cloud", cumulativeUsage);
+        addAssistantMessage(input.conversationId, finalText || "（无输出）", "", [], collectedTools, id, "cloud", cumulativeUsage, undefined, undefined, undefined, undefined, streamedReasoning);
         const stats = conversationStats(getConversation(input.conversationId));
         writeLog("chat_send_success", { requestId: id, conversationId: input.conversationId, textLength: finalText.length, toolCallCount: collectedTools.length, connectionMode: "cloud", usageTokens: usageTotal.total });
         writeLog("work_status_signal", statusSignalEntry({ requestId: id, direction: "main-received", signal: "request-outcome", disposition: "completed", eventType: "lifecycle", eventStatus: "finished" }));
@@ -1316,6 +1352,7 @@ app.whenReady().then(async () => {
     const activeSessionId = sessionForMode(conversation, config.connectionMode, localEngine, taskProfile, taskRemoteAdapter);
     let streamedText = "";
     let streamedTurnText = "";
+    let streamedTurnThinking = ""; // v3.24.0 思考过程累计（turn 完成随消息落库）
     let completedTurnCount = 0;
     let latestSessionId = activeSessionId;
     let draftTimer;
@@ -1337,6 +1374,11 @@ app.whenReady().then(async () => {
         writeLog("work_status_signal", statusSignalEntry({ requestId: id, direction: "executor-emitted", signal: "runner-event", disposition: "emitted", eventType: "delta", textLength: String(text || "").length }));
         sendWorkStatusSignal(event.sender, "chat:delta", normalized);
         if (!draftTimer) draftTimer = setTimeout(persistDraft, 1000);
+      },
+      // v3.24.0 思考过程：SSH/local 流式外发 + 累积（协议层 thinkingFromEvent 透传）
+      onThinking: (text) => {
+        streamedTurnThinking += String(text || "");
+        sendWorkStatusSignal(event.sender, "chat:event", { id, type: "thinking", text: String(text || "") });
       },
       onUploadProgress: (progress) => {
         const normalized = normalizeAndObserveStatusEvent({ id, type: "upload", ...progress }, config);
@@ -1396,10 +1438,11 @@ app.whenReady().then(async () => {
         const completedText = String(text || streamedTurnText || "");
         if (completedText) {
           saveAssistantDraft(input.conversationId, id, completedText);
-          addAssistantMessage(input.conversationId, completedText, turnSessionId || latestSessionId, [], [], id, config.connectionMode, turnUsage, undefined, undefined, taskProfile, taskRemoteAdapter);
+          addAssistantMessage(input.conversationId, completedText, turnSessionId || latestSessionId, [], [], id, config.connectionMode, turnUsage, undefined, undefined, taskProfile, taskRemoteAdapter, streamedTurnThinking);
           completedTurnCount += 1;
         }
         streamedTurnText = "";
+        streamedTurnThinking = "";
         event.sender.send("chat:turn-complete", { id });
       },
       onPermissionRequest: async (request) => {
@@ -1479,7 +1522,7 @@ app.whenReady().then(async () => {
       if (draftTimer) clearTimeout(draftTimer);
       safeSignal("chain-complete", () => chatChain.complete({}));
       if (!completedTurnCount) {
-        addAssistantMessage(input.conversationId, result.text, result.sessionId, result.files, result.tools, id, config.connectionMode, result.usage, Date.now() - startedAt, localEngine, taskProfile, taskRemoteAdapter);
+        addAssistantMessage(input.conversationId, result.text, result.sessionId, result.files, result.tools, id, config.connectionMode, result.usage, Date.now() - startedAt, localEngine, taskProfile, taskRemoteAdapter, "");
       }
       const stats = conversationStats(getConversation(input.conversationId));
       writeLog("chat_send_success", { requestId: id, conversationId: input.conversationId, sessionId: result.sessionId, textLength: result.text.length });
@@ -1634,6 +1677,8 @@ app.whenReady().then(async () => {
     const request = activeRequests.get(id);
     if (!request) return false;
     try {
+      // v3.24.0：停止请求同时打断 ask_user 选择题悬等（气泡卡片收口，工具循环如实回填「用户已停止」）
+      try { askUserRegistry.cancelAll(id); } catch {}
       request.operation.cancel();
       writeLog("chat_cancel_requested", { requestId: id });
       return true;
@@ -1641,6 +1686,19 @@ app.whenReady().then(async () => {
       writeLog("chat_cancel_failed", { requestId: id, error });
       return false;
     }
+  });
+  // v3.24.0：聊天气泡选择题（ask_user）用户应答 —— resolve 工具循环悬等，结果作为 tool 消息回填继续
+  ipcMain.handle("ask-user:answer", (_event, payload) => {
+    const callId = String(payload?.callId || "");
+    if (!callId) return { ok: false, error: "缺少 callId" };
+    if (typeof payload?.label !== "string") return { ok: false, error: "缺少 label" };
+    writeLog("ask_user_answered", { callId, labelLength: payload.label.length });
+    return askUserRegistry.answer(callId, payload.label);
+  });
+  // v3.24.0：思考挡位表查询（输入栏 Codex 风格面板按当前模型原生挡位渲染滑条）
+  ipcMain.handle("thinking:profile", (_event, payload) => {
+    const profile = resolveThinkingProfile(payload?.provider || "", payload?.model || "");
+    return { profile };
   });
   // 关于页版本展示（v3.12.2）
   ipcMain.handle("app:version", () => app.getVersion());

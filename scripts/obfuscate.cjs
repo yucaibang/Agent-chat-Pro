@@ -70,6 +70,7 @@ const OBFUSCATE_FILES = {
     "main/modes/mode-manager.cjs",
     "main/modes/mode-params.cjs",
     "main/cloud-chat.cjs",        // 纯 Node.js 模块，可以混淆
+    "main/thinking-levels.cjs",   // 模型思考挡位表 + 四字段族注入（v3.24.0）
     "main/cloud-models.cjs",     // 云端「拉取模型列表」（v3.21.0）
     "main/cloud-tools.cjs",     // 云端模式工具执行器（v3.14.0 云办公一期）
     "main/repetition-guard.cjs", // 复读检测折叠（v3.15.5）

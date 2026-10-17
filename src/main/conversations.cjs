@@ -164,7 +164,7 @@ function sshSessionField(profileId, adapter = "claude") {
   return tail && tail !== "claude" ? `${base}_${tail.replace(/[^a-zA-Z0-9_-]/g, "")}` : base;
 }
 
-function addAssistantMessage(id, text, sessionId, files = [], tools = [], requestId = "", connectionMode = "ssh", usage, durationMs, engine = "claude", profileId = "", remoteAdapter = "claude") {
+function addAssistantMessage(id, text, sessionId, files = [], tools = [], requestId = "", connectionMode = "ssh", usage, durationMs, engine = "claude", profileId = "", remoteAdapter = "claude", thinking = "") {
   return update(id, (conversation) => {
     const draft = requestId
       ? conversation.messages.find((message) => message.role === "assistant" && message.requestId === requestId)
@@ -172,6 +172,8 @@ function addAssistantMessage(id, text, sessionId, files = [], tools = [], reques
     const completed = { mid: draft?.mid || randomUUID(), role: "assistant", text, files, tools, at: draft?.at || new Date().toISOString() }; // v3.15.5 修复2：mid 删除锚点（draft 转正复用原 mid）
     if (usage) completed.usage = usage;
     if (Number.isFinite(Number(durationMs))) completed.durationMs = Math.max(0, Math.round(Number(durationMs)));
+    // v3.24.0 思考过程落库：随消息持久化（重放渲染折叠块；上限 200KB 防超长思维链灌库）
+    if (thinking) completed.thinking = String(thinking).slice(0, 200000);
     if (draft) {
       Object.assign(draft, completed);
       delete draft.draft;

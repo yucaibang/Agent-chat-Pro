@@ -366,6 +366,9 @@ function normalizeLocalEngine(value) {
 }
 
 /** 外观参数钳制（v3.21.4）：clamp 至滑杆合法域；非法/低于下限（含旧版 0-1 比例残留 0.15）回退默认值 */
+// v3.24.0 模型思考调节：挡位记忆归一（settings.thinkingChoices）
+const { normalizeThinkingChoices } = require("./thinking-levels.cjs");
+
 function clampAppearanceRange(value, min, max, fallback) {
   const num = Number(value);
   if (!Number.isFinite(num) || num < min) return fallback;
@@ -517,6 +520,8 @@ function getSettings() {
     frostedBlur: clampAppearanceRange(raw.frostedBlur, 4, 60, 20),
     frostedOpacity: clampAppearanceRange(raw.frostedOpacity, 20, 100, 85),
     frostedGlass: raw.frostedGlass || false,
+    // 思考挡位记忆（v3.24.0）：{ cloud: { "provider/model": 选挡 } }
+    thinkingChoices: normalizeThinkingChoices(raw.thinkingChoices),
     // 模式
     workModeId: raw.workModeId || "regular",
     // 恢复通知
@@ -704,6 +709,8 @@ function saveSettings(input) {
     frostedBlur: input.frostedBlur !== undefined ? clampAppearanceRange(input.frostedBlur, 4, 60, 20) : clampAppearanceRange(previous.frostedBlur, 4, 60, 20),
     frostedOpacity: input.frostedOpacity !== undefined ? clampAppearanceRange(input.frostedOpacity, 20, 100, 85) : clampAppearanceRange(previous.frostedOpacity, 20, 100, 85),
     frostedGlass: input.frostedGlass || previous.frostedGlass || false,
+    // 思考挡位记忆（v3.24.0）：input 带时整体接管 + 归一；不带继承
+    thinkingChoices: normalizeThinkingChoices(input.thinkingChoices !== undefined ? input.thinkingChoices : previous.thinkingChoices),
     // 模式
     workModeId: input.workModeId || previous.workModeId || "regular",
     // 信号灯带

@@ -151,7 +151,7 @@ function populateSettings(settings) {
   elements.form.elements.namedItem("localEngine").value = settings.localEngine || "claude";
   currentLocalEngine = settings.localEngine || "claude";
   updateConnectionModeUI();
-  setToolModeAppearance(Boolean(settings.skipPermissions));
+  // v3.24.0：不再按全局 skipPermissions 覆盖输入栏模式图标（根因见 setToolModeAppearance；图标随当前模式）
   const password = elements.form.elements.namedItem("password");
   password.value = "";
   password.type = "password";
@@ -241,6 +241,8 @@ function populateSettings(settings) {
   renderSshProfiles(settings);
   // v3.19.0 F3：高级设置三卡回填（自动/手动徽章 + 实值 + 适配器选中态）
   renderAdvancedPanels(settings);
+  // v3.24.0：输入栏思考徽标随设置刷新（云端 provider/model 变更、挡位记忆落库后即刻反映）
+  refreshThinkingBadge();
 }
 
 // ── v3.18.0 F4：SSH 多卡槽（AO 0.9.6 同构 + ACP 切槽即落库语义） ──
@@ -650,12 +652,10 @@ async function refreshBridgeStatus() {
 
 function setToolModeAppearance(enabled) {
   automaticTools = enabled;
-  // 更新输入栏模式触发按钮的图标和样式
-  if (elements.composerModeTrigger) {
-    elements.composerModeTrigger.textContent = enabled ? "⚡" : "🛡";
-    elements.composerModeTrigger.title = enabled ? "自动化模式" : "常规模式（安全）";
-    elements.composerModeTrigger.className = `composer-mode-trigger ${enabled ? "automatic" : "safe"}`;
-  }
+  // v3.24.0 修复「无论调哪个模式图标一直是护盾」：composerModeTrigger 的图标/标题/样式
+  // 不再在此按全局 skipPermissions 二值覆盖——图标渲染权统一收归 updateModeDisplay（按 mode.icon）。
+  // 背景：populateSettings（全局设置回填）在模式切换保存后调用此处，旧全局布尔值与 workModeId 解耦，
+  // 用户切到 ⚡自动化/🌿ECO 也永远被改写回 🛡（全局 false）。本函数只保留工作态布尔+拒授工具刷新。
   refreshDeniedToolActions();
 }
 
@@ -865,11 +865,165 @@ function stripSeparatorLines(text) {
   return String(text || "").replace(/^[ \t]*-{3,}[ \t]*\n/gm, "\n").replace(/^[ \t]*-{3,}[ \t]*$/gm, "");
 }
 
+/* ── v3.24.0 思考过程折叠块 + AI 选择题提问卡片 ── */
+
+/** 确保 assistant 气泡有思考折叠块（挂正文正上方；工具牌区仍在最上、plan 面板位置不变） */
+function ensureThinkingBlock(item) {
+  const content = item.querySelector(".message-content");
+  let block = item.querySelector(".thinking-block");
+  if (!block) {
+    block = document.createElement("details");
+    block.className = "thinking-block";
+    const summary = document.createElement("summary");
+    summary.textContent = "💭 思考过程";
+    const body = document.createElement("div");
+    body.className = "thinking-body";
+    block.append(summary, body);
+    if (content) content.before(block); else item.append(block);
+  }
+  return block;
+}
+
+/** 流式思考增量（chat:event type:"thinking"）：折叠块正文追加 + 计数标题刷新 */
+function appendThinkingDelta(item, text) {
+  if (!item || !text) return;
+  const block = ensureThinkingBlock(item);
+  const body = block.querySelector(".thinking-body");
+  body.textContent += String(text);
+  block.querySelector("summary").textContent = `💭 思考过程（${body.textContent.length} 字 · 进行中…）`;
+  if (isNearBottom()) elements.messages.scrollTop = elements.messages.scrollHeight;
+}
+
+/** 静态思考块渲染（历史重放 msg.thinking；标题无「进行中」字样） */
+function renderStaticThinking(item, thinking) {
+  const value = String(thinking || "");
+  if (!value.trim()) return;
+  const block = ensureThinkingBlock(item);
+  const body = block.querySelector(".thinking-body");
+  body.textContent = value;
+  block.querySelector("summary").textContent = `💭 思考过程（${value.length} 字）`;
+}
+
+/** turn 终态：把「进行中…」字样收敛为定稿计数（不再追加内容） */
+function finalizeThinkingSummary(item) {
+  if (!item) return;
+  const block = item.querySelector(".thinking-block");
+  if (!block) return;
+  const body = block.querySelector(".thinking-body");
+  if (body && body.textContent) block.querySelector("summary").textContent = `💭 思考过程（${body.textContent.length} 字）`;
+}
+
+/** 选择题卡片构建（云端 ipc 应答 / SSH 近似回发两个通道共用骨架；disabled=历史定格） */
+function buildAskUserCard(payload, disabled, onPick) {
+  const card = document.createElement("div");
+  card.className = "ask-card";
+  const label = document.createElement("div");
+  label.className = "ask-label";
+  label.textContent = "❓ AI 向你提问（单选）";
+  const question = document.createElement("div");
+  question.className = "ask-question";
+  question.textContent = payload.question || "";
+  const row = document.createElement("div");
+  row.className = "ask-options";
+  card.append(label, question, row);
+  for (const optionText of payload.options || []) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "ask-option";
+    button.textContent = optionText;
+    button.disabled = Boolean(disabled);
+    if (disabled) button.classList.add("dim");
+    button.addEventListener("click", () => onPick(card, button, String(optionText)));
+    row.append(button);
+  }
+  return card;
+}
+
+/** 点选后的视觉定格（选中高亮 + 其余压暗 + 「已选择」注记） */
+function markAskCardAnswered(card, button, optionText) {
+  card.classList.add("answered");
+  card.querySelectorAll(".ask-option").forEach((other) => {
+    other.disabled = true;
+    if (other !== button) other.classList.add("dim");
+  });
+  button.classList.add("picked");
+  const note = document.createElement("div");
+  note.className = "ask-picked-note";
+  note.textContent = `已选择：${optionText}`;
+  card.append(note);
+  return note;
+}
+
+/** 云端选择卡：点选 → IPC ask-user:answer → 工具循环悬等 resolve，AI 拿到选择继续 */
+function renderCloudAskUserCard(item, event) {
+  if (!item || item.querySelector(".ask-card")) return;
+  const card = buildAskUserCard(event, false, async (cardEl, button, optionText) => {
+    if (cardEl.classList.contains("answered")) return;
+    const note = markAskCardAnswered(cardEl, button, optionText);
+    try {
+      const result = await window.agentChatPro.answerAskUser({ callId: event.callId, label: optionText });
+      if (result && result.ok === false) {
+        note.textContent = "该提问已失效（已超时或任务已停止），请直接输入回复。";
+        note.classList.add("stale");
+      }
+    } catch (error) {
+      note.textContent = `应答失败：${error.message}，请直接输入回复。`;
+      note.classList.add("stale");
+    }
+  });
+  item.append(card);
+  if (isNearBottom()) elements.messages.scrollTop = elements.messages.scrollHeight;
+}
+
+/** SSH 特化选择卡（claude AskUserQuestion 工具事件）：点选=把选择作为新消息发出（体验一致近似） */
+function renderSshAskUserCard(item, tool) {
+  if (!item || item.querySelector(".ask-card")) return;
+  const input = tool?.input && typeof tool.input === "object" ? tool.input : {};
+  const first = Array.isArray(input.questions) && input.questions.length ? input.questions[0] : {};
+  const rawOptions = Array.isArray(input.options) && input.options.length ? input.options : Array.isArray(first.options) ? first.options : [];
+  const options = rawOptions
+    .map((option) => (typeof option === "string" ? option : option && option.label ? String(option.label) : ""))
+    .filter(Boolean)
+    .slice(0, 4);
+  const done = tool?.status === "completed";
+  const card = buildAskUserCard(
+    { question: String(input.question || first.question || ""), options },
+    Boolean(done), // 历史消息定格禁用；进行中可点（点选时 busy 兜底回滚+提示）
+    (cardEl, button, optionText) => {
+      if (cardEl.classList.contains("answered")) return;
+      if (activeId) {
+        // 任务仍在处理：回滚视觉，提示手动发送（SSH print 链路没有悬等回传通道）
+        cardEl.classList.remove("answered");
+        cardEl.querySelectorAll(".ask-option").forEach((other) => { other.disabled = false; });
+        cardEl.querySelector(".ask-picked-note")?.remove();
+        setConnection("任务仍在处理中；请等待结束或直接在输入栏发送你的选择。", "connected");
+        return;
+      }
+      markAskCardAnswered(cardEl, button, optionText);
+      sendMessage(`我选择：${optionText}`);
+    }
+  );
+  // 历史消息（定格）一律禁用；进行中任务先禁用防止误点（busy 检查兜底仍保留）
+  if (done) card.querySelectorAll(".ask-option").forEach((other) => { other.disabled = true; other.classList.add("dim"); });
+  item.append(card);
+  if (isNearBottom()) elements.messages.scrollTop = elements.messages.scrollHeight;
+}
+
+/** SSH AskUserQuestion 工具识别（本机 claude 引擎同款工具名） */
+function isAskUserTool(tool) {
+  return String(tool?.name || "") === "AskUserQuestion";
+}
+
 function renderTool(item, tool) {
   // v3.20.0 F5：TodoWrite 走 Agent plan 面板特化渲染（结构化路=SSH 远程+本机 claude 引擎），
   // 不进通用工具卡列表、不计入 finalizeToolList 的「已执行 N 个操作」
   if (isPlanTool(tool)) {
     renderPlanPanel(item, planTodosFromTool(tool), true);
+    return;
+  }
+  // v3.24.0 功能B：AskUserQuestion 工具 → 气泡内嵌选择题卡片（不进通用工具牌列表）
+  if (isAskUserTool(tool)) {
+    renderSshAskUserCard(item, tool);
     return;
   }
   let list = item.querySelector(".tool-list");
@@ -1389,6 +1543,8 @@ async function loadConversation(id) {
         note.textContent = "未完成的回复 · 已自动保存";
         item.prepend(note);
       }
+      // v3.24.0 功能C：历史消息重放思考折叠块（msg.thinking 随消息落库）
+      renderStaticThinking(item, message.thinking);
       (message.tools || []).forEach((tool) => renderTool(item, tool));
       finalizeToolList(item, message.tools || []);
       renderReturnedFiles(item, message.files || []);
@@ -1686,6 +1842,8 @@ async function sendMessage(composerText = elements.prompt.value, opts = {}) {
     addConversationTokens(streamingTokens + confirmedTokens);
     resetStreamingTokens();
   } finally {
+    // v3.24.0：轮终态——把思考折叠块「进行中…」字样收敛为定稿计数
+    try { finalizeThinkingSummary(messages.get(activeId)); } catch {}
     messages.delete(activeId);
     activeId = "";
     streamingConversationId = "";
@@ -2705,31 +2863,187 @@ function closeComposerModePopup() {
   if (elements.composerModePopup) elements.composerModePopup.hidden = true;
 }
 
+// v3.24.0 输入栏模式选择 → 思考调节（Codex 风格面板：上=模型名，下滑条按模型原生挡位；底部=工作模式快捷 chips）。
+// 挡位表主进程 thinking-levels.cjs 维护（provider+model 匹配，四字段族映射注入）；SSH/本机 claude 走工作模式 thinkingLevel。
+const THINK_SSH_LEVELS = [
+  { id: "off", label: "默认", hint: "不传 --thinking-level（CLI 默认）" },
+  { id: "low", label: "低", hint: "较浅思考，更快更省 token" },
+  { id: "medium", label: "中", hint: "常规深度" },
+  { id: "high", label: "高", hint: "最深思考，适合复杂任务" }
+];
+const THINK_CLAUDE_LEVEL_IDS = { off: "none", low: "low", medium: "medium", high: "high" };
+
 async function refreshComposerModePopup() {
-  try {
-    const modes = await window.agentChatPro.listModes();
-    const list = elements.composerModeList;
-    if (!list) return;
-    list.replaceChildren();
-    for (const mode of modes) {
-      const item = document.createElement("div");
-      item.className = `composer-mode-item${mode.id === currentModeId ? " active" : ""}`;
-      item.innerHTML = `<span class="composer-mode-item-icon">${mode.icon}</span><div class="composer-mode-item-info"><span class="composer-mode-item-name">${mode.name}</span><span class="composer-mode-item-desc">${mode.description}</span></div>`;
-      item.addEventListener("click", async () => {
-        currentModeId = mode.id;
-        updateModeDisplay(mode);
-        // 同步侧边栏模式选择器
-        await refreshModeSelector();
-        // 保存到设置
-        try {
-          const settings = await window.agentChatPro.saveSettings({ ...(await window.agentChatPro.loadSettings()), workModeId: mode.id });
-          populateSettings(settings);
-        } catch (error) { setConnection("模式切换失败：" + error.message, "error"); }
-        closeComposerModePopup();
+  const modelEl = document.querySelector("#think-model");
+  const slider = document.querySelector("#think-slider");
+  const levelsRow = document.querySelector("#think-levels");
+  const meta = document.querySelector("#think-meta");
+  const modesRow = document.querySelector("#think-modes");
+  // 面板骨架不存在（HTML 未升级/桥版）→ 静默退出
+  if (!slider || !modesRow) return;
+
+  const applyChoice = async (choiceId) => {
+    try {
+      if (currentConnectionMode === "cloud") {
+        const snapshot = await window.agentChatPro.loadSettings();
+        const provider = snapshot.cloudAiProvider || "zhipu";
+        const model = snapshot.cloudAiModel || "";
+        const cloudChoices = { ...((snapshot.thinkingChoices || {}).cloud || {}), [`${provider}/${model}`]: choiceId };
+        await window.agentChatPro.saveSettings({ ...snapshot, thinkingChoices: { ...(snapshot.thinkingChoices || {}), cloud: cloudChoices } });
+      } else {
+        const modes = await window.agentChatPro.listModes();
+        const mode = (modes || []).find((m) => m.id === currentModeId);
+        if (!mode) throw new Error("未找到当前工作模式");
+        const next = { ...mode, thinkingLevel: THINK_CLAUDE_LEVEL_IDS[choiceId] || "medium" };
+        const updated = await window.agentChatPro.updateMode(mode.isBuiltIn ? mode.id : mode.id, {
+          name: next.name, description: next.description, icon: next.icon,
+          skipPermissions: next.skipPermissions, maxTokens: next.maxTokens,
+          thinkingLevel: next.thinkingLevel, hallucinationControl: next.hallucinationControl,
+          energyPriority: next.energyPriority, systemPrompt: next.systemPrompt, modelConfig: next.modelConfig || {}
+        });
+        if (updated) {
+          window._cachedModes = (window._cachedModes || []).map((m) => (m.id === updated.id ? { ...m, thinkingLevel: updated.thinkingLevel } : m));
+          if (updated.id === currentModeId) updateModeDisplay(updated);
+        }
+      }
+      refreshThinkingBadge();
+      await refreshComposerModePopup();
+    } catch (error) { setConnection("思考挡位保存失败：" + error.message, "error"); }
+  };
+
+  const buildSlider = async () => {
+    levelsRow.replaceChildren();
+    meta.textContent = "";
+    if (currentConnectionMode === "cloud") {
+      const snapshot = await window.agentChatPro.loadSettings();
+      const provider = snapshot.cloudAiProvider || "zhipu";
+      const model = snapshot.cloudAiModel || "";
+      const choice = String(((snapshot.thinkingChoices || {}).cloud || {})[`${provider}/${model}`] || "");
+      let profile = null;
+      try { profile = (await window.agentChatPro.getThinkingProfile({ provider, model })).profile; } catch {}
+      modelEl.textContent = `☁️ ${provider} · ${model || "未设置模型"}`;
+      if (!profile || !Array.isArray(profile.levels) || !profile.levels.length) {
+        slider.disabled = true;
+        slider.value = 0;
+        levelsRow.innerHTML = `<span class="think-unsupported">该模型不支持思考调节</span>`;
+        if (meta) meta.textContent = "思考挡位按模型原生支持显示；未列出时不注入任何思考参数。";
+        return;
+      }
+      const levels = profile.levels;
+      slider.disabled = false;
+      slider.min = 0;
+      slider.max = String(levels.length - 1);
+      slider.step = 1;
+      slider.value = String(Math.max(0, levels.findIndex((l) => l.id === choice)));
+      levels.forEach((level, index) => {
+        const chip = document.createElement("span");
+        chip.className = `think-level${index === Number(slider.value) ? " active" : ""}`;
+        chip.textContent = level.label;
+        chip.title = level.hint || "";
+        levelsRow.append(chip);
       });
-      list.append(item);
+      const active = levels[Number(slider.value)] || levels[0];
+      meta.textContent = active.hint ? `当前挡位：${active.label} · ${active.hint}` : `当前挡位：${active.label}`;
+      slider.onchange = () => applyChoice(levels[Number(slider.value)].id);
+    } else {
+      // SSH / 本机 claude 引擎：挡位跟工作模式 thinkingLevel
+      const modesRaw = window._cachedModes && window._cachedModes.length ? window._cachedModes : await window.agentChatPro.listModes();
+      const modes = Array.isArray(modesRaw) ? modesRaw : [];
+      const mode = modes.find((m) => m.id === currentModeId);
+      const engineClaude = currentConnectionMode === "ssh" || (currentConnectionMode === "local" && currentLocalEngine === "claude");
+      const levelId = (mode && mode.thinkingLevel === "high" ? "high" : mode && mode.thinkingLevel === "low" ? "low" : mode && mode.thinkingLevel === "none" ? "off" : "medium");
+      modelEl.textContent = `${currentConnectionMode === "local" ? "💻 本机 " + (currentLocalEngine || "claude") : "🖥️ SSH 远程 Claude"} · ${mode?.name || "工作模式"}`;
+      const levels = THINK_SSH_LEVELS;
+      if (!engineClaude) {
+        slider.disabled = true;
+        slider.value = 0;
+        levelsRow.innerHTML = `<span class="think-unsupported">当前引擎不支持思考调节</span>`;
+        return;
+      }
+      slider.disabled = false;
+      slider.min = 0;
+      slider.max = String(levels.length - 1);
+      slider.step = 1;
+      slider.value = String(Math.max(0, levels.findIndex((l) => l.id === levelId)));
+      levels.forEach((level, index) => {
+        const chip = document.createElement("span");
+        chip.className = `think-level${index === Number(slider.value) ? " active" : ""}`;
+        chip.textContent = level.label;
+        chip.title = level.hint || "";
+        levelsRow.append(chip);
+      });
+      const active = levels[Number(slider.value)] || levels[0];
+      meta.textContent = active.hint ? `当前挡位：${active.label} · ${active.hint}` : `当前挡位：${active.label}`;
+      slider.onchange = () => applyChoice(levels[Number(slider.value)].id);
     }
-  } catch (error) { console.error("Failed to load modes for composer popup:", error); }
+  };
+
+  // 工作模式快捷切换（三内置 chips——模式选择完整入口仍在侧边栏）
+  modesRow.replaceChildren();
+  slider.onchange = null;
+  const modesRaw = window._cachedModes && window._cachedModes.length ? window._cachedModes : await window.agentChatPro.listModes();
+  const modes = Array.isArray(modesRaw) ? modesRaw : []; // 防御：列表接口异常返回时不炸（回归套 mock 教训）
+  for (const mode of modes.filter((m) => m.isBuiltIn)) {
+    const chip = document.createElement("button");
+    chip.type = "button";
+    chip.className = `think-mode-chip${mode.id === currentModeId ? " active" : ""}`;
+    chip.innerHTML = `<span class="think-mode-chip-icon">${mode.icon}</span>${mode.name}`;
+    chip.title = mode.description || "";
+    chip.addEventListener("click", async () => {
+      currentModeId = mode.id;
+      updateModeDisplay(mode);
+      await refreshModeSelector();
+      try {
+        const settings = await window.agentChatPro.saveSettings({ ...(await window.agentChatPro.loadSettings()), workModeId: mode.id });
+        populateSettings(settings);
+      } catch (error) { setConnection("模式切换失败：" + error.message, "error"); }
+      await refreshComposerModePopup();
+    });
+    modesRow.append(chip);
+  }
+
+  await buildSlider();
+}
+
+// v3.24.0：输入栏思考徽标（🧠 + 当前挡位短标；面板外常显）
+async function refreshThinkingBadge() {
+  const trigger = elements.composerModeTrigger;
+  if (!trigger) return;
+  try {
+    if (currentConnectionMode === "cloud") {
+      const snapshot = await window.agentChatPro.loadSettings();
+      const provider = snapshot.cloudAiProvider || "zhipu";
+      const model = snapshot.cloudAiModel || "";
+      const choice = String(((snapshot.thinkingChoices || {}).cloud || {})[`${provider}/${model}`] || "");
+      let profile = null;
+      try { profile = (await window.agentChatPro.getThinkingProfile({ provider, model })).profile; } catch {}
+      trigger.classList.remove("unsupported");
+      if (!profile || !Array.isArray(profile.levels) || !profile.levels.length) {
+        trigger.textContent = "🧠";
+        trigger.classList.add("unsupported");
+        trigger.title = `${provider} · ${model}
+该模型不支持思考调节`;
+        return;
+      }
+      const level = profile.levels.find((l) => l.id === choice);
+      trigger.textContent = level ? `🧠 ${level.label}` : "🧠 默认";
+      trigger.title = `☁️ ${provider} · ${model}\n思考挡位：${level ? level.label : "服务商默认"}${level && level.hint ? `\n${level.hint}` : ""}`;
+    } else {
+      const engineClaude = currentConnectionMode === "ssh" || (currentConnectionMode === "local" && currentLocalEngine === "claude");
+      trigger.classList.remove("unsupported");
+      if (!engineClaude) {
+        trigger.textContent = "🧠";
+        trigger.classList.add("unsupported");
+        trigger.title = "当前本机引擎不支持思考调节";
+        return;
+      }
+      const mode = (window._cachedModes || []).find((m) => m.id === currentModeId);
+      const labels = { none: "默认", low: "低", medium: "中", high: "高" };
+      const label = labels[mode?.thinkingLevel] || "默认";
+      trigger.textContent = `🧠 ${label}`;
+      trigger.title = `${mode?.name || "工作模式"}\n思考挡位：${label}（--thinking-level）`;
+    }
+  } catch { /* 徽标刷新失败静默（不影响对话） */ }
 }
 
 if (elements.composerModeTrigger) {
@@ -2800,6 +3114,12 @@ window.agentChatPro.onChatEvent((event) => {
   } else if (event.type === "round" && answer) {
     // v3.21.3 修复②：跨轮标记——主进程不再注入正文分隔线，这里画轻量轮次徽标
     appendRoundMark(answer, event.round);
+  } else if (event.type === "thinking" && answer) {
+    // v3.24.0 功能C：思考过程流式折叠块（云端 reasoning 流 + SSH/local claude 扩展思考透传共用通道）
+    appendThinkingDelta(answer, event.text || "");
+  } else if (event.type === "ask-user" && answer) {
+    // v3.24.0 功能B：AI 选择题提问悬等卡（云端 ask_user 工具；点选经 IPC 回传继续工具循环）
+    renderCloudAskUserCard(answer, event);
   } else if (event.type === "usage") {
     // v3.15.1：后台任务的 usage 不挪用当前对话的 token 计量（切回该对话时按消息重算兜底）
     if (streamingConversationId !== conversationId) return;
@@ -3043,11 +3363,11 @@ function updateModeDisplay(mode) {
   document.querySelector("#mode-name").textContent = mode.name;
   document.querySelector("#mode-trigger").title = `${mode.name}：${mode.description}`;
   setToolModeAppearance(mode.skipPermissions);
-  // 同步更新输入栏模式按钮
+  // v3.24.0 修复：输入栏触发按钮的图标渲染权统一收归思考徽标（此前此处的 mode.icon 覆盖 +
+  // populateSettings 里 setToolModeAppearance(全局 skipPermissions) 双写互踩 = 模式切了图标仍护盾）
   if (elements.composerModeTrigger) {
-    elements.composerModeTrigger.textContent = mode.icon;
-    elements.composerModeTrigger.title = `${mode.name}：${mode.description}`;
     elements.composerModeTrigger.className = `composer-mode-trigger ${mode.skipPermissions ? "automatic" : "safe"}`;
+    refreshThinkingBadge();
   }
   // 同步更新聊天区模式 badge
   const badge = document.querySelector("#chat-mode-badge");
@@ -3232,8 +3552,7 @@ modeEditForm.addEventListener("submit", async (event) => {
     }
     // 如果编辑的是当前模式，刷新显示
     if (result.id === currentModeId) {
-      updateModeDisplay(result);
-      setToolModeAppearance(result.skipPermissions);
+      updateModeDisplay(result); // v3.24.0：图标随 mode.icon（自定义模式自定义图标不再被布尔覆盖吃掉）
     }
     await refreshModeSelector();
     modeEditDialog.close();

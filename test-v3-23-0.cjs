@@ -687,8 +687,10 @@ async function runVmSmokeTests() {
   await runWiringTests();
   await runAssetTests();
   await runVmSmokeTests();
-  await test("G1 package.json 版本 = 3.23.0", () => {
-    assert.strictEqual(pkg.version, "3.23.0");
+  await test("G1 package.json 版本 ≥ 3.23.0（放宽锚点：后续版本继续在册）", () => {
+    const [maj, min, patch] = pkg.version.split(".").map(Number);
+    const [rmaj, rmin, rpatch] = "3.23.0".split(".").map(Number);
+    assert.ok(maj > rmaj || (maj === rmaj && (min > rmin || (min === rmin && patch >= rpatch))), `应 ≥ 3.23.0，实际 ${pkg.version}`);
   });
   await test("G2 doctor 导出面在册（测试复用面 + IPC 面）", () => {
     const doctor = require(DOCTOR_PATH);

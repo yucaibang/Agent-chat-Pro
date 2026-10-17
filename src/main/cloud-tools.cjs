@@ -45,9 +45,87 @@ const FILE_PATH_SCHEMA = {
   required: ["path"]
 };
 
+
+/** v3.24.0 ask_user 未应答超时哨兵（resolve("") 与显式取消分开，杜绝歧义） */
+const ASK_USER_TIMEOUT = "__timeout__";
+const ASK_USER_STOPPED = "__stopped__";
+
+/**
+ * v3.24.0 AI 选择题提问应答注册表：
+ * 工具循环遇 ask_user 工具调用 → wait(requestId, callId, question, options) 发事件并悬等；
+ * 渲染层气泡点选 → IPC ask-user:answer → answer(callId, label) resolve；
+ * stop 请求 → cancelAll(requestId) resolve('__stopped__')（工具循环把「用户已停止」如实回填）；
+ * 超时（默认 8 分钟）resolve('__timeout__') → 「（用户长时间未应答）」回填，AI 自行决定下一步。
+ */
+function createAskUserRegistry(timeoutMs = 480000) {
+  const waiters = new Map();
+  let nextCount = 0;
+  function wait(requestId, callId, question, options) {
+    return new Promise((resolve) => {
+      let timer = null;
+      const entry = {
+        requestId: String(requestId || ""),
+        resolve: (value) => {
+          if (!waiters.has(callId)) return;
+          waiters.delete(callId);
+          if (timer) { clearTimeout(timer); timer = null; }
+          resolve(value);
+        }
+      };
+      timer = setTimeout(() => entry.resolve(ASK_USER_TIMEOUT), Math.max(1000, Number(timeoutMs) || 480000));
+      // 注意：不加 unref——渲染层悬等的 promise 只有这个 timer 会 resolve，
+      // unref 后事件循环空时会整个进程退出（单测静默中止的根因），且常驻主进程不受影响
+      waiters.set(String(callId), entry);
+      nextCount += 1;
+    });
+  }
+  function pendingCount() { return waiters.size && nextCount; }
+  function answer(callId, label) {
+    const entry = waiters.get(String(callId));
+    if (!entry) return { ok: false, error: "该提问不存在或已应答（可能已超时/已停止）" };
+    entry.resolve(String(label || "").trim());
+    return { ok: true };
+  }
+  function cancelAll(requestId) {
+    let cancelled = 0;
+    for (const [callId, entry] of new Map(waiters).entries()) {
+      if (entry.requestId !== String(requestId || "")) continue;
+      entry.resolve(ASK_USER_STOPPED);
+      cancelled += 1;
+    }
+    return cancelled;
+  }
+  function hasPending(callId) { return waiters.has(String(callId)); }
+  return { wait, answer, cancelAll, pendingCount, hasPending, ASK_USER_TIMEOUT, ASK_USER_STOPPED };
+}
+
+/** v3.24.0 AI 选择题提问约定（拼进云端 system prompt：让 AI 知道何时用 ask_user） */
+const ASK_USER_HINT = "\n\n【向用户提问的约定】当任务需要用户在有限选项中做决策（选方案/确认操作/补关键信息）时，且仅当确实需要时，调用 ask_user 工具向用户提出单选问题：question 一句话说明要决策什么，options 提供 2~4 个互斥选项（每个是简短选项名，可带一句话说明用「——」衔接）。不要在正文里罗列选项替代提问；用户选择后你会收到工具结果，再继续任务。";
+
 /** 返回 OpenAI tools 格式定义；allowCommand=false 时不注册 run_command */
 function toolDefinitions(allowCommand) {
   const tools = [
+    {
+      // v3.24.0 AI 选择题提问：聊天气泡内嵌选择题卡片，用户点选后作为工具结果回传继续工具循环
+      type: "function",
+      function: {
+        name: "ask_user",
+        description: "在聊天气泡中向用户提出一个单选问题（选择题）。仅当需要用户在明确选项中做决策时使用：不要用于闲聊或开放式咨询（开放式问题直接写在正文里即可）。",
+        parameters: {
+          type: "object",
+          properties: {
+            question: { type: "string", description: "一句完整的问题（说明在决策什么、各选项差别）" },
+            options: {
+              type: "array",
+              items: { type: "string", description: "一个选项：短选项名，可带「——」衔接的补充说明" },
+              minItems: 2,
+              maxItems: 4
+            }
+          },
+          required: ["question", "options"]
+        }
+      }
+    },
     {
       type: "function",
       function: {
@@ -471,6 +549,10 @@ module.exports = {
   MAX_TOOL_ROUNDS,
   SANDBOX_CONTAINER,
   SANDBOX_WORKDIR,
+  ASK_USER_HINT,
+  createAskUserRegistry,
+  ASK_USER_TIMEOUT,
+  ASK_USER_STOPPED,
   executeToolCall,
   resolveInsideWorkdir,
   resolveInsideWorkdirPosix,

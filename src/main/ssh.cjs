@@ -12,6 +12,7 @@ const {
   modelFromEvent,
   shellQuote,
   sessionFromEvent,
+  thinkingFromEvent,
   textFromEvent,
   usageFromEvent
 } = require("./protocol.cjs");
@@ -764,6 +765,9 @@ function runClaude(config, message, sessionId, attachments = [], callbacks = {})
           currentTurnText += text;
           callbacks.onDelta?.(text);
         }
+        // v3.24.0 思考过程：extended thinking 增量透传（渲染层折叠块实时刷新，随消息落库）
+        const thinking = thinkingFromEvent(item.value);
+        if (thinking) callbacks.onThinking?.(thinking);
         const foundSession = sessionFromEvent(item.value);
         if (foundSession && foundSession !== nextSessionId) {
           nextSessionId = foundSession;

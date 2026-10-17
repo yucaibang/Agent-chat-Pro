@@ -81,19 +81,20 @@ function makeWorkdir() {
 (async () => {
   console.log("\n═══ cloud-tools.cjs 工具集与安全沙盒 ═══");
 
-  await test("toolDefinitions：默认 4 工具，allowCommand 时 5 个", () => {
-    assert.strictEqual(toolDefinitions(false).length, 4);
-    assert.strictEqual(toolDefinitions(true).length, 5);
+  await test("toolDefinitions：默认 5 工具（v3.24.0 +ask_user），allowCommand 时 6 个", () => {
+    assert.strictEqual(toolDefinitions(false).length, 5);
+    assert.strictEqual(toolDefinitions(true).length, 6);
     const names = toolDefinitions(true).map((t) => t.function.name);
-    for (const expected of ["read_file", "write_file", "list_directory", "web_fetch", "run_command"]) {
+    for (const expected of ["read_file", "write_file", "list_directory", "web_fetch", "run_command", "ask_user"]) {
       assert.ok(names.includes(expected), `缺少工具 ${expected}`);
     }
     assert.strictEqual(toolDefinitions(false).some((t) => t.function.name === "run_command"), false);
   });
 
   await test("toAnthropicTools：function 字段转 input_schema", () => {
-    const [anthropic] = toAnthropicTools(toolDefinitions(false));
-    assert.strictEqual(anthropic.name, "read_file");
+    // v3.24.0 起注册表第一位是 ask_user——改按名字取，不再依赖顺序
+    const anthropic = toAnthropicTools(toolDefinitions(false)).find((t) => t.name === "read_file");
+    assert.ok(anthropic, "toAnthropicTools 未找到 read_file");
     assert.ok(anthropic.description);
     assert.strictEqual(anthropic.input_schema.type, "object");
     assert.strictEqual(anthropic.function, undefined);
@@ -268,7 +269,7 @@ function makeWorkdir() {
 
   await test("buildAnthropicBody：tools 转 input_schema 格式", () => {
     const body = buildAnthropicBody([{ role: "user", content: "hi" }], { tools: toolDefinitions(false) });
-    assert.strictEqual(body.tools.length, 4);
+    assert.strictEqual(body.tools.length, 5);
     assert.ok(body.tools[0].input_schema);
     assert.strictEqual(body.tools[0].function, undefined);
   });
@@ -292,7 +293,7 @@ function makeWorkdir() {
       assert.strictEqual(result.toolCalls[0].name, "read_file");
       assert.strictEqual(result.toolCalls[0].arguments, '{"path":"a.txt"}');
       const sent = JSON.parse(requests[0].body);
-      assert.ok(Array.isArray(sent.tools) && sent.tools.length === 4, "请求体应带 tools");
+      assert.ok(Array.isArray(sent.tools) && sent.tools.length === 5, "请求体应带 tools");
     } finally {
       server.close();
     }
@@ -440,7 +441,7 @@ function makeWorkdir() {
     assert.ok(mainSource.includes("collectedTools"));
     // v3.15.5 起 tools 存档走折叠后文本（finalText = 折叠或原样 streamedText），断言跟随
     // v3.21.3 起 cloud 落库挂累计 usage（cumulativeUsage 第 8 参），签名断言跟进
-    assert.ok(mainSource.includes('addAssistantMessage(input.conversationId, finalText || "（无输出）"') && mainSource.includes('id, "cloud", cumulativeUsage)'));
+    assert.ok(mainSource.includes('addAssistantMessage(input.conversationId, finalText || "（无输出）"') && mainSource.includes('id, "cloud", cumulativeUsage'));
     assert.ok(mainSource.includes("cloud_tool_success"));
     assert.ok(mainSource.includes("cloud_tool_failed"));
   });

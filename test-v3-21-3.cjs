@@ -107,7 +107,7 @@ async function runMainTests() {
 
   await test("B4. 落库 usage 挂载（取消分支 + 完成分支）", () => {
     assert.ok(src.includes("usageTotal.requests ? { inputTokens: usageTotal.prompt"), "取消分支入账");
-    assert.ok(src.match(/addAssistantMessage\([^)]*"cloud",\s*\n?\s*cumulativeUsage\)/), "完成分支落库挂累计 usage");
+    assert.ok(src.match(/addAssistantMessage\([^)]*"cloud",\s*\n?\s*cumulativeUsage[^)]*\)/), "完成分支落库挂累计 usage"); // v3.24.0 起 cumulativeUsage 后还有 thinking 尾参
   });
 
   await test("B5. settings:save advanced 落盘摘要埋点（真机排障入口）", () => {

@@ -166,7 +166,15 @@
         <div class="composer-mode-selector" id="composer-mode-selector">
           <button id="composer-mode-trigger" type="button" class="composer-mode-trigger" title="工作模式">🛡</button>
           <div class="composer-mode-popup" id="composer-mode-popup" hidden>
-            <div class="composer-mode-list" id="composer-mode-list"></div>
+            <div class="composer-mode-list" id="composer-mode-list" hidden></div>
+            <div class="think-panel" id="think-panel">
+              <div class="think-model" id="think-model">—</div>
+              <input class="think-slider" id="think-slider" type="range" min="0" max="0" step="1" value="0" disabled />
+              <div class="think-levels" id="think-levels"></div>
+              <div class="think-meta" id="think-meta"></div>
+              <div class="think-divider" id="think-divider"></div>
+              <div class="think-modes" id="think-modes"></div>
+            </div>
           </div>
         </div>
         <button id="send" type="submit" class="send-button" title="发送" aria-label="发送消息">

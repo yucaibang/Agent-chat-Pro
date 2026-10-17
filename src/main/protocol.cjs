@@ -80,6 +80,18 @@ function sessionFromEvent(payload) {
   return payload?.session_id || payload?.event?.session_id || "";
 }
 
+/**
+ * v3.24.0 思考过程显示：从 stream-json 事件提取思考增量（claude extended thinking）。
+ * 与 textFromEvent 同款双格式：stream_event 包装帧 / content_block_delta 直出帧。
+ */
+function thinkingFromEvent(payload) {
+  if (!payload) return "";
+  const delta = payload.event?.delta;
+  if (payload.type === "stream_event" && delta?.type === "thinking_delta") return delta.thinking || "";
+  if (payload.type === "content_block_delta" && payload.delta?.type === "thinking_delta") return payload.delta.thinking || "";
+  return "";
+}
+
 function usageFromEvent(payload) {
   if (!payload || typeof payload !== "object") return undefined;
   if (payload.type === "usage") {
@@ -198,6 +210,7 @@ module.exports = {
   modelFromEvent,
   sessionFromEvent,
   shellQuote,
+  thinkingFromEvent,
   textFromEvent,
   usageFromEvent
 };

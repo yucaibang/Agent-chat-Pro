@@ -977,3 +977,42 @@ textarea { resize: vertical; min-height: 60px; }
 .n2n-verdict-fail { color: var(--warning); }
 .n2n-deploy-log { margin: 0; max-height: 220px; overflow-y: auto; padding: 10px 12px; border: 1px solid var(--border-sidebar); border-radius: 8px; background: var(--bg-input); font-family: Consolas, "Cascadia Mono", monospace; font-size: 11.5px; line-height: 1.6; color: var(--text-secondary); white-space: pre-wrap; word-break: break-all; user-select: text; }
 [data-theme="light"] .n2n-deploy-log { color: #4a5560; }
+
+/* ── v3.24.0 输入栏思考调节面板（Codex 风格：上=模型名，下滑条按模型原生挡位；底部=工作模式 chips） ── */
+.think-panel { padding: 4px 6px 8px; }
+.think-model { font-size: 12.5px; font-weight: 600; color: var(--text-primary); padding: 6px 6px 10px; letter-spacing: .2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.think-slider { width: 100%; accent-color: var(--accent, #4f8ef7); margin: 2px 0 6px; }
+.think-slider:disabled { opacity: .4; cursor: not-allowed; }
+.think-levels { display: flex; justify-content: space-between; gap: 4px; padding: 0 2px; }
+.think-level { font-size: 11.5px; color: var(--text-secondary); cursor: default; white-space: nowrap; transition: color .12s; }
+.think-level.active { color: var(--accent, #4f8ef7); font-weight: 600; }
+.think-unsupported { font-size: 12px; color: var(--text-secondary); opacity: .8; }
+.think-meta { font-size: 11.5px; color: var(--text-secondary); line-height: 1.55; padding: 8px 6px 0; opacity: .9; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.think-divider { height: 1px; background: var(--border-sidebar); margin: 10px 6px; opacity: .6; }
+.think-modes { display: flex; gap: 6px; padding: 0 6px; flex-wrap: wrap; }
+.think-mode-chip { flex: 1 1 auto; display: inline-flex; align-items: center; justify-content: center; gap: 4px; padding: 6px 10px; border-radius: 8px; border: 1px solid var(--border-sidebar); background: transparent; color: var(--text-secondary); font-size: 12px; cursor: pointer; transition: all .12s; }
+.think-mode-chip:hover { background: var(--bg-input); color: var(--text-primary); }
+.think-mode-chip.active { background: var(--accent, #4f8ef7); border-color: var(--accent, #4f8ef7); color: #fff; font-weight: 600; }
+.think-mode-chip-icon { font-size: 13px; }
+/* 输入栏触发按钮（思考徽标态） */
+.composer-mode-trigger.unsupported { opacity: .55; }
+/* ── v3.24.0 思考过程折叠块（气泡内 details） ── */
+.thinking-block { margin: 0 0 4px; padding: 6px 10px; border: 1px solid var(--border-sidebar); border-radius: 8px; background: var(--bg-deep); font-size: 12.5px; overflow: hidden; }
+[data-theme="light"] .thinking-block { background: #f0f2f5; }
+.thinking-block summary { cursor: pointer; user-select: none; font-size: 12px; color: var(--text-secondary); font-weight: 600; }
+.thinking-block[open] summary { margin-bottom: 6px; }
+.thinking-body { max-height: 320px; overflow-y: auto; white-space: pre-wrap; word-break: break-word; color: var(--text-secondary); line-height: 1.6; font-size: 12.5px; }
+[data-theme="light"] .thinking-body { color: #4a5560; }
+/* ── v3.24.0 AI 选择题提问卡（气泡内嵌） ── */
+.ask-card { margin: 8px 0 2px; padding: 10px 12px; border: 1px solid var(--border-sidebar); border-radius: 10px; background: var(--bg-input); display: flex; flex-direction: column; gap: 8px; }
+[data-theme="light"] .ask-card { background: #f6f7f9; }
+.ask-label { font-size: 12px; color: var(--text-secondary); font-weight: 600; }
+.ask-question { font-size: 13px; color: var(--text-primary); line-height: 1.6; white-space: pre-wrap; word-break: break-word; }
+.ask-options { display: flex; flex-direction: column; gap: 6px; }
+.ask-option { text-align: left; padding: 8px 12px; border-radius: 8px; border: 1px solid var(--border-sidebar); background: transparent; color: var(--text-primary); font-size: 12.5px; line-height: 1.5; cursor: pointer; transition: all .12s; }
+.ask-option:hover:not(:disabled) { border-color: var(--accent, #4f8ef7); background: color-mix(in srgb, var(--accent, #4f8ef7) 8%, transparent); }
+.ask-option:disabled { cursor: not-allowed; opacity: .6; }
+.ask-option.dim { opacity: .45; }
+.ask-option.picked { border-color: var(--accent, #4f8ef7); background: color-mix(in srgb, var(--accent, #4f8ef7) 14%, transparent); font-weight: 600; opacity: 1; }
+.ask-picked-note { font-size: 12px; color: var(--accent, #4f8ef7); font-weight: 600; }
+.ask-picked-note.stale { color: var(--warning, #c77b2e); font-weight: 400; }

@@ -1,0 +1,803 @@
+"use strict";
+/**
+ * v3.24.0 测试 — 模式图标修复 + 思考调节（Codex 风格挡位面板）+ AI 选择题提问 + 思考过程折叠显示
+ * 背景：模式切换后输入栏图标恒护盾（providerSettings 双写互踩）；云端各家思考参数是四字段族
+ *   并存（reasoning_effort / thinking.type / enable_thinking / thinking_budget），挡位随模型各异。
+ * 覆盖：thinking-levels 纯函数真测（匹配链+挡位集+注入行为）+
+ *       cloud-chat 注入打通 + reasoning 流拆分（本地 mock SSE 真测 OpenAI 与 Anthropic 双分支）+
+ *       ask_user 注册表真单测（应答/取消/超时/未知）+ 接线断言 +
+ *       图标修复回归三处 + vm 假 DOM 全量求值冒烟 + 版本。
+ */
+
+const fs = require("fs");
+const path = require("path");
+const http = require("http");
+const assert = require("assert");
+
+const ROOT = __dirname;
+const LEVELS_PATH = path.join(ROOT, "src", "main", "thinking-levels.cjs");
+const CLOUD_CHAT_PATH = path.join(ROOT, "src", "main", "cloud-chat.cjs");
+const CLOUD_TOOLS_PATH = path.join(ROOT, "src", "main", "cloud-tools.cjs");
+const MAIN_PATH = path.join(ROOT, "src", "main", "main.cjs");
+const SETTINGS_PATH = path.join(ROOT, "src", "main", "settings.cjs");
+const PRELOAD_PATH = path.join(ROOT, "src", "main", "preload.cjs");
+const CONVERSATIONS_PATH = path.join(ROOT, "src", "main", "conversations.cjs");
+const PROTOCOL_PATH = path.join(ROOT, "src", "main", "protocol.cjs");
+const SSH_PATH = path.join(ROOT, "src", "main", "ssh.cjs");
+const LOCAL_PATH = path.join(ROOT, "src", "main", "local.cjs");
+const RENDERER_PATH = path.join(ROOT, "src", "renderer", "renderer.js");
+const HTML_PATH = path.join(ROOT, "src", "renderer", "index.html");
+const STYLES_PATH = path.join(ROOT, "src", "renderer", "styles.css");
+const PACKAGE_PATH = path.join(ROOT, "package.json");
+
+let passed = 0;
+let failed = 0;
+const failures = [];
+
+function test(name, fn) {
+  return Promise.resolve()
+    .then(fn)
+    .then(() => { passed++; console.log(`  ✓ ${name}`); })
+    .catch((error) => {
+      failed++;
+      failures.push(`${name}: ${error.message}`);
+      console.log(`  ✗ ${name}: ${error.message}`);
+    });
+}
+
+const levels = require(LEVELS_PATH);
+const cloudChat = require(CLOUD_CHAT_PATH);
+const cloudTools = require(CLOUD_TOOLS_PATH);
+const mainSrc = fs.readFileSync(MAIN_PATH, "utf8");
+const settingsSrc = fs.readFileSync(SETTINGS_PATH, "utf8");
+const preloadSrc = fs.readFileSync(PRELOAD_PATH, "utf8");
+const conversationsSrc = fs.readFileSync(CONVERSATIONS_PATH, "utf8");
+const protocolSrc = fs.readFileSync(PROTOCOL_PATH, "utf8");
+const sshSrc = fs.readFileSync(SSH_PATH, "utf8");
+const localSrc = fs.readFileSync(LOCAL_PATH, "utf8");
+const rendererSrc = fs.readFileSync(RENDERER_PATH, "utf8");
+const htmlSrc = fs.readFileSync(HTML_PATH, "utf8");
+const stylesSrc = fs.readFileSync(STYLES_PATH, "utf8");
+const pkg = JSON.parse(fs.readFileSync(PACKAGE_PATH, "utf8"));
+
+/* ── A 组：thinking-levels 纯函数真测 ── */
+
+async function runLevelsTests() {
+  console.log("── A 组：thinking-levels 挡位表与注入 ──");
+
+  await test("A1 智谱：GLM-4.x 两挡开关族；GLM-5 系七挡 effort 族", () => {
+    const glm4 = levels.resolveThinkingProfile("zhipu", "glm-4-flash");
+    assert.strictEqual(glm4.family, "zhipu");
+    assert.ok(glm4.levels.some((l) => l.id === "off") && glm4.levels.some((l) => l.id === "on"));
+    assert.strictEqual(glm4.levels.length, 2);
+    const glm5 = levels.resolveThinkingProfile("zhipu", "glm-5.3");
+    assert.strictEqual(glm5.levels.length, 7, "GLM-5 系应为七挡");
+    assert.ok(glm5.levels.some((l) => l.id === "xhigh") && glm5.levels.some((l) => l.id === "max"));
+  });
+
+  await test("A2 DeepSeek：开关 + effort 三档并存（off/low/high/max）", () => {
+    const profile = levels.resolveThinkingProfile("deepseek", "deepseek-chat");
+    assert.strictEqual(profile.family, "deepseek");
+    const ids = profile.levels.map((l) => l.id);
+    assert.deepStrictEqual(ids, ["off", "low", "high", "max"]);
+  });
+
+  await test("A3 Kimi / 豆包：纯开关族（kimi off/on；doubao auto/off）", () => {
+    const kimi = levels.resolveThinkingProfile("moonshot", "kimi-latest");
+    assert.deepStrictEqual(kimi.levels.map((l) => l.id), ["off", "on"]);
+    const doubao = levels.resolveThinkingProfile("doubao", "doubao-seed-1-6");
+    assert.deepStrictEqual(doubao.levels.map((l) => l.id), ["auto", "off"]);
+  });
+
+  await test("A4 Gemini：3 系三挡；2.5 系四挡（兼容层 reasoning_effort）", () => {
+    const g3 = levels.resolveThinkingProfile("google", "gemini-3-pro");
+    assert.deepStrictEqual(g3.levels.map((l) => l.id), ["off", "low", "high"]);
+    const g2 = levels.resolveThinkingProfile("google", "gemini-2.5-flash");
+    assert.deepStrictEqual(g2.levels.map((l) => l.id), ["off", "low", "medium", "high"]);
+  });
+
+  await test("A5 OpenAI：挡位随模型各异（gpt-5.2 附 xhigh；gpt-4o 无 xhigh；o3 四挡）", () => {
+    const g52 = levels.resolveThinkingProfile("openai", "gpt-5.2");
+    assert.ok(g52.levels.some((l) => l.id === "xhigh"), "新旗舰应有超高挡");
+    assert.ok(g52.levels.some((l) => l.id === "minimal"), "应在最低挡");
+    const gpt4o = levels.resolveThinkingProfile("openai", "gpt-4o");
+    assert.ok(!gpt4o.levels.some((l) => l.id === "xhigh"), "gpt-4o 不应有超高挡");
+    const o3 = levels.resolveThinkingProfile("openai", "o3");
+    assert.ok(o3.levels.length === 4 && !o3.levels.some((l) => l.id === "xhigh"), "o3 应四挡无超高");
+  });
+
+  await test("A6 Groq 仅 gpt-oss 支持挡；硅基流动按模型前缀分族", () => {
+    const oss = levels.resolveThinkingProfile("groq", "gpt-oss-120b");
+    assert.deepStrictEqual(oss.levels.map((l) => l.id), ["low", "medium", "high"]);
+    assert.strictEqual(levels.resolveThinkingProfile("groq", "llama-3.3-70b"), null, "非 oss 应零挡");
+    const sQwen35 = levels.resolveThinkingProfile("siliconflow", "Qwen3.5-Plus");
+    assert.strictEqual(sQwen35.family, "siliconflow_effort");
+    const sQwen3 = levels.resolveThinkingProfile("siliconflow", "Qwen3-32B");
+    assert.strictEqual(sQwen3.family, "siliconflow_switch");
+    assert.strictEqual(levels.resolveThinkingProfile("siliconflow", "Qwen2.5-72B"), null, "非思考模型零注入");
+  });
+
+  await test("A7 阿里百炼 Qwen：3.5+ effort+budget 挡；其余开关挡", () => {
+    const q35 = levels.resolveThinkingProfile("qwen", "qwen3.5-plus");
+    assert.strictEqual(q35.family, "qwen");
+    const high = q35.levels.find((l) => l.id === "high");
+    assert.ok(high && high.budget === 32768, "高档应带预算 32768");
+    const qSwitch = levels.resolveThinkingProfile("qwen", "qwen-turbo");
+    assert.deepStrictEqual(qSwitch.levels.map((l) => l.id), ["off", "on"]);
+  });
+
+  await test("A8 Claude / Anthropic：budget 数字挡；未知或 custom 模型 null", () => {
+    const claude = levels.resolveThinkingProfile("anthropic", "claude-sonnet-4-5");
+    assert.strictEqual(claude.family, "anthropic_budget");
+    const byPrefix = levels.resolveThinkingProfile("zhipu", "claude-sonnet-4-0");
+    assert.strictEqual(byPrefix.family, "anthropic_budget", "claude 前缀同样命中");
+    assert.ok(levels.resolveThinkingProfile("zhipu", "glm-4-flash"), "glm 前缀应命中非空 profile（A1 已细测挡位）");
+    assert.strictEqual(levels.resolveThinkingProfile("custom", "whatever"), null);
+    assert.strictEqual(levels.resolveThinkingProfile("unknown-p", "some-model"), null);
+    assert.strictEqual(levels.resolveThinkingProfile("zhipu", ""), null, "空模型零挡");
+  });
+
+  await test("A9 注入：OpenAI effort 族（medium/off→none/dynamic 删参数）", () => {
+    const body1 = {};
+    assert.strictEqual(levels.applyOpenAiThinking(body1, { provider: "openai", model: "gpt-5.2", choice: "medium" }), true);
+    assert.strictEqual(body1.reasoning_effort, "medium");
+    const body2 = { reasoning_effort: "medium" };
+    assert.strictEqual(levels.applyOpenAiThinking(body2, { provider: "openai", model: "gpt-5.2", choice: "off" }), false, "OpenAI 族无 off 挡（最低=minimal），off 应零注入");
+    assert.strictEqual(body2.reasoning_effort, "medium", "无效挡不得改写请求体");
+    const body2b = {};
+    assert.strictEqual(levels.applyOpenAiThinking(body2b, { provider: "openai", model: "gpt-5.2", choice: "minimal" }), true);
+    assert.strictEqual(body2b.reasoning_effort, "minimal", "最低挡应生效");
+    const body3 = {};
+    levels.applyOpenAiThinking(body3, { provider: "openai", model: "gpt-5.2", choice: "dynamic" });
+    assert.ok(!("reasoning_effort" in body3), "dynamic 应删参数交服务商默认");
+    const body4 = {};
+    assert.strictEqual(levels.applyOpenAiThinking(body4, { provider: "openai", model: "gpt-5.2", choice: "zzz" }), false, "无效挡零注入");
+    const gemOff = {};
+    assert.strictEqual(levels.applyOpenAiThinking(gemOff, { provider: "google", model: "gemini-2.5-flash", choice: "off" }), true);
+    assert.strictEqual(gemOff.reasoning_effort, "none", "Gemini 兼容层的关挡应落 none");
+  });
+
+  await test("A10 注入：DeepSeek 开关+effort / 智谱 GLM-4 纯开关不夹带 effort", () => {
+    const ds = {};
+    levels.applyOpenAiThinking(ds, { provider: "deepseek", model: "deepseek-chat", choice: "low" });
+    assert.strictEqual(ds.thinking.type, "enabled");
+    assert.strictEqual(ds.reasoning_effort, "low");
+    const dsOff = {};
+    levels.applyOpenAiThinking(dsOff, { provider: "deepseek", model: "deepseek-chat", choice: "off" });
+    assert.strictEqual(dsOff.thinking.type, "disabled");
+    const glm4 = {};
+    levels.applyOpenAiThinking(glm4, { provider: "zhipu", model: "glm-4-flash", choice: "on" });
+    assert.strictEqual(glm4.thinking.type, "enabled");
+    assert.ok(!("reasoning_effort" in glm4), "GLM-4.x 纯开关不带 effort");
+  });
+
+  await test("A11 注入：硅基流动开关族 enable_thinking / 百炼 budget 挡", () => {
+    const sf = {};
+    levels.applyOpenAiThinking(sf, { provider: "siliconflow", model: "Qwen3-32B", choice: "off" });
+    assert.strictEqual(sf.enable_thinking, false);
+    const qwen = {};
+    levels.applyOpenAiThinking(qwen, { provider: "qwen", model: "qwen3.5-plus", choice: "high" });
+    assert.strictEqual(qwen.enable_thinking, true);
+    assert.strictEqual(qwen.thinking_budget, 32768);
+    const qwenOff = {};
+    levels.applyOpenAiThinking(qwenOff, { provider: "qwen", model: "qwen3.5-plus", choice: "off" });
+    assert.strictEqual(qwenOff.enable_thinking, false);
+    assert.ok(!("thinking_budget" in qwenOff), "off 应删 budget");
+  });
+
+  await test("A12 注入：Anthropic budget（正常/钳制 headroom/太小放弃/off 不注入）", () => {
+    const ok = {};
+    assert.strictEqual(levels.applyAnthropicThinking(ok, { provider: "anthropic", model: "claude-sonnet-4-5", choice: "medium", maxTokens: 16384 }), true);
+    assert.strictEqual(ok.thinking.budget_tokens, 12288);
+    const clamped = {};
+    levels.applyAnthropicThinking(clamped, { provider: "anthropic", model: "claude-sonnet-4-5", choice: "high", maxTokens: 8192 });
+    assert.strictEqual(clamped.thinking.budget_tokens, 7168, "24576 预算应钳进 max_tokens 余量 7168");
+    assert.ok(clamped.thinking.budget_tokens < 8192, "budget 必须小于 max_tokens（官方硬约束）");
+    const tooSmall = {};
+    assert.strictEqual(levels.applyAnthropicThinking(tooSmall, { provider: "anthropic", model: "claude-sonnet-4-5", choice: "low", maxTokens: 1600 }), false, "max_tokens 太小应放弃注入");
+    assert.ok(!tooSmall.thinking, "放弃时不得写入 thinking");
+    const off = {};
+    assert.strictEqual(levels.applyAnthropicThinking(off, { provider: "anthropic", model: "claude-sonnet-4-5", choice: "off", maxTokens: 8192 }), false);
+    assert.ok(!off.thinking, "off 不注入 thinking");
+  });
+
+  await test("A13 normalizeThinkingChoices 防呆（非对象归空/字符串截断/嵌套净化）", () => {
+    assert.deepStrictEqual(levels.normalizeThinkingChoices(null), {});
+    assert.deepStrictEqual(levels.normalizeThinkingChoices("x"), {});
+    assert.deepStrictEqual(levels.normalizeThinkingChoices([1]), {});
+    const cleaned = levels.normalizeThinkingChoices({ cloud: { "zhipu/glm-4-flash": "high" }, junk: 42, nest: { a: "ok", b: 7 } });
+    assert.deepStrictEqual(cleaned.cloud["zhipu/glm-4-flash"], "high");
+    assert.deepStrictEqual(cleaned.nest, { a: "ok" });
+    assert.ok(!("junk" in cleaned));
+  });
+
+  await test("A14 levelLabel 与 SSH_LEVELS 在册", () => {
+    assert.strictEqual(levels.levelLabel("low"), "低");
+    assert.strictEqual(levels.levelLabel({ id: "medium", label: "中" }), "中");
+    assert.ok(levels.SSH_LEVELS.length === 4 && levels.SSH_LEVELS[0].id === "off");
+    assert.strictEqual(levels.ANTHROPIC_BUDGET.high, 24576);
+  });
+}
+
+/* ── B 组：cloud-chat 注入打通 + reasoning 流拆分（本地 mock SSE 真测） ── */
+
+function startMockSSE(handler) {
+  return new Promise((resolveServer) => {
+    const server = http.createServer((req, res) => {
+      let raw = "";
+      req.on("data", (chunk) => { raw += chunk; });
+      req.on("end", () => {
+        const bodies = [];
+        let parsed = {};
+        try { parsed = JSON.parse(raw || "{}"); } catch {}
+        Promise.resolve().then(() => handler({ body: parsed, headers: req.headers, bodies })).then((lines) => {
+          res.writeHead(200, { "Content-Type": "text/event-stream" });
+          res.write(lines.join("\n\n"));
+          res.end("\n");
+        }).catch((error) => {
+          res.writeHead(500, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: { message: error.message } }));
+        });
+      });
+    });
+    server.listen(0, "127.0.0.1", () => resolveServer({ server, port: server.address().port }));
+  });
+}
+
+/** SSE 事件数组 → wire 格式（data: 行）；OpenAI 风格 */
+function sseOpenAi(events) {
+  return events.map((e) => `data: ${JSON.stringify(e)}`).concat(["data: [DONE]"]);
+}
+/** Anthropic 风格：event + data 双行 */
+function sseAnthropic(events) {
+  return events
+    .map((e) => {
+      const payload = `event: ${e.type}\ndata: ${JSON.stringify(e)}`;
+      return payload.startsWith("event: message_start") ? payload : payload;
+    })
+    .concat(["event: message_stop\ndata: {\"type\":\"message_stop\"}"]);
+}
+
+async function runCloudStreamTests() {
+  console.log("── B 组：云端注入 + reasoning 流拆分（mock SSE） ──");
+
+  await test("B1 buildChatBody 带 options.thinking 时打通注入（真函数链）", () => {
+    const messages = [{ role: "user", content: "hi" }];
+    const body = cloudChat.buildChatBody(messages, {
+      model: "gpt-5.2",
+      maxTokens: 8192,
+      thinking: { provider: "openai", model: "gpt-5.2", choice: "high" }
+    });
+    assert.strictEqual(body.reasoning_effort, "high", "思考挡位应写入请求体");
+  });
+
+  await test("B2 sendCloudChat OpenAI 流：请求带挡位注入 + reasoning_content/reasoning 双字段拆分", async () => {
+    const bodies = [];
+    const { server, port } = await startMockSSE(({ body }) => {
+      bodies.push(body);
+      return sseOpenAi([
+        { choices: [{ delta: { reasoning_content: "先想第一步。" } }] },
+        { choices: [{ delta: { reasoning: "第二步推理。" } }] },
+        { choices: [{ delta: { content: "最终答案。" } }] }
+      ]);
+    });
+    const collected = { text: "", reasoning: "" };
+    const result = await cloudChat.sendCloudChat(
+      { provider: "openai", apiKey: "sk-test", baseURL: `http://127.0.0.1:${port}/v1`, model: "gpt-5.2", maxTokens: 8192, thinking: { provider: "openai", model: "gpt-5.2", choice: "medium" } },
+      [{ role: "user", content: "hi" }],
+      {
+        onDelta: (text) => { collected.text += text; },
+        onReasoning: (text) => { collected.reasoning += text; }
+      }
+    );
+    server.close();
+    assert.strictEqual(bodies[0].reasoning_effort, "medium", "请求体应带思考挡位");
+    assert.strictEqual(collected.text, "最终答案。", "正文流式应照常");
+    assert.strictEqual(collected.reasoning, "先想第一步。第二步推理。", "思考流应双字段拆分");
+    assert.strictEqual(result.reasoning, collected.reasoning, "resolve 应带 reasoning");
+    assert.strictEqual(result.text, "最终答案。");
+  });
+
+  await test("B3 sendCloudChat Anthropic 流：thinking_delta 拆分 + budget 注入钳制", async () => {
+    const bodies = [];
+    const { server, port } = await startMockSSE(({ body }) => {
+      bodies.push(body);
+      return sseAnthropic([
+        { type: "message_start", message: { id: "msg_1" } },
+        { type: "content_block_delta", delta: { type: "thinking_delta", thinking: "思考内容。" } },
+        { type: "content_block_delta", delta: { type: "text_delta", text: "回复正文。" } },
+        { type: "message_stop" }
+      ]);
+    });
+    const collected = { text: "", reasoning: "" };
+    const result = await cloudChat.sendCloudChat(
+      { provider: "anthropic", apiKey: "k", baseURL: `http://127.0.0.1:${port}/v1`, model: "claude-sonnet-4-5", maxTokens: 8192, thinking: { provider: "anthropic", model: "claude-sonnet-4-5", choice: "medium" } },
+      [{ role: "user", content: "hi" }],
+      {
+        onDelta: (text) => { collected.text += text; },
+        onReasoning: (text) => { collected.reasoning += text; }
+      }
+    );
+    server.close();
+    assert.strictEqual(bodies[0].thinking.budget_tokens, 7168, "12288 应钳进 8192-1024 余量");
+    assert.strictEqual(bodies[0].thinking.type, "enabled");
+    assert.strictEqual(collected.reasoning, "思考内容。", "thinking_delta 应拆出思考流");
+    assert.strictEqual(result.reasoning, "思考内容。");
+    assert.strictEqual(result.text, "回复正文。");
+  });
+
+  await test("B4 无思考字段的老流式照常（不产出 reasoning）", async () => {
+    const { server, port } = await startMockSSE(() => sseOpenAi([
+      { choices: [{ delta: { content: "旧式正文。" } }] }
+    ]));
+    const collected = { text: "", reasoning: "" };
+    const result = await cloudChat.sendCloudChat(
+      { provider: "openai", apiKey: "k", baseURL: `http://127.0.0.1:${port}/v1`, model: "gpt-5.2", maxTokens: 8192 },
+      [{ role: "user", content: "hi" }],
+      { onDelta: (text) => { collected.text += text; }, onReasoning: (text) => { collected.reasoning += text; } }
+    );
+    server.close();
+    assert.strictEqual(collected.text, "旧式正文。");
+    assert.strictEqual(collected.reasoning, "", "无思考字段时 reasoning 应为空");
+    assert.strictEqual(result.reasoning, "");
+  });
+}
+
+/* ── C 组：ask_user 注册表真单测 + 拦截接线 ── */
+
+async function runAskUserTests() {
+  console.log("── C 组：ask_user 注册表与工具循环拦截 ──");
+
+  await test("C1 wait→answer：应答回填并清除悬等", async () => {
+    const registry = cloudTools.createAskUserRegistry(60_000);
+    const pending = registry.wait("req-1", "call-1", "选哪个？", ["甲", "乙"]);
+    assert.ok(registry.hasPending("call-1"));
+    const answered = registry.answer("call-1", "乙");
+    assert.strictEqual(answered.ok, true);
+    assert.strictEqual(await pending, "乙");
+    assert.ok(!registry.hasPending("call-1"));
+  });
+
+  await test("C2 未知 callId answer 被拒（不 resolve 悬等）", async () => {
+    const registry = cloudTools.createAskUserRegistry(60_000);
+    const outcome = registry.answer("no-such", "x");
+    assert.strictEqual(outcome.ok, false);
+    assert.ok(/不存在或已应答/.test(outcome.error));
+  });
+
+  await test("C3 cancelAll 按 requestId 打断悬等（停止请求）", async () => {
+    const registry = cloudTools.createAskUserRegistry(60_000);
+    const pending = registry.wait("req-A", "call-A", "q", ["a"]);
+    registry.wait("req-B", "call-B", "q", ["a"]); // 别的请求不该被打断
+    const cancelled = registry.cancelAll("req-A");
+    assert.strictEqual(cancelled, 1);
+    assert.strictEqual(await pending, cloudTools.ASK_USER_STOPPED);
+    assert.ok(registry.hasPending("call-B"));
+  });
+
+  await test("C4 超时哨兵（快速 timer 真跑）", async () => {
+    const registry = cloudTools.createAskUserRegistry(50);
+    const pending = registry.wait("req-T", "call-T", "q", ["a"]);
+    const answer = await pending;
+    assert.strictEqual(answer, cloudTools.ASK_USER_TIMEOUT);
+  });
+
+  await test("C5 ask_user 工具定义在册（2~4 选项约束）", () => {
+    const defs = cloudTools.toolDefinitions(false);
+    const ask = defs.find((t) => t.function.name === "ask_user");
+    assert.ok(ask, "ask_user 应在工具清单首位");
+    assert.strictEqual(ask.function.parameters.properties.options.minItems, 2);
+    assert.strictEqual(ask.function.parameters.properties.options.maxItems, 4);
+    assert.ok(ask.function.parameters.required.includes("question") && ask.function.parameters.required.includes("options"));
+  });
+
+  await test("C6 ASK_USER_HINT 约订文本在册并拼进云端 systemPrompt", () => {
+    assert.ok(cloudTools.ASK_USER_HINT.includes("ask_user"), "hint 应点名工具");
+    assert.ok(cloudTools.ASK_USER_HINT.includes("2~4"), "应约束选项数");
+    assert.ok(mainSrc.includes('+ ASK_USER_HINT'), "systemPrompt 应拼接 hint");
+  });
+
+  await test("C7 main.cjs 拦截接线：chat:event 发卡 + 注册表悬等 + 超时/停止/选择三语义", () => {
+    assert.ok(mainSrc.includes('call.name === "ask_user"'), "工具循环应拦截 ask_user");
+    assert.ok(mainSrc.includes('type: "ask-user"'), "应发 ask-user 事件");
+    assert.ok(mainSrc.includes("askUserRegistry.wait("), "应悬等应答");
+    assert.ok(mainSrc.includes("askUserRegistry.answer"), "IPC 应答回填");
+    assert.ok(mainSrc.includes("用户长时间未应答"), "超时回填文案");
+    assert.ok(mainSrc.includes("用户已停止当前任务"), "停止打断文案");
+    assert.ok(mainSrc.includes("askUserRegistry.cancelAll("), "取消应打断全部悬等");
+    assert.ok(mainSrc.includes("ask-user:answer"), "IPC 通道在册");
+  });
+}
+
+/* ── D 组：主进程/渲染层/资产接线断言 ── */
+
+async function runWiringTests() {
+  console.log("── D 组：接线断言 ──");
+
+  await test("D1 main.cjs：thinking-levels 引入 + thinking 上下文注入请求链", () => {
+    assert.ok(mainSrc.includes("require(\"./thinking-levels.cjs\")"), "模块引入");
+    assert.ok(mainSrc.includes("resolveThinkingProfile"), "thinking:profile 通道用");
+    assert.ok(mainSrc.includes("thinking: thinkingContext"), "config 应带 thinking");
+    assert.ok(mainSrc.includes("settings.thinkingChoices || {}", "挡位记忆读取"));
+  });
+
+  await test("D2 main.cjs：thinking:profile IPC + onReasoning 事件", () => {
+    assert.ok(mainSrc.includes('"thinking:profile"'), "IPC 通道");
+    assert.ok(mainSrc.includes('type: "thinking"'), "思考事件通道");
+    assert.ok(mainSrc.includes("streamedReasoning"), "云端思考累计器");
+  });
+
+  await test("D3 settings：thinkingChoices 白名单读写", () => {
+    assert.ok(settingsSrc.includes("normalizeThinkingChoices"), "归一函数引入");
+    assert.ok(settingsSrc.includes("thinkingChoices: normalizeThinkingChoices(raw.thinkingChoices)"), "读取面");
+    assert.ok(settingsSrc.includes("thinkingChoices: normalizeThinkingChoices(input.thinkingChoices !== undefined ? input.thinkingChoices : previous.thinkingChoices)"), "保存面不丢字段");
+  });
+
+  await test("D4 preload：getThinkingProfile / answerAskUser 两桥在册", () => {
+    assert.ok(preloadSrc.includes('ipcRenderer.invoke("thinking:profile"'), "挡位表桥");
+    assert.ok(preloadSrc.includes('ipcRenderer.invoke("ask-user:answer"'), "提问应答桥");
+  });
+
+  await test("D5 conversations：第 13 参 thinking 落库并截断", () => {
+    assert.ok(conversationsSrc.includes("thinking = \"\""), "签名尾参在册");
+    assert.ok(conversationsSrc.includes("completed.thinking = String(thinking).slice(0, 200000)"), "落库截断上限");
+  });
+
+  await test("D6 protocol：thinkingFromEvent 双格式解析并导出", () => {
+    assert.ok(protocolSrc.includes("function thinkingFromEvent"), "解析函数");
+    assert.ok(protocolSrc.includes("thinking_delta"), "增量思考分支");
+    assert.ok(/thinkingFromEvent/.test(protocolSrc.match(/module\.exports = \{[\s\S]*?\}/)?.[0] || ""), "应导出");
+  });
+
+  await test("D7 ssh/local：onThinking 透传接线", () => {
+    assert.ok(sshSrc.includes("thinkingFromEvent"), "SSH 引入解析");
+    assert.ok(sshSrc.includes("callbacks.onThinking?.(thinking)"), "SSH 透传");
+    assert.ok(localSrc.includes("thinkingFromEvent"), "本机引入解析");
+    assert.ok(localSrc.includes("callbacks.onThinking?.(thinking)"), "本机透传");
+  });
+
+  await test("D8 cloud-chat：SSE thinking_delta + reasoning 字段 + sendCloudChat thinking 传参", () => {
+    const cloudSrc = fs.readFileSync(CLOUD_CHAT_PATH, "utf8");
+    assert.ok(cloudSrc.includes('applyOpenAiThinking'), "OpenAI 注入调用");
+    assert.ok(cloudSrc.includes("applyAnthropicThinking"), "Anthropic 注入调用");
+    assert.ok(cloudSrc.includes("thinking_delta"), "SSE 拆分分支");
+    assert.ok(cloudSrc.includes("reasoning: fullReasoning"), "resolve 带 reasoning");
+    assert.ok(cloudSrc.includes("thinking: config.thinking"), "thinking 配置传参");
+    assert.ok(cloudSrc.includes("onReasoning"), "思考流回调");
+  });
+
+  await test("D9 renderer：面板/徽标/事件分支/历史重放/特化卡在册", () => {
+    assert.ok(rendererSrc.includes("function refreshThinkingBadge"), "思考徽标函数");
+    assert.ok(rendererSrc.includes("THINK_SSH_LEVELS"), "SSH 挡位表");
+    assert.ok(rendererSrc.includes("getThinkingProfile"), "挡位表桥调用");
+    assert.ok(rendererSrc.includes('event.type === "thinking"'), "思考事件分支");
+    assert.ok(rendererSrc.includes('event.type === "ask-user"'), "提问事件分支");
+    assert.ok(rendererSrc.includes("function ensureThinkingBlock"), "折叠块构建");
+    assert.ok(rendererSrc.includes("function appendThinkingDelta"), "流式思考追加");
+    assert.ok(rendererSrc.includes("function renderStaticThinking"), "历史重放思考");
+    assert.ok(rendererSrc.includes("renderStaticThinking(item, message.thinking)"), "重放接线");
+    assert.ok(rendererSrc.includes("function finalizeThinkingSummary"), "终态收敛");
+    assert.ok(rendererSrc.includes("function buildAskUserCard"), "选择题卡构建");
+    assert.ok(rendererSrc.includes("input.questions") && rendererSrc.includes("input.options"), "SSH 载荷双形态容错（questions/options）");
+    assert.ok(rendererSrc.includes("renderSshAskUserCard"), "SSH 特化卡");
+    assert.ok(rendererSrc.includes("answerAskUser"), "云端应答桥调用");
+    assert.ok(rendererSrc.includes("think-slider"), "滑条元素引用");
+    assert.ok(rendererSrc.includes("think-modes"), "模式 chips 容器");
+  });
+
+  await test("D10 index.html：think-panel 骨架六元素", () => {
+    for (const id of ["think-panel", "think-model", "think-slider", "think-levels", "think-meta", "think-modes"]) {
+      assert.ok(htmlSrc.includes(`id="${id}"`), `缺 #${id}`);
+    }
+  });
+
+  await test("D11 styles.css：面板/折叠块/选择题卡三类样式在册", () => {
+    assert.ok(stylesSrc.includes(".think-panel"), "面板样式");
+    assert.ok(stylesSrc.includes(".think-slider"), "滑条样式");
+    assert.ok(stylesSrc.includes(".thinking-block"), "折叠块样式");
+    assert.ok(stylesSrc.includes(".thinking-body"), "思考正文样式");
+    assert.ok(stylesSrc.includes(".ask-card"), "选择题卡样式");
+    assert.ok(stylesSrc.includes(".ask-option"), "选项按钮样式");
+    assert.ok(stylesSrc.includes('[data-theme="light"] .thinking-block'), "亮色主题适配");
+  });
+
+  await test("D12 cloud-tools：ask_user 注册表 + hint 导出面在册", () => {
+    for (const key of ["ASK_USER_HINT", "createAskUserRegistry", "ASK_USER_TIMEOUT", "ASK_USER_STOPPED"]) {
+      assert.ok(key in cloudTools, `导出缺 ${key}`);
+    }
+  });
+}
+
+/* ── E 组：模式图标修复回归（三处收口） ── */
+
+async function runIconFixTests() {
+  console.log("── E 组：图标修复回归 ──");
+
+  await test("E1 populateSettings 不再覆盖图标（setToolModeAppearance 调用已删）", () => {
+    const body = rendererSrc.slice(rendererSrc.indexOf("function populateSettings"), rendererSrc.indexOf("const DEFAULT_SSH_PROFILE_NAMES"));
+    assert.ok(!/setToolModeAppearance\(/.test(body), "populateSettings 里不应再有全局开关覆盖调用（注释命中不算）");
+  });
+
+  await test("E2 updateModeDisplay 不再用 mode.icon 覆盖输入栏按钮", () => {
+    const body = rendererSrc.slice(rendererSrc.indexOf("function updateModeDisplay"), rendererSrc.indexOf('document.querySelector("#mode-trigger").addEventListener'));
+    assert.ok(!body.includes("composerModeTrigger.textContent = mode.icon"), "图标渲染权应已移除");
+    assert.ok(body.includes("refreshThinkingBadge()"), "应改挂思考徽标刷新");
+    assert.ok(body.includes("composer-mode-trigger ${mode.skipPermissions ? \"automatic\" : \"safe\"}"), "按钮类名仍应随模式");
+  });
+
+  await test("E3 refreshThinkingBadge 覆盖三语义（云端挡位/SSH 挡位/不支持置灰）", () => {
+    const fn = rendererSrc.slice(rendererSrc.indexOf("async function refreshThinkingBadge"), rendererSrc.indexOf("if (elements.composerModeTrigger) {\n  elements.composerModeTrigger.addEventListener"));
+    assert.ok(fn.includes("🧠"), "徽标图标");
+    assert.ok(fn.includes("getThinkingProfile"), "云端挡位拉取");
+    assert.ok(fn.includes("unsupported"), "不支持置灰");
+    assert.ok(fn.includes("thinkingChoices"), "挡位记忆读取");
+    assert.ok(fn.includes("--thinking-level"), "SSH 语义注明");
+  });
+
+  await test("E4 setToolModeAppearance 自身保留（模式编辑面板仍用）", () => {
+    assert.ok(rendererSrc.includes("function setToolModeAppearance"), "函数应保留");
+  });
+}
+
+/* ── F 组：vm 假 DOM 冒烟（renderer 改动必过） ── */
+
+async function runVmSmokeTests() {
+  console.log("── F 组：vm 假 DOM 全量求值冒烟 ──");
+
+  const captureProps = {};
+  const registeredHandlers = {};
+  for (const key of ["onChatEvent"]) {
+    captureProps[key] = (handler) => { registeredHandlers[key] = handler; return undefined; };
+  }
+  function makeStyle() {
+    const store = {};
+    return new Proxy(store, {
+      get(_t, prop) {
+        if (prop === "setProperty") return (key, val) => { store[key] = val; };
+        if (prop === "removeProperty") return (key) => { delete store[key]; };
+        if (prop === "getPropertyValue") return (key) => store[key];
+        return store[prop];
+      },
+      set() { return true; }
+    });
+  }
+  /** 子树选择器匹配（.class / #id / tag 三形态；本元素自身不参与匹配） */
+  function elementMatches(el, sel) {
+    const raw = String(sel || "").trim();
+    if (!raw || !el || typeof el !== "object") return false;
+    if (raw.startsWith(".")) return String(el.className || "").split(/\s+/).includes(raw.slice(1));
+    if (raw.startsWith("#")) return String(el.id || "") === raw.slice(1);
+    return String(el.tagName || "").toUpperCase() === raw.toUpperCase();
+  }
+  function querySubtree(root, sel, collectAll) {
+    const found = [];
+    const walk = (node) => {
+      for (const child of node.children || []) {
+        if (elementMatches(child, sel)) { found.push(child); if (!collectAll) return; }
+        walk(child);
+      }
+    };
+    walk(root);
+    return collectAll ? found : (found[0] || null);
+  }
+  function makeFakeEl() {
+    const classes = new Set();
+    const children = [];
+    const listeners = {};
+    return {
+      value: "", checked: false, type: "", placeholder: "", textContent: "", innerHTML: "",
+      hidden: false, disabled: false, tagName: "DIV", draggable: false, id: "",
+      // classList 与 className 同源（classes 集合派生，双向一致）
+      get className() { return [...classes].join(" "); },
+      set className(v) { classes.clear(); for (const part of String(v || "").split(/\s+/)) if (part) classes.add(part); },
+      title: "", role: "", tabIndex: 0,
+      scrollTop: 0, scrollHeight: 0, scrollLeft: 0, clientHeight: 0, clientWidth: 0,
+      files: [], children, style: makeStyle(), dataset: {},
+      elements: { namedItem: () => getFake("#form-named-item") },
+      form: { elements: { namedItem: () => getFake("#named-form-item") } },
+      classList: {
+        toggle(name, force) { const on = force === undefined ? !classes.has(name) : Boolean(force); if (on) classes.add(name); else classes.delete(name);; return on; },
+        add(...names) { for (const n of names) classes.add(n); },
+        remove(...names) { for (const n of names) classes.delete(n); },
+        contains(name) { return classes.has(name); }
+      },
+      // v3.24.0：click 类监听器要真实触发（选择题卡点选定格走 addEventListener("click")）
+      addEventListener(type, fn) { const key = type && String(type); if (key) { listeners[key] = listeners[key] || []; listeners[key].push(fn); } }, removeEventListener() {}, dispatchEvent() { return true; },
+      setAttribute() {}, getAttribute: () => "", removeAttribute() {}, hasAttribute: () => false, toggleAttribute: () => false,
+      insertAdjacentHTML() {}, insertAdjacentElement: () => null, hasChildNodes() { return children.length > 0; },
+      append(...nodes) { for (const node of nodes) children.push(node); },
+      prepend(...nodes) { for (const node of nodes) children.unshift(node); },
+      appendChild(node) { children.push(node); return node; },
+      replaceChildren(...nodes) { children.length = 0; children.push(...nodes); },
+      closest() { return null; }, contains() { return false; },
+      // before() 需把兄弟插到本元素之前——此处简化为追加（位置断言只看存在性）
+      before(...nodes) { for (const node of nodes) children.push(node); },
+      querySelector(sel) { return querySubtree({ children }, sel, false); },
+      querySelectorAll(sel) { return querySubtree({ children }, sel, true); },
+      focus() {}, blur() {}, select() {}, remove() {},
+      click() { for (const fn of listeners.click || []) fn({ preventDefault() {}, stopPropagation() {} }); },
+      scrollIntoView() {}, scrollBy() {}, scrollTo() {}, setSelectionRange() {},
+      showModal() {}, close() {}, show() {}, showPicker() {},
+      getBoundingClientRect() { return { top: 0, left: 0, right: 0, bottom: 0, width: 0, height: 0 }; }
+    };
+  }
+  const cache = new Map();
+  const getFake = (sel) => {
+    const key = String(sel);
+    if (!cache.has(key)) cache.set(key, makeFakeEl());
+    return cache.get(key);
+  };
+  const documentStub = {
+    body: getFake("body"), head: getFake("head"), documentElement: getFake("documentElement"),
+    activeElement: null,
+    querySelector: (sel) => getFake(sel), querySelectorAll: () => [],
+    getElementById: (id) => getFake(`#${id}`),
+    createElement: (tag) => { const el = makeFakeEl(); el.tagName = String(tag || "div").toUpperCase(); return el; },
+    createTextNode: (text) => ({ textContent: String(text), children: [] }),
+    addEventListener() {}, removeEventListener() {}
+  };
+  const gatesStub = { deviceLink: true, printLink: true, localEngines: true, easterEgg: true, agentBridge: false, cloudChat: true, cacheClean: true, signalLights: true };
+  const methodMocks = {
+    listConversations: async () => [],
+    listModes: async () => [],
+    getEdition: async () => ({ edition: "main", productName: "Agent Chat Pro", gates: gatesStub }),
+    getThinkingProfile: async ({ provider, model }) => ({
+      profile: levels.resolveThinkingProfile(provider, model)
+    })
+  };
+  const defaultResult = () => ({
+    edition: "main", productName: "Agent Chat Pro", gates: gatesStub,
+    conversations: [], items: [], messages: [], tools: [], files: [], entries: [],
+    results: [], valid: true, invalidKeys: [], ok: true, path: "",
+    lastConnectionMode: "", version: "3.24.0",
+    host: "", port: 22, username: "", wakeName: "", clientLabel: "",
+    workingDirectory: "", dataDirectory: "", skipPermissions: false,
+    showSignalLights: true, connectionMode: "cloud", localEngine: "claude",
+    hasPassword: true, hasCloudAiConfig: true,
+    cloudAiProvider: "zhipu", cloudAiBaseUrl: "", cloudAiModel: "glm-4-flash",
+    thinkingChoices: { cloud: { "zhipu/glm-4-flash": "high" } },
+    theme: "dark"
+  });
+  const windowStub = {
+    window: null, self: null,
+    agentChatPro: new Proxy(captureProps, {
+      get(_t, prop) {
+        if (prop === "then") return undefined;
+        if (prop in _t) return _t[prop];
+        if (prop in methodMocks) return methodMocks[prop];
+        return async () => defaultResult();
+      }
+    }),
+    addEventListener() {}, removeEventListener() {},
+    location: { href: "file:///app/index.html", protocol: "file:", search: "", host: "", origin: "file://" },
+    matchMedia: () => ({ matches: false, media: "", addEventListener() {}, addListener() {}, removeListener() {} }),
+    open: () => null, close() {},
+    navigator: { clipboard: { writeText: async () => {} }, userAgent: "smoke" },
+    localStorage: { getItem: () => null, setItem() {}, removeItem() {} },
+    getComputedStyle: () => ({ getPropertyValue: () => "" }),
+    innerWidth: 1200, innerHeight: 800
+  };
+  windowStub.window = windowStub;
+  windowStub.self = windowStub;
+
+  const sandbox = {
+    console: { log() {}, info() {}, warn() {}, error() {}, debug() {} },
+    Math, Date, JSON, Object, Array, String, Number, Boolean, BigInt,
+    Map, Set, WeakMap, WeakSet, Promise, Symbol, Error, TypeError, RangeError,
+    SyntaxError, ReferenceError, RegExp, parseInt, parseFloat, isNaN, isFinite,
+    encodeURIComponent, decodeURIComponent, structuredClone,
+    URL, URLSearchParams, TextEncoder, TextDecoder, AbortController,
+    queueMicrotask, performance, Buffer,
+    process: { env: {}, platform: "win32", versions: process.versions },
+    window: windowStub, document: documentStub,
+    navigator: windowStub.navigator, localStorage: windowStub.localStorage,
+    location: windowStub.location, matchMedia: windowStub.matchMedia,
+    requestAnimationFrame: windowStub.requestAnimationFrame,
+    getComputedStyle: windowStub.getComputedStyle,
+    Event: function FakeEvent(type) { this.type = String(type || ""); this.preventDefault = () => {}; this.stopPropagation = () => {}; },
+    CustomEvent: function FakeCustomEvent(type) { this.type = String(type || ""); this.preventDefault = () => {}; this.stopPropagation = () => {}; },
+    FormData: function FormData() {},
+    alert() {}, confirm: () => false, prompt: () => null,
+    setTimeout: () => 0, clearTimeout() {}, setInterval: () => 0, clearInterval() {},
+    addEventListener() {}, removeEventListener() {}
+  };
+  sandbox.globalThis = sandbox;
+
+  const vm = require("vm");
+  const rendererCode = fs.readFileSync(RENDERER_PATH, "utf8");
+  const source = rendererCode + "\n;globalThis.__acpSmoke = { ensureThinkingBlock, appendThinkingDelta, renderStaticThinking, finalizeThinkingSummary, buildAskUserCard, markAskCardAnswered, isAskUserTool, renderTool, addMessage };";
+  await test("F1 renderer.js vm 假 DOM 全量求值零异常（v3.24.0 新代码含在内）", () => {
+    let error = null;
+    try { vm.createContext(sandbox); vm.runInContext(source, sandbox, { filename: "renderer.js" }); }
+    catch (err) { error = err; }
+    assert.ifError(error);
+    assert.ok(sandbox.__acpSmoke, "求值后应挂 __acpSmoke");
+  });
+
+  await test("F2 思考折叠块：details + summary + body 结构", () => {
+    const item = getFake("#f2-item");
+    const block = sandbox.__acpSmoke.ensureThinkingBlock(item);
+    assert.strictEqual(block.className, "thinking-block");
+    assert.strictEqual(block.tagName, "DETAILS");
+    assert.strictEqual(block.children[0].textContent, "💭 思考过程");
+    assert.ok(block.children[1].className === "thinking-body");
+  });
+
+  await test("F3 流式思考追加：两段累积 + 计数标题刷新", () => {
+    const item = getFake("#f3-item");
+    sandbox.__acpSmoke.appendThinkingDelta(item, "第一步推演。");
+    sandbox.__acpSmoke.appendThinkingDelta(item, "续上，第二步。");
+    const block = item.querySelector(".thinking-block");
+    const bodyText = block.querySelector(".thinking-body").textContent;
+    assert.strictEqual(bodyText, "第一步推演。续上，第二步。", `实际正文：${JSON.stringify(bodyText)}（len ${bodyText.length}）`);
+    assert.ok(block.querySelector("summary").textContent.includes("13 字"), `应含字数：${block.querySelector("summary").textContent}`);
+  });
+
+  await test("F4 空思考增量不建块（无文本零副作用）", () => {
+    const item = getFake("#f4-item");
+    sandbox.__acpSmoke.appendThinkingDelta(item, "");
+    assert.ok(!item.querySelector(".thinking-block"), "空文本不应建块");
+  });
+
+  await test("F5 静态思考渲染：历史重放定稿标题", () => {
+    const item = getFake("#f5-item");
+    sandbox.__acpSmoke.renderStaticThinking(item, "落库的思考文本");
+    const block = item.querySelector(".thinking-block");
+    assert.ok(block, "有思考时应有折叠块");
+    assert.ok(block.querySelector("summary").textContent.includes("7 字"), "定稿标题应含字数且无进行中字样");
+    assert.ok(!block.querySelector("summary").textContent.includes("进行中"));
+    const empty = getFake("#f5-empty");
+    sandbox.__acpSmoke.renderStaticThinking(empty, "");
+    assert.ok(!empty.querySelector(".thinking-block"), "空思考不渲染");
+  });
+
+  await test("F6 选择题卡：选项结构 + 禁用 + 点击定格", async () => {
+    let pickedText = "";
+    const card = sandbox.__acpSmoke.buildAskUserCard({ question: "选哪个方案？", options: ["方案甲", "方案乙"] }, false, (cardEl, button, optionText) => {
+      pickedText = optionText;
+      sandbox.__acpSmoke.markAskCardAnswered(cardEl, button, optionText);
+    });
+    const buttons = card.children.find((c) => c.className === "ask-options");
+    assert.ok(buttons.children.length === 2, "两选项");
+    assert.ok(buttons.children[0].disabled === false, "未禁用");
+    buttons.children[1].click();
+    assert.strictEqual(pickedText, "方案乙");
+    assert.ok(buttons.children[1].className.includes("picked"), "选中高亮");
+    assert.ok(buttons.children[0].className.includes("dim"), "其余压暗");
+    assert.ok(card.querySelector(".ask-picked-note").textContent.includes("方案乙"), "已选择注记");
+    const historyCard = sandbox.__acpSmoke.buildAskUserCard({ question: "q", options: ["a", "b"] }, true, () => {});
+    assert.ok([...historyCard.children.find((c) => c.className === "ask-options").children].every((b) => b.disabled === true), "历史定型禁用");
+  });
+
+  await test("F7 isAskUserTool 识别与 renderTool 短路（不进通用工具牌列表）", () => {
+    assert.ok(sandbox.__acpSmoke.isAskUserTool({ name: "AskUserQuestion" }));
+    assert.ok(!sandbox.__acpSmoke.isAskUserTool({ name: "Read" }));
+    const item = getFake("#f7-item");
+    sandbox.__acpSmoke.renderTool(item, { id: "call-1", name: "AskUserQuestion", input: { question: "q?", options: ["甲", "乙"] } });
+    assert.ok(item.children.some((c) => c.className === "ask-card"), "应直出选择题卡");
+    assert.ok(!item.children.some((c) => c.className === "tool-list"), "不应进通用工具牌");
+  });
+
+  await test("F8 终态收敛：进行中字样消失", () => {
+    const item = getFake("#f8-item");
+    sandbox.__acpSmoke.appendThinkingDelta(item, "终态前的思考。");
+    sandbox.__acpSmoke.finalizeThinkingSummary(item);
+    const block = item.querySelector(".thinking-block");
+    assert.ok(!block.querySelector("summary").textContent.includes("进行中"), "进行中应收敛");
+    assert.ok(block.querySelector("summary").textContent.includes("7 字"));
+  });
+}
+
+(async () => {
+  await runLevelsTests();
+  await runCloudStreamTests();
+  await runAskUserTests();
+  await runWiringTests();
+  await runIconFixTests();
+  await runVmSmokeTests();
+  await test("G1 package.json 版本 = 3.24.0", () => {
+    assert.strictEqual(pkg.version, "3.24.0");
+  });
+  console.log(`\n=== test-v3-24-0.cjs：${passed} 通过 / ${failed} 失败 ===`);
+  if (failures.length) { console.log(failures.map((item) => `  ✗ ${item}`).join("\n")); process.exitCode = 1; }
+})().catch((error) => { console.error("测试运行失败：", error); process.exitCode = 1; });
