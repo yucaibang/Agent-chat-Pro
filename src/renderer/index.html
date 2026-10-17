@@ -721,7 +721,7 @@
                   <label>连接超时（秒）<input type="number" id="adv-cloud-connect-timeout" min="10" max="300" step="1" /></label>
                   <label>流式空闲超时（秒）<input type="number" id="adv-cloud-stream-idle" min="60" max="1800" step="1" /></label>
                   <label>失败自动重试次数<input type="number" id="adv-cloud-max-retries" min="0" max="3" step="1" /></label>
-                  <label>工具循环轮次上限<input type="number" id="adv-cloud-tool-rounds" min="5" max="50" step="1" /></label>
+                  <label>工具循环轮次上限<input type="number" id="adv-cloud-tool-rounds" min="5" max="10000" step="1" /></label>
                 </div>
                 <p class="field-hint">流式空闲超时 = 云端回复多少秒无新内容才判定断流；自动重试仅对幂等错误码（429/5xx）生效；工具循环轮次 = 云端模式单轮对话里工具最多执行多少步。</p>
                 <div class="adv-actions">

@@ -1176,14 +1176,15 @@ app.whenReady().then(async () => {
       }
       const runCloudWithTools = async () => {
         let loopMessages = cloudMessages;
-        // v3.19.0 F3：工具循环轮数上限可配（advanced.cloud.maxToolRounds，5~50 默认 25）
+        // v3.19.0 F3：工具循环轮数上限可配（advanced.cloud.maxToolRounds，5~10000 默认 25；
+        //   v3.24.4 需求②：上限 50→10000 实际取消限制，与 settings.cjs ADVANCED_CLAMPS 三处同步）
         // v3.21.2 TDZ 修复：原写 config 引用的是 handler 顶层（云端分支之后、云端路径永不执行）
         // 的 const config → 云端发消息必 TDZ（ReferenceError: Cannot access '_0x27f1ac'）。
         // v3.19/v3.20 装机没炸纯属混淆器洗牌侥幸掩盖。改为 cloudConfig（本块内先声明的 getCloudAiConfig()），
         // 同源 advancedEffective 字段（另见 cloudCallbacks.advanced 的正确示范 L990），语义等价。
         const advancedCloud = cloudConfig.advancedEffective?.cloud || {};
         const maxToolRounds = Number.isInteger(Number(advancedCloud.maxToolRounds))
-          && Number(advancedCloud.maxToolRounds) >= 5 && Number(advancedCloud.maxToolRounds) <= 50
+          && Number(advancedCloud.maxToolRounds) >= 5 && Number(advancedCloud.maxToolRounds) <= 10000
           ? Number(advancedCloud.maxToolRounds) : MAX_TOOL_ROUNDS;
         // v3.21.3 修复①：跨轮 usage 累计器——财务真实账目 = Σ每轮(输入+输出)。
         // 旧版 lastUsage 每轮被覆盖+渲染层只记输出，用户 200 万 token 烧穿而计数器只显示 4652 的主因之一。
@@ -1276,7 +1277,8 @@ app.whenReady().then(async () => {
             }
           }
         }
-        throw new Error(`工具执行轮数已达上限（${MAX_TOOL_ROUNDS} 轮），已停止本轮任务。`);
+        // v3.24.4 修复③：报错文案用实际生效轮次数（旧版硬编码 MAX_TOOL_ROUNDS=25，用户设 50 时提示错误）
+        throw new Error(`工具执行轮数已达上限（${maxToolRounds} 轮），已停止本轮任务。`);
       };
 
       sendWorkStatusSignal(event.sender, "chat:event", normalizeAndObserveStatusEvent({ id, type: "lifecycle", status: "connecting" }, { connectionMode: "cloud" }));

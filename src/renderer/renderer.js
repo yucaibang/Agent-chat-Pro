@@ -305,6 +305,27 @@ function advCloudPatch() {
   };
 }
 
+/** v3.24.4 修复①：对比 patch 与落盘值，收集被边界钳制的数字字段（中文标签如实告知） */
+const ADV_FIELD_LABELS = {
+  ssh: { requestTimeoutMin: "请求超时", connectTimeoutSec: "连接超时", sftpTimeoutSec: "SFTP 超时", reconnectAttempts: "重试次数", reconnectBaseMs: "退避基数", keepaliveSec: "保活间隔" },
+  cloud: { connectTimeoutSec: "连接超时", streamIdleTimeoutSec: "流式空闲超时", maxRetries: "重试次数", maxToolRounds: "工具循环轮次" }
+};
+
+function collectClampedFields(patch, advanced) {
+  const fixed = [];
+  for (const groupKey of ["ssh", "cloud"]) {
+    const patchGroup = patch[groupKey];
+    const savedGroup = advanced[groupKey];
+    if (!patchGroup || typeof patchGroup !== "object" || !savedGroup || typeof savedGroup !== "object") continue;
+    for (const [field, label] of Object.entries(ADV_FIELD_LABELS[groupKey])) {
+      const input = Number(patchGroup[field]);
+      const saved = Number(savedGroup[field]);
+      if (Number.isFinite(input) && Number.isFinite(saved) && input !== saved) fixed.push(label);
+    }
+  }
+  return fixed;
+}
+
 async function saveAdvancedGroup(patch, successText) {
   if (advancedSaving) return;
   advancedSaving = true;
@@ -314,13 +335,20 @@ async function saveAdvancedGroup(patch, successText) {
     const settings = await window.agentChatPro.saveSettings({ ...latest, advanced: { ...baseAdvanced, ...patch } });
     populateSettings(settings);
     const advanced = settings.advanced && typeof settings.advanced === "object" ? settings.advanced : {};
+    // v3.24.4 修复①：手动组不再整组回退自动（字段级钳边界/补默认），旧"整组回退"文案清理；
+    //   新增落盘差异提示——被钳到边界的字段如实告知（超界值修正后与输入框回填值一致可见）
     const rolled = [];
     if (patch.ssh && !advanced.ssh) rolled.push("SSH 连接");
     if (patch.external && !advanced.external) rolled.push("外网传输");
     if (patch.cloud && !advanced.cloud) rolled.push("云端模型");
-    setStatus(rolled.length
-      ? `已保存；但 ${rolled.join("、")} 所填值不合法，已整组回退自动识别。`
-      : successText, rolled.length > 0);
+    if (rolled.length) {
+      setStatus(`已保存；但 ${rolled.join("、")} 参数缺失，已回退自动识别。`, true);
+      return;
+    }
+    const corrected = collectClampedFields(patch, advanced);
+    setStatus(corrected.length
+      ? `已保存；${corrected.join("、")} 超出合法范围，已自动修正到边界值。`
+      : successText, false);
   } catch (error) {
     setStatus(error.message, true);
   } finally {

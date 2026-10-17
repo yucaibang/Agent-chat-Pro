@@ -57,7 +57,8 @@ function mergeNetworkConfig(input, previous, type) {
 // ─────────────────────────────────────────────────────────────────────
 // 高级设置（v3.19.0 F3）：自动/手动两态
 //   分组值 null = 自动识别（行为 = 代码内默认值，零字段暴露）
-//   分组值 = 对象时为手动（字段逐个白名单钳制，非法即整组回自动）
+//   分组值 = 对象时为手动（v3.24.4 修复①：字段级钳边界/补默认值，组保持手动；
+//     仅整组缺失/非对象时回自动——旧版"任一字段非法整组回自动"会把手动面板洗回出厂）
 //   adapter 不参与两态：SSH 远程适配器显式五选一（claude 内置，其余需远端安装）
 // 默认值表 = 现状硬编码实锤（与 ssh.cjs / cloud-chat.cjs / cloud-tools.cjs 常量逐一对应）
 // ─────────────────────────────────────────────────────────────────────
@@ -81,7 +82,7 @@ const ADVANCED_CLAMPS = {
     connectTimeoutSec: [10, 300],       // 云端连接超时（秒）；现状 req.setTimeout 120
     streamIdleTimeoutSec: [60, 1800],   // 流式空闲超时（秒）；现状响应级 300000ms
     maxRetries: [0, 3],                 // 失败自动重试（仅幂等码 429/5xx）；现状 0
-    maxToolRounds: [5, 50]              // 工具循环轮数上限；现状 MAX_TOOL_ROUNDS 25
+    maxToolRounds: [5, 10000]           // 工具循环轮数上限；现状 MAX_TOOL_ROUNDS 25（v3.24.4 需求②：上限 50→10000 实际取消限制，默认 25 不变）
   }
 };
 
@@ -95,27 +96,35 @@ function normalizeRemoteAdapter(value) {
   return ADVANCED_ADAPTERS.includes(adapter) ? adapter : "claude";
 }
 
-function clampAdvancedInt(value, min, max) {
+/**
+ * v3.24.4 修复①：字段级独立修正 + 边界钳制。
+ *   合法整数 → 原值；超界 → 钳到最近合法边界；缺失/非整数（含空/NaN/小数）→ 补 fallback 默认值。
+ *   永不返回 null（fallback 兜底），手动组因此不再"任一字段非法整组回自动"。
+ */
+function clampAdvancedInt(value, min, max, fallback) {
   const n = Number(value);
-  if (!Number.isInteger(n) || n < min || n > max) return null;
-  return n;
+  if (!Number.isInteger(n)) return fallback;
+  return Math.min(Math.max(n, min), max);
 }
 
-/** 手动组逐字段钳制：任一字段非法 → 整组回自动（null），绝不静默改值 */
-function sanitizeAdvancedNumericGroup(group, clamps) {
+/**
+ * 手动组逐字段钳制（v3.24.4 修复①：语义重写，修"手动模式一点保存就恢复出厂设置"）：
+ *   旧版任一字段非法 → 整组回 null（自动），面板全回默认值 = 用户感知的"恢复出厂"。
+ *   新版字段级独立修正——合法保留 / 超界钳边界 / 缺失补默认，组保持手动；
+ *   仅整组缺失/非对象时回 null（= 自动识别）。「恢复自动」由 UI 显式传 null（见 sanitizeAdvanced）。
+ */
+function sanitizeAdvancedNumericGroup(group, clamps, defaults) {
   if (!group || typeof group !== "object") return null;
   const out = {};
   for (const [field, [min, max]] of Object.entries(clamps)) {
-    const value = clampAdvancedInt(group[field], min, max);
-    if (value === null) return null;
-    out[field] = value;
+    out[field] = clampAdvancedInt(group[field], min, max, defaults?.[field] ?? min);
   }
   return out;
 }
 
-/** SSH 手动组 = 数字六参数（钳制） + debugLog 布尔开关：任一数字非法整组回自动 */
+/** SSH 手动组 = 数字六参数（字段级钳制/补默认） + debugLog 布尔开关；整组缺失才回自动 */
 function sanitizeSshAdvanced(group) {
-  const numeric = sanitizeAdvancedNumericGroup(group, ADVANCED_CLAMPS.ssh);
+  const numeric = sanitizeAdvancedNumericGroup(group, ADVANCED_CLAMPS.ssh, ADVANCED_DEFAULTS.ssh);
   if (!numeric) return null;
   return { ...numeric, debugLog: Boolean(group.debugLog) };
 }
@@ -152,7 +161,7 @@ function sanitizeAdvanced(input, previous) {
   return {
     ssh: sanitizeSshAdvanced(rawSsh),
     external: sanitizeN2nAdvanced(rawExternal),
-    cloud: sanitizeAdvancedNumericGroup(rawCloud, ADVANCED_CLAMPS.cloud),
+    cloud: sanitizeAdvancedNumericGroup(rawCloud, ADVANCED_CLAMPS.cloud, ADVANCED_DEFAULTS.cloud),
     adapter: normalizeRemoteAdapter(source.adapter),
     // 适配器附加参数（v3.19.0 F3）：qwen -m / codex --sandbox / hermes --model --provider；宽松 trim
     adapterOptions: sanitizeAdapterOptions(source.adapterOptions)

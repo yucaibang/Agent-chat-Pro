@@ -129,15 +129,18 @@ async function runAdvancedSettingsTests() {
     assert.strictEqual(raw.schemaVersion, 3, "advanced 分组伴随 schemaVersion 3");
   });
 
-  await test("A3. 越界整组回自动：SSH 请求超时越下界→该组 null 绝不静默改值；其余组不受波及", async () => {
+  await test("A3. 越界字段级钳制（v3.24.4 修复①语义）：SSH 请求超时越下界→钳到边界 10 组保持手动；其余组不受波及", async () => {
     const saved = await saveAdvanced({
       ssh: { requestTimeoutMin: 5, connectTimeoutSec: 20, sftpTimeoutSec: 60, reconnectAttempts: 4, reconnectBaseMs: 800, keepaliveSec: 20, debugLog: true },
       cloud: { connectTimeoutSec: 60, streamIdleTimeoutSec: 600, maxRetries: 2, maxToolRounds: 30 }
     });
-    assert.strictEqual(saved.advanced.ssh, null, "SSH 组应整组回自动（绝不静默改值）");
+    assert.ok(saved.advanced.ssh && typeof saved.advanced.ssh === "object", "SSH 组应保持手动（不再整组回自动）");
+    assert.strictEqual(saved.advanced.ssh.requestTimeoutMin, 10, "越下界应钳到边界 10（旧版整组回 null）");
+    assert.strictEqual(saved.advanced.ssh.connectTimeoutSec, 20, "同组合法字段原值保留");
+    assert.strictEqual(saved.advanced.ssh.debugLog, true, "布尔开关不受数字钳制波及");
     assert.strictEqual(saved.advanced.cloud.connectTimeoutSec, 60, "云端组合法不受波及");
     const eff = saved.advancedEffective.ssh;
-    assert.strictEqual(eff.requestTimeoutMin, 30, "实值应回现状默认 30");
+    assert.strictEqual(eff.requestTimeoutMin, 10, "实值应为钳制后的边界 10");
   });
 
   await test("A4. 字段白名单：adapter 未知回 claude / adapterOptions 乱值收敛 / sandbox 只认 read-only", async () => {
@@ -466,7 +469,7 @@ async function runUiTests() {
     for (const bind of ['"#adv-network-save"', '"#adv-network-manual"', '"#adv-network-auto"', '"#adv-cloud-save"', '"#adapter-apply"', '"#adapter-detect"']) {
       assert.ok(rendererSrc.includes(bind), `renderer 应绑定 ${bind}`);
     }
-    assert.ok(rendererSrc.includes("已整组回退自动识别"), "非法回自动应提示用户");
+    assert.ok(rendererSrc.includes("超出合法范围，已自动修正到边界值"), "v3.24.4 修复①：越界字段钳制应提示用户（旧整组回退文案已清除）");
     assert.ok(rendererSrc.includes("renderAdvancedPanels(settings)"), "populateSettings 应回填高级组");
   });
 

@@ -814,7 +814,7 @@ async function runVmSmokeTests() {
     edition: "main", productName: "Agent Chat Pro", gates: gatesStub,
     conversations: [], items: [], messages: [], tools: [], files: [], entries: [],
     results: [], valid: true, invalidKeys: [], ok: true, path: "",
-    lastConnectionMode: "", version: "3.24.3",
+    lastConnectionMode: "", version: "3.24.4",
     host: "", port: 22, username: "", wakeName: "", clientLabel: "",
     workingDirectory: "", dataDirectory: "", skipPermissions: false,
     showSignalLights: true, connectionMode: "cloud", localEngine: "claude",
@@ -964,7 +964,7 @@ async function runVmSmokeTests() {
   await runV3243Tests();
   await runVmSmokeTests();
   await test("G1 package.json 版本 = 3.24.3", () => {
-    assert.strictEqual(pkg.version, "3.24.3");
+    assert.strictEqual(pkg.version, "3.24.4");
   });
   console.log(`\n=== test-v3-24-0.cjs：${passed} 通过 / ${failed} 失败 ===`);
   if (failures.length) { console.log(failures.map((item) => `  ✗ ${item}`).join("\n")); process.exitCode = 1; }
