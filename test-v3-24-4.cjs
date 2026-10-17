@@ -189,7 +189,7 @@ async function runVmSmokeTests() {
       set() { return true; }
     });
   }
-  /** 子树选择器匹配（.class / #id / tag 三形态；v3.24.5 H 组思考块子树查询需要） */
+  /** 子树选择器匹配（.class / #id / tag 三形态；v3.24.6 H 组思考块子树查询需要） */
   function elementMatches(el, sel) {
     const raw = String(sel || "").trim();
     if (!raw || !el || typeof el !== "object") return false;
@@ -227,7 +227,8 @@ async function runVmSmokeTests() {
         remove(...names) { for (const n of names) classes.delete(n); },
         contains(name) { return classes.has(name); }
       },
-      addEventListener() {}, removeEventListener() {}, dispatchEvent() { return true; },
+      addEventListener(type, fn) { (this._listeners = this._listeners || {})[String(type || "click")] = fn; },
+      removeEventListener() {}, dispatchEvent() { return true; },
       setAttribute() {}, getAttribute: () => "", removeAttribute() {}, hasAttribute: () => false, toggleAttribute: () => false,
       insertAdjacentHTML() {}, insertAdjacentElement: () => null, hasChildNodes() { return children.length > 0; },
       append(...nodes) { for (const node of nodes) children.push(node); },
@@ -283,7 +284,13 @@ async function runVmSmokeTests() {
     matchMedia: () => ({ matches: false, media: "", addEventListener() {}, addListener() {}, removeListener() {} }),
     open: () => null, close() {},
     navigator: { clipboard: { writeText: async () => {} }, userAgent: "smoke" },
-    localStorage: { getItem: () => null, setItem() {}, removeItem() {} },
+    // v3.24.6 I 组：localStorage 升级为带真存储的 stub（供折叠/模式记忆断言读取写入值）
+    localStorage: {
+      store: new Map(),
+      getItem(k) { return this.store.has(String(k)) ? this.store.get(String(k)) : null; },
+      setItem(k, v) { this.store.set(String(k), String(v)); },
+      removeItem(k) { this.store.delete(String(k)); }
+    },
     getComputedStyle: () => ({ getPropertyValue: () => "" }),
     innerWidth: 1200, innerHeight: 800
   };
@@ -321,7 +328,7 @@ async function runVmSmokeTests() {
   sandbox.globalThis = sandbox;
 
   const vm = require("vm");
-  const source = rendererSrc + "\n;globalThis.__acpSmoke = { collectClampedFields, ADV_FIELD_LABELS, ensureThinkingBlock, appendThinkingDelta, finalizeThinkingSummary, renderStaticThinking, thinkDepthLabel, THINK_DEPTH_TIERS };";
+  const source = rendererSrc + "\n;globalThis.__acpSmoke = { collectClampedFields, ADV_FIELD_LABELS, ensureThinkingBlock, appendThinkingDelta, finalizeThinkingSummary, renderStaticThinking, thinkDepthLabel, THINK_DEPTH_TIERS, devPanelAccount, devPanelItems, devPanelToolPath, devPanelBasename, devPanelClock, renderDevPanel, renderDevPanelRole, DEV_PANEL_ROLE_DESC };";
   await test("D1 renderer.js vm 假 DOM 全量求值零异常（v3.24.4 新代码含在内）", () => {
     let error = null;
     try { vm.createContext(sandbox); vm.runInContext(source, sandbox, { filename: "renderer.js" }); }
@@ -352,7 +359,7 @@ async function runVmSmokeTests() {
     assert.deepStrictEqual(fixed2, []);
   });
 
-/* ── H 组（v3.24.5）：思考块元信息（⏱ 耗时 + 🧠 程度标签，豆包同款五档） ── */
+/* ── H 组（v3.24.6）：思考块元信息（⏱ 耗时 + 🧠 程度标签，豆包同款五档） ── */
 
 async function runThinkMetaTests() {
   console.log("── H 组：思考块元信息（耗时+程度标签） ──");
@@ -422,6 +429,133 @@ async function runThinkMetaTests() {
 }
 
   await runThinkMetaTests();
+
+/* ── I 组（v3.24.6）：开发面板（右侧实时观察 AI 编辑文件；三模式共用工具事件流） ── */
+
+async function runDevPanelTests() {
+  console.log("── I 组：开发面板（账本+DOM 渲染+折叠/模式记忆） ──");
+
+  await test("I1 devPanelAccount 账本纯逻辑：写读分流、running/completed/denied 三态、无关工具不入账", () => {
+    const acct = sandbox.__acpSmoke.devPanelAccount;
+    const ledger = sandbox.__acpSmoke.devPanelItems;
+    ledger.clear();
+    assert.strictEqual(acct(null), false, "空工具不入账");
+    assert.strictEqual(acct({ name: "Bash", status: "running", id: "t0", input: { command: "ls" } }), false, "Bash 不入账");
+    assert.strictEqual(acct({ name: "Write", status: "running", id: "w1", input: { file_path: "/proj/a.md" } }), true, "Write 应入账");
+    const a = ledger.get("/proj/a.md");
+    assert.ok(a, "账本应有 /proj/a.md 条目");
+    assert.strictEqual(a.op, "edit");
+    assert.strictEqual(a.lastStatus, "queued", "running 态为排队色");
+    assert.strictEqual(a.running.size, 1, "活动 id 应在册");
+    acct({ name: "Edit", status: "completed", id: "w1", input: { filePath: "/proj/a.md" } });  // 键兼容 filePath
+    assert.strictEqual(a.lastStatus, "ok", "completed 态为完成");
+    assert.strictEqual(a.running.size, 0, "活动 id 应出册");
+    acct({ name: "NotebookEdit", status: "denied", id: "w2", input: { notebook_path: "/proj/a.md" } });
+    assert.strictEqual(a.lastStatus, "failed", "denied 归入失败色");
+    acct({ name: "read_file", status: "completed", id: "r1", input: { path: "/proj/b.txt" } });
+    const b = ledger.get("/proj/b.txt");
+    assert.strictEqual(b.op, "read", "read_file 归读取");
+    assert.strictEqual(b.lastStatus, "ok");
+    assert.strictEqual(ledger.size, 2, "账本应恰好两条");
+  });
+
+  await test("I2 devPanelToolPath/Basename：五键兼容、空白不取、双反斜杠与纯文件名", () => {
+    const tp = sandbox.__acpSmoke.devPanelToolPath;
+    const bn = sandbox.__acpSmoke.devPanelBasename;
+    assert.strictEqual(tp({ input: { file_path: "/a/x.md" } }), "/a/x.md");
+    assert.strictEqual(tp({ input: { notebook_path: "/a/n.ipynb" } }), "/a/n.ipynb");
+    assert.strictEqual(tp({ input: { filePath: "C:\\w\\y.txt" } }), "C:\\w\\y.txt");
+    assert.strictEqual(tp({ input: {} }), "", "无路径键应为空");
+    assert.strictEqual(tp({ input: { file_path: "   " } }), "", "纯空白路径不取");
+    assert.strictEqual(bn("C:\\w\\y.txt"), "y.txt", "Windows 反斜杠也应取尾名");
+    assert.strictEqual(bn("/proj/a.md"), "a.md");
+    assert.strictEqual(bn("plain.txt"), "plain.txt");
+    assert.ok(/^\d{2}:\d{2}$/.test(sandbox.__acpSmoke.devPanelClock(Date.now())), "时钟 hh:mm 格式");
+  });
+
+  await test("I3 renderDevPanel DOM：空态→正在编辑→完成收敛 + 折叠窄条 busy/文件名联动", () => {
+    const ledger = sandbox.__acpSmoke.devPanelItems;
+    const acct = sandbox.__acpSmoke.devPanelAccount;
+    const rd = sandbox.__acpSmoke.renderDevPanel;
+    ledger.clear();
+    const empty = getFake("#dev-empty"), active = getFake("#dev-active"), activeFile = getFake("#dev-active-file"), feed = getFake("#dev-feed");
+    empty.hidden = false; active.hidden = false;  // 预置相反态验证翻转
+    rd();
+    assert.strictEqual(empty.hidden, false, "空账本应显示空态（欣赏一下干净的工作区）");
+    assert.strictEqual(active.hidden, true);
+    assert.strictEqual(feed.children.length, 0);
+    assert.strictEqual(getFake("#dev-rail-dot").classList.contains("busy"), false);
+    assert.strictEqual(getFake("#dev-rail-label").textContent, "开发");
+    acct({ name: "Edit", status: "running", id: "e1", input: { file_path: "/proj/hero.py" } });
+    rd();
+    assert.strictEqual(empty.hidden, true);
+    assert.strictEqual(active.hidden, false, "有编辑中文件应显示正在编辑区");
+    assert.strictEqual(activeFile.textContent, "/proj/hero.py");
+    assert.strictEqual(feed.children.length, 1);
+    const row = feed.children[0];
+    assert.ok(String(row.className).includes("dev-feed-row"));
+    assert.ok(String(row.children[0].className).includes("queued"), "running 应黄点");
+    assert.strictEqual(row.children[1].textContent, "hero.py");
+    assert.strictEqual(row.children[2].textContent, "编辑中");
+    assert.ok(/^\d{2}:\d{2}$/.test(row.children[3].textContent));
+    assert.strictEqual(getFake("#dev-rail-label").textContent, "hero.py", "折叠窄条应显示正在编辑文件名");
+    assert.strictEqual(getFake("#dev-rail-dot").classList.contains("busy"), true, "窄条 busy 点应亮");
+    acct({ name: "Edit", status: "completed", id: "e1", input: { file_path: "/proj/hero.py" } });
+    rd();
+    assert.strictEqual(active.hidden, true, "编辑完成后正在编辑区应收起");
+    assert.strictEqual(getFake("#dev-rail-dot").classList.contains("busy"), false, "busy 点应灭");
+    assert.strictEqual(feed.children[0].children[2].textContent, "已编辑");
+    assert.ok(String(feed.children[0].children[0].className).includes("edit"), "写文件完成转绿点");
+  });
+
+  await test("I4 折叠开合 + 主备模式 pill：点击→body.dev-collapsed + localStorage 记忆", () => {
+    const body = getFake("body");
+    const ls = sandbox.localStorage;
+    body.classList.remove("dev-collapsed");
+    const collapseBtn = getFake("#dev-collapse");
+    assert.ok(collapseBtn._listeners && collapseBtn._listeners.click, "渲染器应绑定折叠钮");
+    collapseBtn._listeners.click();
+    assert.strictEqual(body.classList.contains("dev-collapsed"), true, "点击折叠钮应加 dev-collapsed");
+    assert.strictEqual(ls.getItem("acp-dev-panel-collapsed"), "1", "折叠应记忆");
+    const rail = getFake("#dev-rail");
+    assert.ok(rail._listeners && rail._listeners.click, "窄条应绑定展开钮");
+    rail._listeners.click();
+    assert.strictEqual(body.classList.contains("dev-collapsed"), false, "点窄条应展开");
+    assert.strictEqual(ls.getItem("acp-dev-panel-collapsed"), "0");
+    const leadBtn = getFake("#dev-role-lead"), assistBtn = getFake("#dev-role-assist"), desc = getFake("#dev-role-desc");
+    assert.ok(assistBtn.classList.contains("active"), "初始化默认人主机辅");
+    assert.ok(desc.textContent.startsWith("人主机辅"), `初始描述：${desc.textContent}`);
+    leadBtn._listeners.click();
+    assert.ok(leadBtn.classList.contains("active"), "切机主人辅应点亮");
+    assert.ok(!assistBtn.classList.contains("active"));
+    assert.ok(desc.textContent.startsWith("机主人辅"));
+    assert.strictEqual(ls.getItem("acp-dev-panel-role"), "lead", "模式应记忆");
+    assistBtn._listeners.click();
+    assert.ok(assistBtn.classList.contains("active"));
+    assert.ok(desc.textContent.startsWith("人主机辅"));
+    assert.strictEqual(ls.getItem("acp-dev-panel-role"), "assist");
+  });
+
+  await test("I5 文件级锚：index DOM + styles 样式 + renderer 挂点与主备文案、三模式共用单通道", () => {
+    const html = fs.readFileSync(path.join(ROOT, "src/renderer/index.html"), "utf8");
+    assert.ok(html.includes('id="dev-panel"'), "index 应含 dev-panel 主体");
+    assert.ok(html.includes("欣赏一下干净的工作区"), "空态文案");
+    assert.ok(html.includes("人主机辅") && html.includes("机主人辅"), "主备 pill 文案");
+    assert.ok(html.includes("AI 只是帮忙检查漏洞") && html.includes("用户用来监督和观察"), "主备描述文案");
+    assert.ok(html.includes('id="dev-rail"') && html.includes('id="dev-rail-dot"'), "折叠窄条");
+    const css = fs.readFileSync(path.join(ROOT, "src/renderer/styles.css"), "utf8");
+    assert.ok(css.includes(".dev-panel"), "面板样式");
+    assert.ok(css.includes("body.dev-collapsed .dev-panel"), "折叠隐藏规则");
+    assert.ok(css.includes(".dev-rail"), "窄条样式");
+    assert.ok(css.includes("dev-pulse"), "呼吸动画");
+    assert.ok(css.includes(".dev-feed-row"), "活动流行样式");
+    assert.ok(rendererSrc.includes("if (devPanelAccount(event.tool)) renderDevPanel()"), "tool 分支挂点（三模式共用通道）");
+    assert.ok(rendererSrc.includes("acp-dev-panel-collapsed") && rendererSrc.includes("acp-dev-panel-role"), "两项记忆键");
+    assert.ok(rendererSrc.includes("DEV_PANEL_WRITE_TOOLS") && rendererSrc.includes("DEV_PANEL_READ_TOOLS"), "写读工具集");
+  });
+}
+
+  await runDevPanelTests();
 }
 
 /* ── E 组：saveSettings 集成链真测（mock electron 真实 IO，复刻 v3-19-0 手法） ── */
@@ -518,8 +652,8 @@ async function runRegressionGuardTests() {
   await runVmSmokeTests();
   await runIntegrationTests();
   await runRegressionGuardTests();
-  await test("G1 package.json 版本 = 3.24.5", () => {
-    assert.strictEqual(pkg.version, "3.24.5");
+  await test("G1 package.json 版本 = 3.24.6", () => {
+    assert.strictEqual(pkg.version, "3.24.6");
   });
   console.log(`\n=== test-v3-24-4.cjs：${passed} 通过 / ${failed} 失败 ===`);
   if (failures.length) { console.log(failures.map((item) => `  ✗ ${item}`).join("\n")); process.exitCode = 1; }

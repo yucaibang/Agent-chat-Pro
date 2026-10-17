@@ -962,6 +962,126 @@ function finalizeThinkingSummary(item) {
   block.querySelector("summary").textContent = `💭 思考过程（${words} 字${elapsed} · 🧠 ${thinkDepthLabel(words)}）`;
 }
 
+/* ── v3.24.6 开发面板（右侧实时观察 AI 编辑中的文件；三模式共用工具事件流） ── */
+
+const DEV_PANEL_WRITE_TOOLS = new Set(["Write", "Edit", "NotebookEdit", "write_file", "edit_file", "append_file"]);
+const DEV_PANEL_READ_TOOLS = new Set(["Read", "read_file", "list_directory", "Glob", "Grep"]);
+const DEV_PANEL_PATH_KEYS = ["file_path", "path", "notebook_path", "filePath", "notebookPath"];
+const DEV_PANEL_ROLE_DESC = {
+  assist: "人主机辅：AI 只是帮忙检查漏洞，和回答问题",
+  lead: "机主人辅：AI 干活，用户用来监督和观察"
+};
+const DEV_PANEL_FEED_LIMIT = 30;
+
+/** 工作区文件活动账本（key=文件路径；不随会话切换清空——面板是工作区视角） */
+const devPanelItems = new Map();
+
+function devPanelToolPath(tool) {
+  const input = tool?.input && typeof tool.input === "object" ? tool.input : {};
+  for (const key of DEV_PANEL_PATH_KEYS) {
+    const value = input[key];
+    if (typeof value === "string" && value.trim()) return value.trim();
+  }
+  return "";
+}
+
+function devPanelBasename(p) {
+  const raw = String(p || "");
+  const idx = Math.max(raw.lastIndexOf("/"), raw.lastIndexOf("\\"));
+  return idx >= 0 ? raw.slice(idx + 1) : raw;
+}
+
+/** 工具事件→账本记账（纯逻辑；返回 true=已入账本，调用方决定是否刷新 DOM） */
+function devPanelAccount(tool) {
+  if (!tool || typeof tool !== "object") return false;
+  const name = String(tool.name || "");
+  const write = DEV_PANEL_WRITE_TOOLS.has(name);
+  const read = !write && DEV_PANEL_READ_TOOLS.has(name);
+  if (!write && !read) return false;
+  const filePath = devPanelToolPath(tool);
+  if (!filePath) return false;
+  const status = String(tool.status || "running");
+  const entry = devPanelItems.get(filePath) || { path: filePath, name: devPanelBasename(filePath), op: write ? "edit" : "read", lastStatus: "idle", lastTs: 0, running: new Set() };
+  if (status === "running") {
+    if (write) entry.op = "edit";
+    entry.running.add(String(tool.id || ""));
+    entry.lastStatus = "queued";
+  } else {
+    entry.running.delete(String(tool.id || ""));
+    entry.lastStatus = status === "failed" || status === "denied" ? "failed" : status === "completed" ? "ok" : "idle";
+  }
+  entry.lastTs = Date.now();
+  entry.lastTool = name;
+  devPanelItems.set(filePath, entry);
+  return true;
+}
+
+function devPanelClock(ts) {
+  const d = new Date(Number(ts) || Date.now());
+  const two = (v) => String(v).padStart(2, "0");
+  return `${two(d.getHours())}:${two(d.getMinutes())}`;
+}
+
+/** 面板 DOM 渲染：空态/正在编辑/最近活动 + 折叠窄条小进度同步 */
+function renderDevPanel() {
+  const empty = document.querySelector("#dev-empty");
+  const active = document.querySelector("#dev-active");
+  const activeFile = document.querySelector("#dev-active-file");
+  const feed = document.querySelector("#dev-feed");
+  const railDot = document.querySelector("#dev-rail-dot");
+  const railLabel = document.querySelector("#dev-rail-label");
+  if (!empty || !active || !activeFile || !feed) return;
+  const items = [...devPanelItems.values()].sort((a, b) => b.lastTs - a.lastTs);
+  if (!items.length) {
+    empty.hidden = false;
+    active.hidden = true;
+    feed.replaceChildren();
+    if (railDot) railDot.classList.remove("busy");
+    if (railLabel) railLabel.textContent = "开发";
+    return;
+  }
+  empty.hidden = true;
+  const editing = items.find((it) => it.op === "edit" && it.running.size > 0);
+  active.hidden = !editing;
+  if (editing) {
+    activeFile.textContent = editing.path;
+    activeFile.title = editing.path;
+  }
+  if (railDot) railDot.classList.toggle("busy", Boolean(editing));
+  if (railLabel) railLabel.textContent = editing ? devPanelBasename(editing.path) : "开发";
+  feed.replaceChildren();
+  for (const it of items.slice(0, DEV_PANEL_FEED_LIMIT)) {
+    const row = document.createElement("div");
+    row.className = "dev-feed-row";
+    const dot = document.createElement("span");
+    dot.className = "dev-feed-dot " + (it.running.size > 0 ? "queued" : it.lastStatus === "failed" ? "failed" : it.op === "edit" ? "edit" : "read");
+    const name = document.createElement("span");
+    name.className = "dev-feed-name";
+    name.textContent = it.name;
+    name.title = it.path;
+    const op = document.createElement("span");
+    op.className = "dev-feed-op";
+    op.textContent = it.op === "edit" ? (it.running.size > 0 ? "编辑中" : "已编辑") : (it.running.size > 0 ? "查看中" : "已查看");
+    const time = document.createElement("span");
+    time.className = "dev-feed-time";
+    time.textContent = devPanelClock(it.lastTs);
+    row.append(dot, name, op, time);
+    feed.append(row);
+  }
+}
+
+/** 主备模式 pill 渲染与记忆 */
+function renderDevPanelRole(role) {
+  const norm = role === "lead" ? "lead" : "assist";
+  const on = document.querySelector(norm === "lead" ? "#dev-role-lead" : "#dev-role-assist");
+  const off = document.querySelector(norm === "lead" ? "#dev-role-assist" : "#dev-role-lead");
+  if (on) on.classList.add("active");
+  if (off) off.classList.remove("active");
+  const desc = document.querySelector("#dev-role-desc");
+  if (desc) desc.textContent = DEV_PANEL_ROLE_DESC[norm];
+  localStorage.setItem("acp-dev-panel-role", norm);
+}
+
 /** 选择题卡片构建（云端 ipc 应答 / SSH 近似回发两个通道共用骨架；disabled=历史定格） */
 function buildAskUserCard(payload, disabled, onPick) {
   const card = document.createElement("div");
@@ -1918,6 +2038,21 @@ sidebarToggle.addEventListener("click", () => {
   localStorage.setItem("acp-sidebar-collapsed", document.body.classList.contains("sidebar-collapsed") ? "1" : "0");
   syncSidebarToggle();
 });
+
+// ── v3.24.6 开发面板：折叠记忆（对照 sidebar-collapsed 惯例）+ 折叠窄条点开 + 主备模式 pill ──
+if (localStorage.getItem("acp-dev-panel-collapsed") === "1") document.body.classList.add("dev-collapsed");
+document.querySelector("#dev-collapse")?.addEventListener("click", () => {
+  document.body.classList.add("dev-collapsed");
+  localStorage.setItem("acp-dev-panel-collapsed", "1");
+});
+document.querySelector("#dev-rail")?.addEventListener("click", () => {
+  document.body.classList.remove("dev-collapsed");
+  localStorage.setItem("acp-dev-panel-collapsed", "0");
+});
+const devPanelRoleSaved = localStorage.getItem("acp-dev-panel-role") === "lead" ? "lead" : "assist";
+renderDevPanelRole(devPanelRoleSaved);
+document.querySelector("#dev-role-assist")?.addEventListener("click", () => renderDevPanelRole("assist"));
+document.querySelector("#dev-role-lead")?.addEventListener("click", () => renderDevPanelRole("lead"));
 
 document.querySelector("#show-settings").addEventListener("click", openSettings);
 document.querySelector("#header-appearance").addEventListener("click", openAppearanceDialog);
@@ -3252,6 +3387,8 @@ window.agentChatPro.onChatEvent((event) => {
       : { connecting: "正在连接 NAS…", reconnecting: "连接中断，正在自动重连…", connected: "已连接，Claude 正在处理…", stopping: "Claude 已收到停止请求，正在结束当前操作…", stopped: "连接已被强制关闭，正在结束当前请求…" };
     setConnection(labels[event.status] || "正在处理…", event.status === "connected" ? "connected" : "");
   } else if (event.type === "tool" && answer) {
+    // v3.24.6 开发面板：工具事件入账本（三模式共用通道），入账了才刷新面板 DOM
+    if (devPanelAccount(event.tool)) renderDevPanel();
     renderTool(answer, event.tool);
     // v3.15.0 智能滚动：仅当用户停在底部附近才跟随
     if (isNearBottom()) elements.messages.scrollTop = elements.messages.scrollHeight;

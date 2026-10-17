@@ -187,6 +187,33 @@
         </button>
       </form>
     </main>
+
+      <!-- ── v3.24.6 开发面板（右侧实时观察 AI 编辑中的文件；三模式共用工具事件流）── -->
+      <aside class="dev-panel" id="dev-panel" aria-label="开发面板">
+        <div class="dev-head">
+          <span class="dev-title">🔧 开发面板</span>
+          <button type="button" class="dev-collapse" id="dev-collapse" title="折叠面板">»</button>
+        </div>
+        <div class="dev-role">
+          <div class="dev-role-pills">
+            <button type="button" class="dev-pill active" id="dev-role-assist" title="AI 只是帮忙检查漏洞，和回答问题">人主机辅</button>
+            <button type="button" class="dev-pill" id="dev-role-lead" title="AI 干活，用户用来监督和观察">机主人辅</button>
+          </div>
+          <p class="dev-role-desc" id="dev-role-desc">人主机辅：AI 只是帮忙检查漏洞，和回答问题</p>
+        </div>
+        <div class="dev-body">
+          <div class="dev-empty" id="dev-empty">欣赏一下干净的工作区</div>
+          <div class="dev-active" id="dev-active" hidden>
+            <p class="dev-active-heading"><span class="dev-pulse" id="dev-active-dot"></span>正在编辑</p>
+            <div class="dev-active-file" id="dev-active-file" title=""></div>
+          </div>
+          <div class="dev-feed" id="dev-feed"></div>
+        </div>
+      </aside>
+      <aside class="dev-rail" id="dev-rail" hidden title="展开开发面板">
+        <span class="dev-rail-dot" id="dev-rail-dot"></span>
+        <span class="dev-rail-label" id="dev-rail-label">开发</span>
+      </aside>
       </div>
 
     <!-- ── 设置中心（v3.12.2：左导航 + 右内容）── -->
