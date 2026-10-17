@@ -189,6 +189,25 @@ async function runVmSmokeTests() {
       set() { return true; }
     });
   }
+  /** 子树选择器匹配（.class / #id / tag 三形态；v3.24.5 H 组思考块子树查询需要） */
+  function elementMatches(el, sel) {
+    const raw = String(sel || "").trim();
+    if (!raw || !el || typeof el !== "object") return false;
+    if (raw.startsWith(".")) return String(el.className || "").split(/\s+/).includes(raw.slice(1));
+    if (raw.startsWith("#")) return String(el.id || "") === raw.slice(1);
+    return String(el.tagName || "").toUpperCase() === raw.toUpperCase();
+  }
+  function querySubtree(root, sel, collectAll) {
+    const found = [];
+    const walk = (node) => {
+      for (const child of node.children || []) {
+        if (elementMatches(child, sel)) { found.push(child); if (!collectAll) return; }
+        walk(child);
+      }
+    };
+    walk(root);
+    return collectAll ? found : (found[0] || null);
+  }
   function makeFakeEl() {
     const classes = new Set();
     const children = [];
@@ -211,9 +230,14 @@ async function runVmSmokeTests() {
       addEventListener() {}, removeEventListener() {}, dispatchEvent() { return true; },
       setAttribute() {}, getAttribute: () => "", removeAttribute() {}, hasAttribute: () => false, toggleAttribute: () => false,
       insertAdjacentHTML() {}, insertAdjacentElement: () => null, hasChildNodes() { return children.length > 0; },
-      append() {}, prepend() {}, appendChild(node) { children.push(node); return node; },
-      replaceChildren() {}, closest() { return null; }, contains() { return false; },
-      before() {}, querySelector: () => null, querySelectorAll: () => [],
+      append(...nodes) { for (const node of nodes) children.push(node); },
+      prepend(...nodes) { for (const node of nodes) children.unshift(node); },
+      appendChild(node) { children.push(node); return node; },
+      replaceChildren(...nodes) { children.length = 0; children.push(...nodes); },
+      before(...nodes) { for (const node of nodes) children.push(node); },
+      closest() { return null; }, contains() { return false; },
+      querySelector(sel) { return querySubtree({ children }, sel, false); },
+      querySelectorAll(sel) { return querySubtree({ children }, sel, true); },
       focus() {}, blur() {}, select() {}, remove() {}, click() {}, scrollIntoView() {}, scrollBy() {}, scrollTo() {}, setSelectionRange() {},
       showModal() {}, close() {}, show() {}, showPicker() {},
       getBoundingClientRect() { return { top: 0, left: 0, right: 0, bottom: 0, width: 0, height: 0 }; }
@@ -297,7 +321,7 @@ async function runVmSmokeTests() {
   sandbox.globalThis = sandbox;
 
   const vm = require("vm");
-  const source = rendererSrc + "\n;globalThis.__acpSmoke = { collectClampedFields, ADV_FIELD_LABELS };";
+  const source = rendererSrc + "\n;globalThis.__acpSmoke = { collectClampedFields, ADV_FIELD_LABELS, ensureThinkingBlock, appendThinkingDelta, finalizeThinkingSummary, renderStaticThinking, thinkDepthLabel, THINK_DEPTH_TIERS };";
   await test("D1 renderer.js vm 假 DOM 全量求值零异常（v3.24.4 新代码含在内）", () => {
     let error = null;
     try { vm.createContext(sandbox); vm.runInContext(source, sandbox, { filename: "renderer.js" }); }
@@ -327,6 +351,77 @@ async function runVmSmokeTests() {
     ));
     assert.deepStrictEqual(fixed2, []);
   });
+
+/* ── H 组（v3.24.5）：思考块元信息（⏱ 耗时 + 🧠 程度标签，豆包同款五档） ── */
+
+async function runThinkMetaTests() {
+  console.log("── H 组：思考块元信息（耗时+程度标签） ──");
+
+  await test("H1 五档映射全表（豆包同款五标签不自创，字数边界+非数字安全）", () => {
+    const label = sandbox.__acpSmoke.thinkDepthLabel;
+    assert.strictEqual(label(0), "little thinking");
+    assert.strictEqual(label(499), "little thinking");
+    assert.strictEqual(label(500), "thinking");
+    assert.strictEqual(label(1999), "thinking");
+    assert.strictEqual(label(2000), "thinking more");
+    assert.strictEqual(label(4999), "thinking more");
+    assert.strictEqual(label(5000), "thinking most");
+    assert.strictEqual(label(14999), "thinking most");
+    assert.strictEqual(label(15000), "thinking continuously");
+    assert.strictEqual(label(99999), "thinking continuously");
+    assert.strictEqual(label("abc"), "little thinking", "非数字安全回最低档");
+    assert.deepStrictEqual(Array.from(sandbox.__acpSmoke.THINK_DEPTH_TIERS.map((t) => t.min)), [15000, 5000, 2000, 500, 0], "档位阈值守卫");
+  });
+
+  await test("H2 流式增量：建块累计字数+进行中+起止时刻记录", () => {
+    const item = getFake("#h2-item");
+    sandbox.__acpSmoke.appendThinkingDelta(item, "思考第一段。");
+    sandbox.__acpSmoke.appendThinkingDelta(item, "续上第二段。");
+    const block = item.querySelector(".thinking-block");
+    assert.ok(block, "应建折叠块");
+    assert.strictEqual(block.tagName, "DETAILS");
+    const summary = block.querySelector("summary").textContent;
+    assert.ok(summary.includes("12 字"), `累计字数：${summary}`);
+    assert.ok(summary.includes("进行中"), "流式期间显示进行中");
+    assert.ok(block.dataset.thinkT0 && block.dataset.thinkT1, "应记录起止时刻");
+    assert.ok(Number(block.dataset.thinkT1) >= Number(block.dataset.thinkT0), "末时刻不早于起点");
+  });
+
+  await test("H3 定稿收敛：⏱ 耗时（一位小数）+ 🧠 程度 + 进行中消失", () => {
+    const item = getFake("#h3-item");
+    sandbox.__acpSmoke.appendThinkingDelta(item, "一点思考。");
+    const block = item.querySelector(".thinking-block");
+    block.dataset.thinkT1 = String(Number(block.dataset.thinkT0) + 8300);
+    sandbox.__acpSmoke.finalizeThinkingSummary(item);
+    const text = item.querySelector(".thinking-block").querySelector("summary").textContent;
+    assert.ok(!text.includes("进行中"), "定稿后不应有进行中");
+    assert.ok(text.includes("⏱ 8.3s"), `应含耗时：${text}`);
+    assert.ok(text.includes("🧠 little thinking"), "5 字应最低档");
+    assert.ok(text.includes("5 字"), "字数保留");
+  });
+
+  await test("H4 静态重放：字数+程度在册、无耗时段与进行中", () => {
+    const item = getFake("#h4-item");
+    sandbox.__acpSmoke.renderStaticThinking(item, "落库的历史思考文本九个字哦");
+    const text = item.querySelector(".thinking-block").querySelector("summary").textContent;
+    assert.ok(text.includes("13 字"), `字数：${text}`);
+    assert.ok(text.includes("thinking"), "程度标签在册");
+    assert.ok(!text.includes("⏱"), "落库无耗时段");
+    assert.ok(!text.includes("进行中"), "静态无进行中");
+  });
+
+  await test("H5 大字数最高档 + 空白思考不渲染", () => {
+    const item = getFake("#h5-item");
+    sandbox.__acpSmoke.renderStaticThinking(item, "云".repeat(20000));
+    const text = item.querySelector(".thinking-block").querySelector("summary").textContent;
+    assert.ok(text.includes("thinking continuously"), "2 万字应最高档");
+    const empty = getFake("#h5-empty");
+    sandbox.__acpSmoke.renderStaticThinking(empty, "   ");
+    assert.ok(!empty.querySelector(".thinking-block"), "空白思考不渲染");
+  });
+}
+
+  await runThinkMetaTests();
 }
 
 /* ── E 组：saveSettings 集成链真测（mock electron 真实 IO，复刻 v3-19-0 手法） ── */
@@ -423,8 +518,8 @@ async function runRegressionGuardTests() {
   await runVmSmokeTests();
   await runIntegrationTests();
   await runRegressionGuardTests();
-  await test("G1 package.json 版本 = 3.24.4", () => {
-    assert.strictEqual(pkg.version, "3.24.4");
+  await test("G1 package.json 版本 = 3.24.5", () => {
+    assert.strictEqual(pkg.version, "3.24.5");
   });
   console.log(`\n=== test-v3-24-4.cjs：${passed} 通过 / ${failed} 失败 ===`);
   if (failures.length) { console.log(failures.map((item) => `  ✗ ${item}`).join("\n")); process.exitCode = 1; }

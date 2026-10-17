@@ -893,6 +893,20 @@ function stripSeparatorLines(text) {
 
 /* ── v3.24.0 思考过程折叠块 + AI 选择题提问卡片 ── */
 
+/** v3.24.5 思考程度标签（豆包同款五档、不自创）：模型原生思考流无程度元数据，按思考字数启发式映射 */
+const THINK_DEPTH_TIERS = [
+  { min: 15000, label: "thinking continuously" },
+  { min: 5000, label: "thinking most" },
+  { min: 2000, label: "thinking more" },
+  { min: 500, label: "thinking" },
+  { min: 0, label: "little thinking" }
+];
+
+function thinkDepthLabel(words) {
+  const n = Number(words) || 0;
+  return (THINK_DEPTH_TIERS.find((tier) => n >= tier.min) || THINK_DEPTH_TIERS[THINK_DEPTH_TIERS.length - 1]).label;
+}
+
 /** 确保 assistant 气泡有思考折叠块（挂正文正上方；工具牌区仍在最上、plan 面板位置不变） */
 function ensureThinkingBlock(item) {
   const content = item.querySelector(".message-content");
@@ -910,33 +924,42 @@ function ensureThinkingBlock(item) {
   return block;
 }
 
-/** 流式思考增量（chat:event type:"thinking"）：折叠块正文追加 + 计数标题刷新 */
+/** 流式思考增量（chat:event type:"thinking"）：折叠块正文追加 + 计数标题刷新；v3.24.5 记思考流起止时刻（真耗时测思考时窗，不含正文输出） */
 function appendThinkingDelta(item, text) {
   if (!item || !text) return;
   const block = ensureThinkingBlock(item);
   const body = block.querySelector(".thinking-body");
   body.textContent += String(text);
+  const now = performance.now();
+  if (!block.dataset.thinkT0) block.dataset.thinkT0 = String(now);
+  block.dataset.thinkT1 = String(now);
   block.querySelector("summary").textContent = `💭 思考过程（${body.textContent.length} 字 · 进行中…）`;
   if (isNearBottom()) elements.messages.scrollTop = elements.messages.scrollHeight;
 }
 
-/** 静态思考块渲染（历史重放 msg.thinking；标题无「进行中」字样） */
+/** 静态思考块渲染（历史重放 msg.thinking；落库无耗时 → 标题只带字数+程度） */
 function renderStaticThinking(item, thinking) {
   const value = String(thinking || "");
   if (!value.trim()) return;
   const block = ensureThinkingBlock(item);
   const body = block.querySelector(".thinking-body");
   body.textContent = value;
-  block.querySelector("summary").textContent = `💭 思考过程（${value.length} 字）`;
+  block.querySelector("summary").textContent = `💭 思考过程（${value.length} 字 · 🧠 ${thinkDepthLabel(value.length)}）`;
 }
 
-/** turn 终态：把「进行中…」字样收敛为定稿计数（不再追加内容） */
+/** turn 终态：把「进行中…」字样收敛为定稿计数 + v3.24.5 元信息（⏱ 耗时=首末思考增量时窗差，一位小数；无时间数据时省略耗时段） */
 function finalizeThinkingSummary(item) {
   if (!item) return;
   const block = item.querySelector(".thinking-block");
   if (!block) return;
   const body = block.querySelector(".thinking-body");
-  if (body && body.textContent) block.querySelector("summary").textContent = `💭 思考过程（${body.textContent.length} 字）`;
+  if (!body || !body.textContent) return;
+  const words = body.textContent.length;
+  const t0 = Number(block.dataset.thinkT0);
+  const t1 = Number(block.dataset.thinkT1);
+  const secs = Number.isFinite(t0) && Number.isFinite(t1) && t1 >= t0 ? Number(((t1 - t0) / 1000).toFixed(1)) : null;
+  const elapsed = secs !== null ? ` · ⏱ ${secs}s` : "";
+  block.querySelector("summary").textContent = `💭 思考过程（${words} 字${elapsed} · 🧠 ${thinkDepthLabel(words)}）`;
 }
 
 /** 选择题卡片构建（云端 ipc 应答 / SSH 近似回发两个通道共用骨架；disabled=历史定格） */
