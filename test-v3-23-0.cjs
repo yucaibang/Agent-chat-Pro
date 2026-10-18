@@ -353,7 +353,7 @@ async function runMeshFallbackTests() {
     assert.strictEqual(spawnCalls[1].exe, "C:\\n2n\\edge.exe", `第二次应为兜底绝对路径，实际 ${spawnCalls[1].exe}`);
     assert.ok(logs.includes("n2n_mesh_edge_fallback"), `应记 fallback 日志事件：${JSON.stringify(logs)}`);
     const argStr = spawnCalls[1].args.join(" ");
-    assert.ok(argStr.includes("entry.example.org:0") && argStr.includes("demo-community"), `兜底实例参数完整：${argStr}`);
+    assert.ok(argStr.includes("entry.example.org:53371") && argStr.includes("demo-community"), `兜底实例参数完整：${argStr}`);
   });
 
   await test("C2 兜底不可用（fs.exists false）→ 保留一键部署指引文案", async () => {

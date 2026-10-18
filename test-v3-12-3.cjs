@@ -1,7 +1,7 @@
 "use strict";
 /**
  * v3.12.3 测试 — N2N 传输模式自动兼容（UDP 失败自动降级 TCP -S2）
- * 背景：NAS supernode 经 FRP TCP 隧道（entry.example.org:0）暴露公网入口，
+ * 背景：NAS supernode 经 FRP TCP 隧道（entry.example.org:53371）暴露公网入口，
  *       UDP 包无法进入 TCP 隧道 → edge 默认 UDP 模式连不上 → 需 -S2 TCP 模式。
  *       用户要求自动兼容：UDP 失败自动降级 TCP，成功模式按入口缓存。
  */
