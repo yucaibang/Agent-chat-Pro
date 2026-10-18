@@ -66,7 +66,7 @@ const ADVANCED_ADAPTERS = ["claude", "atomcode", "qwen", "codex", "hermes"];
 
 const ADVANCED_DEFAULTS = {
   ssh: { requestTimeoutMin: 30, connectTimeoutSec: 15, sftpTimeoutSec: 30, reconnectAttempts: 3, reconnectBaseMs: 600, keepaliveSec: 15, debugLog: false },
-  cloud: { connectTimeoutSec: 120, streamIdleTimeoutSec: 300, maxRetries: 0, maxToolRounds: 25 }
+  cloud: { connectTimeoutSec: 120, streamIdleTimeoutSec: 300, maxRetries: 0, maxToolRounds: 25, maxTokens: 8192 }
 };
 
 const ADVANCED_CLAMPS = {
@@ -82,6 +82,7 @@ const ADVANCED_CLAMPS = {
     connectTimeoutSec: [10, 300],       // 云端连接超时（秒）；现状 req.setTimeout 120
     streamIdleTimeoutSec: [60, 1800],   // 流式空闲超时（秒）；现状响应级 300000ms
     maxRetries: [0, 3],                 // 失败自动重试（仅幂等码 429/5xx）；现状 0
+    maxTokens: [4096, 32000],           // 服务商请求体 max_tokens 上限（v3.24.9 新增；旧版硬编码 4096 免费档常被截断且无提示——输出截断自动续写修复的配套可配项）
     maxToolRounds: [5, 10000]           // 工具循环轮数上限；现状 MAX_TOOL_ROUNDS 25（v3.24.4 需求②：上限 50→10000 实际取消限制，默认 25 不变）
   }
 };

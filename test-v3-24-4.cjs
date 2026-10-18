@@ -61,7 +61,7 @@ async function runSanitizeTests() {
       { connectTimeoutSec: 60, streamIdleTimeoutSec: 600, maxRetries: 2, maxToolRounds: 30 },
       advancedFns.ADVANCED_CLAMPS.cloud, advancedFns.ADVANCED_DEFAULTS.cloud
     );
-    assert.deepStrictEqual(out, { connectTimeoutSec: 60, streamIdleTimeoutSec: 600, maxRetries: 2, maxToolRounds: 30 });
+    assert.deepStrictEqual(out, { connectTimeoutSec: 60, streamIdleTimeoutSec: 600, maxRetries: 2, maxToolRounds: 30, maxTokens: 8192 }, "v3.24.9：钳表新增 maxTokens 补默认 8192");
   });
 
   await test("A3 超上界钳到边界：轮次 15000→10000（旧版整组回 null 洗出面板）；组保持手动", () => {
@@ -98,7 +98,7 @@ async function runSanitizeTests() {
       { streamIdleTimeoutSec: 600 },
       advancedFns.ADVANCED_CLAMPS.cloud, advancedFns.ADVANCED_DEFAULTS.cloud
     );
-    assert.deepStrictEqual(missing, { connectTimeoutSec: 120, streamIdleTimeoutSec: 600, maxRetries: 0, maxToolRounds: 25 }, "缺失字段补默认且组仍输出对象");
+    assert.deepStrictEqual(missing, { connectTimeoutSec: 120, streamIdleTimeoutSec: 600, maxRetries: 0, maxToolRounds: 25, maxTokens: 8192 }, "缺失字段补默认且组仍输出对象（v3.24.9 含 maxTokens 默认）");
   });
 
   await test("A6 整组缺失/非对象回 null（自动识别）；显式 null 恢复自动语义保留", () => {
@@ -120,7 +120,8 @@ async function runSanitizeTests() {
     assert.ok(result.ssh && typeof result.ssh === "object", "SSH 组应保持手动（旧版整组回 null）");
     assert.strictEqual(result.ssh.requestTimeoutMin, 10, "越下界钳到 10");
     assert.strictEqual(result.ssh.debugLog, true, "布尔开关保留");
-    assert.deepStrictEqual(result.cloud, { connectTimeoutSec: 60, streamIdleTimeoutSec: 600, maxRetries: 2, maxToolRounds: 30 }, "云端组合法原值");
+    // v3.24.9：钳表新增 maxTokens——未传补默认 8192，一并展开
+    assert.deepStrictEqual(result.cloud, { connectTimeoutSec: 60, streamIdleTimeoutSec: 600, maxRetries: 2, maxToolRounds: 30, maxTokens: 8192 }, "云端组合法原值");
   });
 
   await test("A8 未提交分组继承 previous（saveSettings 全量语义不受新语义影响）", () => {
@@ -670,7 +671,8 @@ async function runIntegrationTests() {
       advanced: { cloud: { connectTimeoutSec: 90, streamIdleTimeoutSec: 60000, maxRetries: 9, maxToolRounds: 15000 } }
     });
     const c = saved.advanced.cloud;
-    assert.deepStrictEqual(c, { connectTimeoutSec: 90, streamIdleTimeoutSec: 1800, maxRetries: 3, maxToolRounds: 10000 }, "逐字段钳到边界且组保持手动");
+    // v3.24.9：maxTokens 未传补默认 8192（字段级「缺失/非整数补默认」语义同款）
+    assert.deepStrictEqual(c, { connectTimeoutSec: 90, streamIdleTimeoutSec: 1800, maxRetries: 3, maxToolRounds: 10000, maxTokens: 8192 }, "逐字段钳到边界且组保持手动");
   });
 
   await test("E3 自动识别与显式 null：默认档自动 + 恢复自动语义零回归", () => {

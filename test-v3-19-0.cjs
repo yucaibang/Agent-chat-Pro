@@ -101,8 +101,9 @@ async function runAdvancedSettingsTests() {
       reconnectAttempts: 3, reconnectBaseMs: 600, keepaliveSec: 15, debugLog: false
     }, "SSH 默认=现状硬编码实锤");
     assert.deepStrictEqual(eff.cloud, {
-      connectTimeoutSec: 120, streamIdleTimeoutSec: 300, maxRetries: 0, maxToolRounds: 25
-    }, "云端默认=现状硬编码实锤");
+      connectTimeoutSec: 120, streamIdleTimeoutSec: 300, maxRetries: 0, maxToolRounds: 25,
+      maxTokens: 8192 // v3.24.9 新增：输出上限 tokens 默认 8192（旧版硬编码 4096 已提升）
+    }, "云端默认=现状硬编码实锤（v3.24.9 增 maxTokens）");
     assert.deepStrictEqual(eff.external.n2n, { cipher: "", compression: "", protocol: "", headerEncryption: false });
   });
 
@@ -120,7 +121,8 @@ async function runAdvancedSettingsTests() {
     assert.strictEqual(eff.sftpTimeoutSec, undefined, "字段只按白名单展开");
     // external 展开为 {n2n:{...}} 嵌套（见下一条 deepStrictEqual）
     assert.deepStrictEqual(eff.external, { n2n: { cipher: "A4", compression: "zstd", protocol: "tcp", headerEncryption: true } });
-    assert.deepStrictEqual(eff.cloud, { connectTimeoutSec: 60, streamIdleTimeoutSec: 600, maxRetries: 2, maxToolRounds: 30 });
+    // v3.24.9：云端组钳表新增 maxTokens——未传补默认 8192，一并展开
+    assert.deepStrictEqual(eff.cloud, { connectTimeoutSec: 60, streamIdleTimeoutSec: 600, maxRetries: 2, maxToolRounds: 30, maxTokens: 8192 });
     assert.strictEqual(eff.adapter, "qwen");
     assert.deepStrictEqual(eff.adapterOptions, { model: "qwen3-max", sandbox: "", provider: "openrouter" });
     const raw = JSON.parse(fs.readFileSync(targetFile, "utf8"));

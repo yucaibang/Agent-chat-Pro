@@ -299,6 +299,7 @@ function advCloudPatch() {
     cloud: {
       connectTimeoutSec: advFieldValue("#adv-cloud-connect-timeout", 120),
       streamIdleTimeoutSec: advFieldValue("#adv-cloud-stream-idle", 300),
+      maxTokens: advFieldValue("#adv-cloud-max-tokens", 8192),
       maxRetries: advFieldValue("#adv-cloud-max-retries", 0),
       maxToolRounds: advFieldValue("#adv-cloud-tool-rounds", 25)
     }
@@ -308,7 +309,7 @@ function advCloudPatch() {
 /** v3.24.4 修复①：对比 patch 与落盘值，收集被边界钳制的数字字段（中文标签如实告知） */
 const ADV_FIELD_LABELS = {
   ssh: { requestTimeoutMin: "请求超时", connectTimeoutSec: "连接超时", sftpTimeoutSec: "SFTP 超时", reconnectAttempts: "重试次数", reconnectBaseMs: "退避基数", keepaliveSec: "保活间隔" },
-  cloud: { connectTimeoutSec: "连接超时", streamIdleTimeoutSec: "流式空闲超时", maxRetries: "重试次数", maxToolRounds: "工具循环轮次" }
+  cloud: { connectTimeoutSec: "连接超时", streamIdleTimeoutSec: "流式空闲超时", maxRetries: "重试次数", maxToolRounds: "工具循环轮次", maxTokens: "输出上限 tokens" }
 };
 
 function collectClampedFields(patch, advanced) {
@@ -397,6 +398,7 @@ function renderAdvancedPanels(settings) {
   const effCloud = effective.cloud || {};
   document.querySelector("#adv-cloud-connect-timeout").value = advanced.cloud?.connectTimeoutSec ?? effCloud.connectTimeoutSec ?? 120;
   document.querySelector("#adv-cloud-stream-idle").value = advanced.cloud?.streamIdleTimeoutSec ?? effCloud.streamIdleTimeoutSec ?? 300;
+  document.querySelector("#adv-cloud-max-tokens").value = advanced.cloud?.maxTokens ?? effCloud.maxTokens ?? 8192;
   document.querySelector("#adv-cloud-max-retries").value = advanced.cloud?.maxRetries ?? effCloud.maxRetries ?? 0;
   document.querySelector("#adv-cloud-tool-rounds").value = advanced.cloud?.maxToolRounds ?? effCloud.maxToolRounds ?? 25;
   setAdvBadge("cloud", advanced.cloud ? "手动" : "自动识别", Boolean(advanced.cloud));
@@ -877,11 +879,12 @@ async function renderAssistant(item, text) {
 }
 
 // v3.21.3 修复②：跨轮徽标（历史不做轮次重建——工具牌连排天然分组；本轮流式实时插入）
-function appendRoundMark(answer, round) {
+function appendRoundMark(answer, round, mark) {
   if (!answer) return;
   const node = document.createElement("div");
-  node.className = "round-mark";
-  node.textContent = `— 第 ${Number(round) || 1} 轮工具 —`;
+  node.className = "round-mark" + (mark ? " round-mark--notice" : "");
+  // v3.24.9：可选自定义文案（截断自动续写提示）；缺省仍是轮次徽标
+  node.textContent = mark ? String(mark) : `— 第 ${Number(round) || 1} 轮工具 —`;
   answer.append(node);
   if (isNearBottom()) elements.messages.scrollTop = elements.messages.scrollHeight;
 }
@@ -3407,7 +3410,8 @@ window.agentChatPro.onChatEvent((event) => {
     if (isNearBottom()) elements.messages.scrollTop = elements.messages.scrollHeight;
   } else if (event.type === "round" && answer) {
     // v3.21.3 修复②：跨轮标记——主进程不再注入正文分隔线，这里画轻量轮次徽标
-    appendRoundMark(answer, event.round);
+    // v3.24.9：续写提示徽标（主进程截断续写时带 mark 自定义文案）
+    appendRoundMark(answer, event.round, event.mark);
   } else if (event.type === "thinking" && answer) {
     // v3.24.0 功能C：思考过程流式折叠块（云端 reasoning 流 + SSH/local claude 扩展思考透传共用通道）
     appendThinkingDelta(answer, event.text || "");

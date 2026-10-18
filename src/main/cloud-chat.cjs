@@ -62,7 +62,7 @@ function buildAnthropicBody(messages, options = {}) {
   const body = {
     model: options.model || "claude-sonnet-4-20250514",
     messages: anthropicMessages,
-    max_tokens: options.maxTokens || 4096,
+    max_tokens: options.maxTokens || 8192,
     stream: true
   };
   if (systemPrompt) body.system = systemPrompt;
@@ -106,6 +106,9 @@ function parseAnthropicSSE(line, callbacks) {
       return { toolUseStart: { index: parsed.index || 0, id: parsed.content_block.id || "", name: parsed.content_block.name || "" } };
     }
 
+    // v3.24.9：message_stop＝官方终结事件（即使未携带 stop_reason/usage 也是正常收尾标记）
+    if (eventType === "message_stop") return { endOfStream: true };
+
     if (eventType === "message_delta" && parsed.usage) {
       return { usage: { prompt_tokens: parsed.usage.input_tokens || 0, completion_tokens: parsed.usage.output_tokens || 0, total_tokens: (parsed.usage.input_tokens || 0) + (parsed.usage.output_tokens || 0) }, stopReason: parsed.delta?.stop_reason || "" };
     }
@@ -130,7 +133,7 @@ function buildChatBody(messages, options = {}) {
       return { role: msg.role, content: msg.text || msg.content || "" };
     }),
     stream: true,
-    max_tokens: options.maxTokens || 4096,
+    max_tokens: options.maxTokens || 8192,
     // v3.21.3 修复①：OpenAI 兼容流式默认不回 usage 块（token 计量只剩估算值）。
     // 标准字段 stream_options.include_usage 会让端点在最后一个 chunk 附带完整 usage；
     // 主流 OpenAI 兼容端点（智谱/DeepSeek/Kimi/OpenAI/Groq/硅基流动/豆包）均支持，未知字段在中转站一般被忽略。
@@ -311,6 +314,9 @@ function sendCloudChat(config, messages, callbacks = {}) {
       let lastUsage = null;
       let buffer = "";
       let stopReason = "";
+      // v3.24.9 收尾标记追踪：收到 finish_reason / message_stop(stop_reason) / [DONE] 任一即为正常收尾。
+      // 断流判定与「莫名其妙的停止」修复（close/end 分支据此区分「服务商正常结束」与「中途断流」）。
+      let sawFinish = false;
       const toolCallAccumulator = new Map(); // OpenAI：index → {id, name, arguments} 增量拼接
       const anthropicToolBlocks = new Map(); // Anthropic：index → {id, name, json}
 
@@ -320,13 +326,14 @@ function sendCloudChat(config, messages, callbacks = {}) {
 
         // 收到数据，重置响应超时
         clearTimeout(responseTimer);
+        // v3.24.9 修正：重置 timer 也用可配的空闲秒数（旧版写死 5 分钟——高级设置改短后收到数据仍要等满 5 分钟）
         responseTimer = setTimeout(() => {
           if (!settled) {
-            if (callbacks.onLog) callbacks.onLog("cloud_chat_response_timeout", { textLength: fullText.length });
+            if (callbacks.onLog) callbacks.onLog("cloud_chat_response_timeout", { textLength: fullText.length, streamIdleTimeoutMs });
             req.destroy();
-            safeReject(new Error("云端 AI 响应超时（超过 5 分钟未收到数据）。"));
+            safeReject(new Error(`云端 AI 响应空闲超过 ${Math.round(streamIdleTimeoutMs / 1000)} 秒未收到数据。`));
           }
-        }, 300000);
+        }, streamIdleTimeoutMs);
         responseTimer.unref();
 
         buffer += chunk.toString();
@@ -341,6 +348,7 @@ function sendCloudChat(config, messages, callbacks = {}) {
             // Anthropic Messages API SSE 格式
             const result = parseAnthropicSSE(trimmed, callbacks);
             if (result) {
+              if (result.endOfStream) sawFinish = true; // v3.24.9：message_stop 终结事件＝正常收尾标记
               if (result.delta) {
                 fullText += result.delta;
                 if (callbacks.onDelta) callbacks.onDelta(result.delta);
@@ -354,7 +362,7 @@ function sendCloudChat(config, messages, callbacks = {}) {
                 lastUsage = result.usage;
                 if (callbacks.onUsage) callbacks.onUsage(result.usage);
               }
-              if (result.stopReason) stopReason = result.stopReason;
+              if (result.stopReason) { stopReason = result.stopReason; sawFinish = true; }
               if (result.toolUseStart) {
                 anthropicToolBlocks.set(result.toolUseStart.index, { id: result.toolUseStart.id, name: result.toolUseStart.name, json: "" });
               }
@@ -367,7 +375,7 @@ function sendCloudChat(config, messages, callbacks = {}) {
             // OpenAI 兼容 SSE 格式
             if (!trimmed.startsWith("data:")) continue;
             const data = trimmed.slice(5).trim();
-            if (data === "[DONE]") continue;
+            if (data === "[DONE]") { sawFinish = true; continue; }
             try {
               const parsed = JSON.parse(data);
               const choice = parsed.choices?.[0];
@@ -394,7 +402,7 @@ function sendCloudChat(config, messages, callbacks = {}) {
                   toolCallAccumulator.set(index, existing);
                 }
               }
-              if (choice?.finish_reason) stopReason = choice.finish_reason;
+              if (choice?.finish_reason) { stopReason = choice.finish_reason; sawFinish = true; }
               if (parsed.usage && (parsed.usage.prompt_tokens || parsed.usage.completion_tokens || parsed.usage.total_tokens)) {
                 lastUsage = parsed.usage;
                 if (callbacks.onUsage) callbacks.onUsage(parsed.usage);
@@ -417,10 +425,11 @@ function sendCloudChat(config, messages, callbacks = {}) {
           if (anthropic) {
             const result = parseAnthropicSSE(trimmed, callbacks);
             if (result) {
+              if (result.endOfStream) sawFinish = true; // v3.24.9：end 残留处理的 message_stop 同样记收尾
               if (result.delta) fullText += result.delta;
               if (result.thinking) { fullReasoning += result.thinking; if (callbacks.onReasoning) callbacks.onReasoning(result.thinking); }
               if (result.usage) lastUsage = result.usage;
-              if (result.stopReason) stopReason = result.stopReason;
+              if (result.stopReason) { stopReason = result.stopReason; sawFinish = true; }
               if (result.toolUseStart) {
                 anthropicToolBlocks.set(result.toolUseStart.index, { id: result.toolUseStart.id, name: result.toolUseStart.name, json: "" });
               }
@@ -432,6 +441,7 @@ function sendCloudChat(config, messages, callbacks = {}) {
           } else {
             if (trimmed.startsWith("data:")) {
               const data = trimmed.slice(5).trim();
+              if (data === "[DONE]") sawFinish = true; // v3.24.9：[DONE] 也是正常收尾标记（部分端点不发 finish_reason）
               if (data !== "[DONE]") {
                 try {
                   const parsed = JSON.parse(data);
@@ -450,7 +460,7 @@ function sendCloudChat(config, messages, callbacks = {}) {
                       toolCallAccumulator.set(index, existing);
                     }
                   }
-                  if (choice?.finish_reason) stopReason = choice.finish_reason;
+                  if (choice?.finish_reason) { stopReason = choice.finish_reason; sawFinish = true; }
                   if (parsed.usage && (parsed.usage.prompt_tokens || parsed.usage.completion_tokens || parsed.usage.total_tokens)) {
                     lastUsage = parsed.usage;
                   }
@@ -459,9 +469,17 @@ function sendCloudChat(config, messages, callbacks = {}) {
             }
           }
         }
-        if (callbacks.onLog) callbacks.onLog("cloud_chat_success", { textLength: fullText.length, usage: lastUsage, stopReason, toolCallCount: anthropic ? anthropicToolBlocks.size : toolCallAccumulator.size });
+        if (callbacks.onLog) callbacks.onLog("cloud_chat_success", { textLength: fullText.length, usage: lastUsage, stopReason, sawFinish, toolCallCount: anthropic ? anthropicToolBlocks.size : toolCallAccumulator.size });
         const toolCalls = anthropic ? assembleAnthropicToolCalls(anthropicToolBlocks) : assembleOpenAiToolCalls(toolCallAccumulator);
-        safeResolve({ text: fullText, reasoning: fullReasoning, usage: lastUsage, toolCalls, stopReason });
+        // v3.24.9「莫名其妙的停止」修复①：流自然结束但从没收到任何收尾标记（finish_reason/message_stop/[DONE]）
+        // ＝服务商端提前结束/上游截断。旧版把半截文本静默当「正常完成」落库，用户内容戛然而止且零提示。
+        const hasPartialContent = fullText.length > 0 || anthropicToolBlocks.size > 0 || toolCallAccumulator.size > 0;
+        if (!sawFinish && hasPartialContent) {
+          if (callbacks.onLog) callbacks.onLog("cloud_chat_ended_broken", { textLength: fullText.length, stopReason });
+          safeReject(new Error(`云端 AI 响应被服务商提前结束（已收 ${fullText.length} 字符但未收到正常收尾标记），内容可能不完整。可重试，或在设置中心调大「输出上限 tokens」。`));
+          return;
+        }
+        safeResolve({ text: fullText, reasoning: fullReasoning, usage: lastUsage, toolCalls, stopReason, endedCleanly: true });
       });
 
       res.on("error", (error) => {
@@ -473,18 +491,20 @@ function sendCloudChat(config, messages, callbacks = {}) {
       });
 
       // 兜底：连接被关闭但 end/error 都不触发时（代理/负载均衡器断开）
+      // v3.24.9「莫名其妙的停止」修复②：未收到任何收尾标记（finish_reason/message_stop/[DONE]）就关流
+      // ＝中途断流，有内容时不再静默按「正常完成」处理（旧版半截文本无提示直接落库）。
       res.on("close", () => {
         if (!settled) {
           if (cancelled) {
             safeResolve({ text: fullText, reasoning: fullReasoning, cancelled: true });
+          } else if (!sawFinish && fullText.length > 0) {
+            if (callbacks.onLog) callbacks.onLog("cloud_chat_close_abrupt", { textLength: fullText.length });
+            safeReject(new Error(`云端 AI 连接中途关闭（已收 ${fullText.length} 字符后断流，未收到正常收尾标记），请重试或稍后再试。`));
+          } else if (fullText.length > 0) {
+            if (callbacks.onLog) callbacks.onLog("cloud_chat_close_with_data", { textLength: fullText.length });
+            safeResolve({ text: fullText, reasoning: fullReasoning, usage: lastUsage, toolCalls: anthropic ? assembleAnthropicToolCalls(anthropicToolBlocks) : assembleOpenAiToolCalls(toolCallAccumulator), stopReason });
           } else {
-            // 流意外关闭但已收到部分数据 — 作为正常完成处理
-            if (fullText.length > 0) {
-              if (callbacks.onLog) callbacks.onLog("cloud_chat_close_with_data", { textLength: fullText.length });
-              safeResolve({ text: fullText, reasoning: fullReasoning, usage: lastUsage, toolCalls: anthropic ? assembleAnthropicToolCalls(anthropicToolBlocks) : assembleOpenAiToolCalls(toolCallAccumulator), stopReason });
-            } else {
-              safeReject(new Error("云端 AI 连接意外关闭，未收到任何数据。"));
-            }
+            safeReject(new Error("云端 AI 连接意外关闭，未收到任何数据。"));
           }
         }
       });
@@ -652,4 +672,14 @@ function verifyCloudConnection(config, onLog) {
   });
 }
 
-module.exports = { sendCloudChat, buildMessages, verifyCloudConnection, friendlyError, testProxyConnectivity, buildChatBody, buildAnthropicBody, translateHttpError, accumulateUsage };
+/**
+ * v3.24.9：判断 stop_reason 是否为「输出上限截断」。
+ * 兼容各端点写法：OpenAI 系 finish_reason=max_tokens/length、Anthropic 系 stop_reason=max_tokens，
+ * 以及中转站变体（大小写不敏感）。主进程工具循环据此自动续写（上限 3 段），不再静默截断。
+ */
+function isTruncatedStopReason(stopReason) {
+  const s = String(stopReason || "").trim().toLowerCase();
+  return s === "max_tokens" || s === "length" || s === "maxoutputtokens" || s === "token_limit" || s === "max_tokens_reached";
+}
+
+module.exports = { sendCloudChat, buildMessages, verifyCloudConnection, friendlyError, testProxyConnectivity, buildChatBody, buildAnthropicBody, translateHttpError, accumulateUsage, isTruncatedStopReason };

@@ -956,6 +956,14 @@ textarea { resize: vertical; min-height: 60px; }
   opacity: .85;
 }
 [data-theme="light"] .round-mark { opacity: .7; }
+/* v3.24.9：截断自动续写提示徽标——更醒目（琥珀色+正字重），与常规轮次徽标区分 */
+.round-mark--notice {
+  color: #e7a84c;
+  letter-spacing: normal;
+  font-weight: 600;
+  opacity: 1;
+}
+[data-theme="light"] .round-mark--notice { color: #b45309; opacity: 1; }
 
 /* ── v3.23.0 N2N 体检 + 一键部署 ── */
 .n2n-tools { margin-top: 10px; display: flex; flex-direction: column; gap: 8px; }

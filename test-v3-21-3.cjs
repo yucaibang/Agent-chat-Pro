@@ -88,7 +88,8 @@ async function runMainTests() {
   const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, "package.json"), "utf8"));
 
   await test("B1. main.cjs 引入 accumulateUsage", () => {
-    assert.ok(src.includes("accumulateUsage } = require(\"./cloud-chat.cjs\")"));
+    // v3.24.9：解构尾部新增 isTruncatedStopReason（截断自动续写判定）
+    assert.ok(src.includes("isTruncatedStopReason } = require(\"./cloud-chat.cjs\")"));
   });
 
   await test("B2. emitRoundSeparator 不再污染正文（无 --- 拼接 streamedText）+ 改推 round 事件", () => {
@@ -349,7 +350,7 @@ async function runSmokeTests() {
     const patch = sandbox.__acpSmoke.advCloudPatch();
     assert.deepStrictEqual(
       JSON.stringify(Object.keys(patch.cloud).sort()),
-      JSON.stringify(["connectTimeoutSec", "maxRetries", "maxToolRounds", "streamIdleTimeoutSec"]));
+      JSON.stringify(["connectTimeoutSec", "maxRetries", "maxTokens", "maxToolRounds", "streamIdleTimeoutSec"])); // v3.24.9 新增 maxTokens 字段
     // 空 DOM（默认 fallback）→ 四字段全合法，40 填入后读 40
     getFake("#adv-cloud-tool-rounds").value = "40";
     const patch40 = sandbox.__acpSmoke.advCloudPatch();

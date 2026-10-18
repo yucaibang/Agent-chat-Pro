@@ -23,7 +23,11 @@ const SETTINGS_PATH = path.join(ROOT, "src", "main", "settings.cjs");
 const PRELOAD_PATH = path.join(ROOT, "src", "main", "preload.cjs");
 const RENDERER_PATH = path.join(ROOT, "src", "renderer", "renderer.js");
 const HTML_PATH = path.join(ROOT, "src", "renderer", "index.html");
-const NAS_SANDBOX_BUILD = "/data/172GB/agent/sandbox/build";
+// v3.24.9 清洗对齐说明：宿主测试基建路径（无 IP/用户名/机器名指纹，非部署拓扑）仅对本机环境级断言有意义——
+// 公开仓库/其他机器跑=目录不存在时⊘跳过；用 ACP_SANDBOX_BUILD 环境变量可在任意环境注入。
+const NAS_SANDBOX_BUILD = process.env.ACP_SANDBOX_BUILD || "/vol2/1000/172GB/agent/sandbox/build";
+const hasSandboxBuild = fs.existsSync(path.join(NAS_SANDBOX_BUILD, "docker-compose.yml"))
+  && fs.existsSync(path.join(NAS_SANDBOX_BUILD, "Dockerfile"));
 const PACKAGE_PATH = path.join(ROOT, "package.json");
 
 let passed = 0;
@@ -256,6 +260,7 @@ async function runWiringTests() {
 
 async function runNasEnvironmentTests() {
   await test("C1 NAS compose：容器名固定 sandbox + internal 隔离网 + 工作卷挂载 + 自启策略", () => {
+    if (!hasSandboxBuild) { console.log("  ⊘ 环境无沙箱 build 目录（非 NAS 装机环境），已跳过"); return; }
     const compose = fs.readFileSync(path.join(NAS_SANDBOX_BUILD, "docker-compose.yml"), "utf8");
     assert.ok(compose.includes("container_name: sandbox"), "容器名非固定 sandbox");
     assert.ok(compose.includes("internal: true"), "隔离网络应 internal（无外网出口）");
@@ -264,6 +269,7 @@ async function runNasEnvironmentTests() {
   });
 
   await test("C2 NAS Dockerfile：node20/py3 基底 + 常用 CLI 清单", () => {
+    if (!hasSandboxBuild) { console.log("  ⊘ 环境无沙箱 build 目录（非 NAS 装机环境），已跳过"); return; }
     const dockerfile = fs.readFileSync(path.join(NAS_SANDBOX_BUILD, "Dockerfile"), "utf8");
     assert.ok(dockerfile.includes("node:20-slim"), "应基于 node20-slim");
     assert.ok(dockerfile.includes("python3"), "缺 python3");

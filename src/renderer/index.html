@@ -764,8 +764,9 @@
                   <label>流式空闲超时（秒）<input type="number" id="adv-cloud-stream-idle" min="60" max="1800" step="1" /></label>
                   <label>失败自动重试次数<input type="number" id="adv-cloud-max-retries" min="0" max="3" step="1" /></label>
                   <label>工具循环轮次上限<input type="number" id="adv-cloud-tool-rounds" min="5" max="10000" step="1" /></label>
+                  <label>输出上限 tokens<input type="number" id="adv-cloud-max-tokens" min="4096" max="32000" step="512" /></label>
                 </div>
-                <p class="field-hint">流式空闲超时 = 云端回复多少秒无新内容才判定断流；自动重试仅对幂等错误码（429/5xx）生效；工具循环轮次 = 云端模式单轮对话里工具最多执行多少步。</p>
+                <p class="field-hint">流式空闲超时 = 云端回复多少秒无新内容才判定断流；自动重试仅对幂等错误码（429/5xx）生效；工具循环轮次 = 云端模式单轮对话里工具最多执行多少步；输出上限 tokens = 服务商单次回复的 max_tokens（旧版 4096 常被截断，截断后会自动续写、最多 3 段）。</p>
                 <div class="adv-actions">
                   <button type="button" id="adv-cloud-manual" class="secondary">切换为手动</button>
                   <button type="button" id="adv-cloud-auto" class="secondary">恢复自动</button>

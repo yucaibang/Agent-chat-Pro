@@ -53,7 +53,7 @@ const { NetworkManager, STATES } = require("./network/network-manager.cjs");
 const { LatencyMonitor } = require("./network/latency-monitor.cjs");
 // v3.23.0 N2N 体检 + 一键部署（检测哪坏、缺哪补哪、stderr 上屏）
 const { runN2nDoctor, runN2nDeploy } = require("./network/n2n-doctor.cjs");
-const { sendCloudChat, buildMessages, verifyCloudConnection, testProxyConnectivity, accumulateUsage } = require("./cloud-chat.cjs");
+const { sendCloudChat, buildMessages, verifyCloudConnection, testProxyConnectivity, accumulateUsage, isTruncatedStopReason } = require("./cloud-chat.cjs");
 // v3.21.0 云端「拉取模型列表」：官方 GET /models 实时拉取该密钥可用的全部模型
 const { fetchProviderModels } = require("./cloud-models.cjs");
 const { executeToolCall, toolDefinitions, MAX_TOOL_ROUNDS } = require("./cloud-tools.cjs");
@@ -1136,7 +1136,10 @@ app.whenReady().then(async () => {
         apiKey: cloudConfig.apiKey,
         baseURL: cloudConfig.baseURL,
         model: cloudConfig.model || "glm-4-flash",
-        maxTokens: modeConfig?.maxTokens || cloudConfig.maxTokens || 4096,
+        // v3.24.9：输出上限 tokens 三级链（模式覆盖 → 服务商配置 → 设置中心高级设置；旧版末级硬编码 4096——
+        // 免费档服务商按此截断且旧版不检查 stopReason，正是「干活干到一半无提示就沉默」的主因之一）
+        maxTokens: modeConfig?.maxTokens || cloudConfig.maxTokens
+          || Number(cloudConfig.advancedEffective?.cloud?.maxTokens) || 8192,
         temperature: modeConfig?.hallucinationControl === "strict" ? 0.3 : modeConfig?.hallucinationControl === "creative" ? 0.9 : undefined,
         provider: cloudConfig.provider,
         proxy: cloudConfig.proxy,
@@ -1198,6 +1201,8 @@ app.whenReady().then(async () => {
               }
             : (result.usage || null)
         });
+        // v3.24.9：截断自动续写计数（续写块见循环内注释）
+        let autoContinues = 0;
         for (let round = 0; round <= maxToolRounds; round += 1) {
           // v3.21.3 修复②：round>0 时上一轮工具已执行完，推跨轮标记事件（首轮不推；不再注入正文分隔线）
           if (round > 0 && cloudCallbacks.emitRoundSeparator) cloudCallbacks.emitRoundSeparator(round);
@@ -1211,6 +1216,20 @@ app.whenReady().then(async () => {
             sendWorkStatusSignal(event.sender, "chat:event", { id, type: "usage", usage: { inputTokens: usageTotal.prompt, outputTokens: usageTotal.completion, totalTokens: usageTotal.total, cumulative: true, requests: usageTotal.requests } });
           }
           if (result.cancelled) return withCumulativeUsage({ ...result, tools: collectedTools });
+          // v3.24.9：「莫名其妙停止、没有任何提示」修复①——服务商输出上限截断自动续写。
+          // 旧版不检查 stopReason：max_tokens/length 截断时半截文本直接当「正常完成」落库（用户实锤），
+          // 且截断轮的 tool_calls 可能是断在半路的残缺 JSON（执行会污染任务）——统一不执行本轮工具直接续写。
+          if (isTruncatedStopReason(result.stopReason)) {
+            if (autoContinues < 3) {
+              autoContinues += 1;
+              writeLog("cloud_auto_continue", { requestId: id, round, autoContinues, stopReason: result.stopReason });
+              sendWorkStatusSignal(event.sender, "chat:event", { id, type: "round", round: round + 1, mark: `✂ 输出被截断（服务商输出上限），已自动续写（第 ${autoContinues} 段）` });
+              loopMessages = [...loopMessages, { role: "user", content: "继续（你上一条回复被输出上限截断，请从中断处续写，不要重复已输出的内容。）" }];
+              continue;
+            }
+            // 上限已达：给一条可见徽标（旧版这里是静默的第五条命案现场）
+            sendWorkStatusSignal(event.sender, "chat:event", { id, type: "round", round: round + 1, mark: "✂ 已自动续写 3 段仍被截断，停止续写——建议拆小任务，或在设置中心「云端模型设置」调大「输出上限 tokens」。" });
+          }
           const toolCalls = toolsEnabled ? (result.toolCalls || []) : [];
           if (!toolCalls.length) return withCumulativeUsage({ ...result, tools: collectedTools });
 
