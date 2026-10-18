@@ -36,8 +36,8 @@ const { spawn } = require("child_process");
 const EDGE_FALLBACK_DIR = "C:\\n2n";
 const EDGE_EXE_PATH = path.join(EDGE_FALLBACK_DIR, "edge.exe");
 
-/** 默认公网入口（用户未配置时体检用） */
-const DEFAULT_SUPERNODE = { addr: "entry.example.org", port: 53371 };
+/** 公网入口不内建任何预填（自 v3.25 起：未配置一律显示占位并跳过检查，
+ *  发布版仓库不携带部署者自己的 supernode 入口，改由用户在 N2N 参数区填写） */
 
 /** 内嵌工具包文件名（安装包 extraResources / 项目 build/n2n 各一份） */
 const N2N_ZIP_NAME = "n2n_v3_windows_x64_v3.1.1_r1255_static_by_heiye.zip";
@@ -272,22 +272,32 @@ async function runN2nDoctor(payload = {}, onItem = () => {}) {
       hint: isAdmin ? "" : "影响：装 TAP 驱动会弹 UAC 授权窗。连接 N2N 建议也以管理员启动应用（edge 开虚拟网卡需要权限），否则连接可能超时。"
     });
 
-    // 5 公网入口 TCP 连通（FRP 隧道层）
+    // 5 公网入口 TCP 连通（FRP 隧道层）——未配置一律 skip，不回落任何内建入口
     const input = payload?.n2n || {};
-    const addr = String(input.supernodeAddr || "").trim() || DEFAULT_SUPERNODE.addr;
-    const port = Number(input.supernodePort) || DEFAULT_SUPERNODE.port;
-    const reachable = await probeTcp(addr, port, 5000);
-    push({
-      id: "supernode",
-      title: "公网入口连通（隧道层）",
-      level: reachable ? "ok" : "fail",
-      detail: reachable
-        ? `${addr}:${port} TCP 可达（FRP 隧道在线）`
-        : `5 秒内连不上 ${addr}:${port}`,
-      hint: reachable
-        ? "TCP 可达只代表隧道层在线，N2N 应用层连通由实际连接验证。"
-        : "三种可能：① NAS 侧 n2n-supernode 或 FRPC 容器挂了（可让 Claude 连 SSH 帮查 docker ps）；② FRP 公网服务波动；③ 当前网络限制该端口（可换手机热点再试）。"
-    });
+    const addr = String(input.supernodeAddr || "").trim();
+    const port = Number(input.supernodePort) || 0;
+    if (addr && port > 0) {
+      const reachable = await probeTcp(addr, port, 5000);
+      push({
+        id: "supernode",
+        title: "公网入口连通（隧道层）",
+        level: reachable ? "ok" : "fail",
+        detail: reachable
+          ? `${addr}:${port} TCP 可达（FRP 隧道在线）`
+          : `5 秒内连不上 ${addr}:${port}`,
+        hint: reachable
+          ? "TCP 可达只代表隧道层在线，N2N 应用层连通由实际连接验证。"
+          : "三种可能：① NAS 侧 n2n-supernode 或 FRPC 容器挂了（可让 Claude 连 SSH 帮查 docker ps）；② FRP 公网服务波动；③ 当前网络限制该端口（可换手机热点再试）。"
+      });
+    } else {
+      push({
+        id: "supernode",
+        title: "公网入口连通（隧道层）",
+        level: "skip",
+        detail: "公网入口未配置，已跳过",
+        hint: "在设置中心 N2N 参数区填写超级节点地址与端口后再体检。"
+      });
+    }
   } else {
     for (const id of ["edge", "tap", "admin", "supernode"]) {
       push({ id, title: id, level: "skip", detail: "非 Windows 平台，跳过", hint: "" });
@@ -471,14 +481,20 @@ async function runN2nDeploy(payload = {}, onLog = () => {}) {
     record({ id: "edge-check", ok: false, detail });
   }
 
-  // 步骤 6/6 汇总 + 公网入口复测
+  // 步骤 6/6 汇总 + 公网入口复测（未配置一律跳过，不回落内建入口）
   log("▶ 步骤 6/6：检测公网入口…");
   const input = payload?.n2n || {};
-  const addr = String(input.supernodeAddr || "").trim() || DEFAULT_SUPERNODE.addr;
-  const port = Number(input.supernodePort) || DEFAULT_SUPERNODE.port;
-  const reachable = await probeTcp(addr, port, 5000);
-  log(reachable ? `✓ 公网入口 ${addr}:${port} 可达（隧道层在线）` : `✗ 公网入口 ${addr}:${port} 暂不可达——本机环境已就绪，请另查 NAS 侧 supernode 容器或换网络再试`);
-  record({ id: "supernode", ok: reachable, detail: `${addr}:${port}` });
+  const addr = String(input.supernodeAddr || "").trim();
+  const port = Number(input.supernodePort) || 0;
+  let reachable = null;
+  if (addr && port > 0) {
+    reachable = await probeTcp(addr, port, 5000);
+    log(reachable ? `✓ 公网入口 ${addr}:${port} 可达（隧道层在线）` : `✗ 公网入口 ${addr}:${port} 暂不可达——本机环境已就绪，请另查 NAS 侧 supernode 容器或换网络再试`);
+    record({ id: "supernode", ok: reachable, detail: `${addr}:${port}` });
+  } else {
+    log("△ 公网入口未配置，跳过连通检测（连接前请在 N2N 参数区填写超级节点地址与端口）");
+    record({ id: "supernode", ok: true, detail: "未配置，跳过" });
+  }
 
   const hardFailure = steps.find((step) => step.id === "resources" && !step.ok);
   const ok = !hardFailure && edgeOk && log.length >= 0;
@@ -502,7 +518,6 @@ module.exports = {
   ensureUserPath,
   EDGE_EXE_PATH,
   EDGE_FALLBACK_DIR,
-  DEFAULT_SUPERNODE,
   N2N_ZIP_NAME,
   TAP_EXE_NAME,
   LEVEL_MARK

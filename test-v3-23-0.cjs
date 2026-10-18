@@ -294,11 +294,12 @@ async function runWin32MockTests() {
       assert.ok(!lines.some((l) => /步骤 3\/6/.test(l)), "解压失败后不应进入 TAP 步");
     });
 
-    await test("B8 probeTcp 默认入口真实探测（entry.example.org 不在 payload 时回落默认）", async () => {
+    await test("B8 未配置公网入口 → skip 不探测（不回落任何内建入口）", async () => {
       const doctor = loadDoctorWithMocks({ powershellScript: snapshotScript({ edgePath: "C:\\n2n\\edge.exe" }), edgeExists: true });
       const doctorOk = await doctor.runN2nDoctor({ n2n: { supernodeAddr: "", supernodePort: "" } }, () => {});
       const supernode = doctorOk.items.find((item) => item.id === "supernode");
-      assert.ok(supernode.detail.includes(doctor.DEFAULT_SUPERNODE.addr), `空 payload 应回落默认入口：${supernode.detail}`);
+      assert.strictEqual(supernode.level, "skip", `未配置应 skip：${supernode.level}`);
+      assert.ok(supernode.detail.includes("未配置"), `未配置文案：${supernode.detail}`);
     });
   });
 }
@@ -463,10 +464,10 @@ async function runAssetTests() {
     assert.strictEqual(mapped.to, "n2n");
   });
 
-  await test("E3 doctor 常量与工具包口径一致（zip 名 / TAP 名 / 默认入口）", () => {
+  await test("E3 doctor 常量与工具包口径一致（zip 名 / TAP 名 / 无内建入口）", () => {
     assert.ok(doctorSrc.includes('const N2N_ZIP_NAME = "n2n_v3_windows_x64_v3.1.1_r1255_static_by_heiye.zip"'), "zip 名不一致");
     assert.ok(doctorSrc.includes('const TAP_EXE_NAME = "tap-windows-9.21.2.exe"'), "TAP 名不一致");
-    assert.ok(doctorSrc.includes('addr: "entry.example.org"') && doctorSrc.includes("port: 53371"), "默认入口不一致");
+    assert.ok(!doctorSrc.includes("DEFAULT_SUPERNODE"), "不应再有内建默认入口（A②：未配置一律跳过）");
     assert.ok(doctorSrc.includes('"C:\\\\n2n"'), "落盘目录口径");
   });
 
@@ -694,9 +695,10 @@ async function runVmSmokeTests() {
   });
   await test("G2 doctor 导出面在册（测试复用面 + IPC 面）", () => {
     const doctor = require(DOCTOR_PATH);
-    for (const key of ["runN2nDoctor", "runN2nDeploy", "probeTcp", "runPowerShell", "detectHostSnapshot", "EDGE_EXE_PATH", "DEFAULT_SUPERNODE"]) {
+    for (const key of ["runN2nDoctor", "runN2nDeploy", "probeTcp", "runPowerShell", "detectHostSnapshot", "EDGE_EXE_PATH"]) {
       assert.ok(key in doctor, `导出缺 ${key}`);
     }
+    assert.ok(!("DEFAULT_SUPERNODE" in doctor), "内建默认入口不应再导出（A②）");
   });
   console.log(`\n=== test-v3-23-0.cjs：${passed} 通过 / ${failed} 失败 ===`);
   if (failures.length) { console.log(failures.map((item) => `  ✗ ${item}`).join("\n")); process.exitCode = 1; }

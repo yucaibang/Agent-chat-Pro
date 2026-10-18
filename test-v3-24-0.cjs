@@ -965,8 +965,10 @@ async function runVmSmokeTests() {
   await runV3242Tests();
   await runV3243Tests();
   await runVmSmokeTests();
-  await test("G1 package.json 版本 = 3.24.3", () => {
-    assert.strictEqual(pkg.version, "3.24.7");
+  await test("G1 package.json 版本 ≥ 3.24.7（放宽锚点：后续版本继续在册）", () => {
+    const [maj, min, patch] = String(pkg.version).split(".").map(Number);
+    const [rmaj, rmin, rpatch] = "3.24.7".split(".").map(Number);
+    assert.ok(maj > rmaj || (maj === rmaj && (min > rmin || (min === rmin && patch >= rpatch))), `应 ≥ 3.24.7，实际 ${pkg.version}`);
   });
   console.log(`\n=== test-v3-24-0.cjs：${passed} 通过 / ${failed} 失败 ===`);
   if (failures.length) { console.log(failures.map((item) => `  ✗ ${item}`).join("\n")); process.exitCode = 1; }
