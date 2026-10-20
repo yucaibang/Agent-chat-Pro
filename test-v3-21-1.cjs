@@ -79,14 +79,14 @@ async function main() {
   });
 
   console.log("\n=== D. 主进程模块加载冒烟（实跑） ===");
-  await test("D1. obf-smoke 干净版全过（56 模块，v3.24.0 起 +thinking-levels）", () => {
+  await test("D1. obf-smoke 干净版全过（57 模块，v3.25.0 起 +ask-convention）", () => {
     let out;
     try {
       out = execFileSync("node", [obfSmokePath], { encoding: "utf8", cwd: ROOT, timeout: 120000 });
     } catch (e) {
       throw new Error(`冒烟失败：${(e.stdout || "").split("\n").filter(l => l.includes("✗")).join(" | ")}`);
     }
-    assert.ok(/通过 56 · 失败 0/.test(out), `输出应为 56/0：${out.split("\n").slice(-2).join(" ")}`);
+    assert.ok(/通过 57 · 失败 0/.test(out), `输出应为 57/0：${out.split("\n").slice(-2).join(" ")}`);
   });
 
   console.log("\n=== E. 历史 v3.21 功能测试 ===");

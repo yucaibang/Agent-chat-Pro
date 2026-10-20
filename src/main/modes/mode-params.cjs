@@ -10,6 +10,7 @@
 const { BUILTIN_MODES, HALLUCINATION_MAP, ENERGY_MAP, THINKING_MAP } = require("./mode-defaults.cjs");
 const { getMode } = require("./mode-manager.cjs");
 const { shellQuote } = require("../protocol.cjs");
+const { appendAskConvention } = require("../ask-convention.cjs"); // v3.25.0：ask 约定块注入（三 builder 统一接线）
 
 // v3.24.1：SSH/本机思考挡位合法值域（与 mode-manager validateThinkingLevel 同域）
 // v3.24.2：加入 eco 挡（节能零注入；挡位序列 eco 最前）
@@ -58,6 +59,12 @@ function buildCommandWithMode(modeId, prompt, sessionId, config) {
   // 会话续接
   if (sessionId) args.push("--resume", sessionId);
 
+  // v3.25.0：ask_user 约定块注入 + 工作模式提示词（--append-system-prompt，
+  // 不污染用户正文、不进 resume 历史）。直接直 CLI 此前从未把 mode.systemPrompt
+  // 传给 CLI（既有行为缺陷），本版顺带修复——工作模式提示词与 ask 约定在此路一并对齐生效
+  const appendPrompt = appendAskConvention(mode.systemPrompt || "");
+  if (appendPrompt.trim()) args.push("--append-system-prompt", appendPrompt);
+
   const wakeName = String(config.wakeName || "claude").trim();
   const command = [wakeName, ...args].map(shellQuote).join(" ");
   const workingDirectory = String(config.workingDirectory || "").trim();
@@ -94,7 +101,9 @@ function buildBridgeStartWithMode(modeId, prompt, sessionId, config) {
     thinkingLevel: mode.thinkingLevel,
     hallucinationControl: mode.hallucinationControl,
     energyPriority: mode.energyPriority,
-    systemPrompt: mode.systemPrompt || "",
+    // v3.25.0：ask_user 约定块随既有 systemPrompt 字段下发（agent-sdk-bridge.mjs
+    // L262-263 已实锤识别该字段 → SDK options.systemPrompt），幂等拼接防重复叠加
+    systemPrompt: appendAskConvention(mode.systemPrompt || ""),
     modelConfig
   };
 }
@@ -190,6 +199,11 @@ function buildLocalArgsWithMode(modeId, sessionId, config) {
 
   // 会话续接
   if (sessionId) args.push("--resume", sessionId);
+
+  // v3.25.0：ask_user 约定块注入 + 工作模式提示词（--append-system-prompt；
+  // 本机 claude 引擎此前同样从未传 mode.systemPrompt，本版顺带修复对齐）
+  const appendPrompt = appendAskConvention(mode.systemPrompt || "");
+  if (appendPrompt.trim()) args.push("--append-system-prompt", appendPrompt);
 
   return args;
 }

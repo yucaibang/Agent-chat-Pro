@@ -240,8 +240,14 @@ async function runDGroup() {
 async function runEGroup() {
   console.log("── E 组：版本锚 ──");
 
-  await test("E1 package.json 版本 = 3.24.9", () => {
-    assert.strictEqual(pkg.version, "3.24.9");
+  // v3.25.0 锚点对齐：版本不断演进，断言放宽为「≥ 3.24.9」（test-v3-24-4 G1 同款语义），不再写死
+  await test("E1 package.json 版本 ≥ 3.24.9", () => {
+    const [rmaj, rmin, rpatch] = "3.24.9".split(".").map(Number);
+    const [maj, min, patch] = pkg.version.split(".").map(Number);
+    assert.ok(
+      maj > rmaj || (maj === rmaj && (min > rmin || (min === rmin && patch >= rpatch))),
+      `pkg.version ${pkg.version} 应 ≥ 3.24.9`
+    );
   });
 
   await test("E2 版本注释锚：cloud-chat/main/settings 三文件 v3.24.9 注释齐", () => {

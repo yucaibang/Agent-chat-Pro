@@ -86,6 +86,7 @@ const OBFUSCATE_FILES = {
     "main/daemon-chat.cjs",     // AtomCode daemon 引擎 adapter（v3.13.0）
     "main/custom-cli.cjs",      // 自定义命令纯文本引擎（v3.13.0）
     "main/plan-convention.cjs", // Agent plan 云端路 ```plan 约定注入（v3.20.0 F5）
+    "main/ask-convention.cjs",  // AI 选择题 ```ask_user 约定注入（v3.25.0 三模式补全）
     // SSH 远程 CLI 适配器（v3.19.0 F3）——五家选一，qwen/codex/hermes 走远端 CLI 直跑
     "main/adapters/ssh-cli-base.cjs",
     "main/adapters/qwen-cli.cjs",

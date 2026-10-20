@@ -50,7 +50,8 @@ function extractBetween(src, start, end) {
 }
 
 const bindFn = extractBetween(rendererSrc, "function bindExternalLinks", "async function renderAssistant");
-const renderAssistantHead = rendererSrc.slice(rendererSrc.indexOf("async function renderAssistant"), rendererSrc.indexOf("async function renderAssistant") + 700);
+// v3.25.0 锚点对齐：原 700 字符魔术窗口被 renderAssistant 头部新增的 plan/asks 约定块处理代码挤出，改按断言本义截取真实区间（函数头 → pre 段前）
+const renderAssistantHead = rendererSrc.slice(rendererSrc.indexOf("async function renderAssistant"), rendererSrc.indexOf("content.querySelectorAll(\"pre\")"));
 const settingsBlock = extractBetween(
   rendererSrc,
   'document.querySelector("#cloud-provider")?.addEventListener',

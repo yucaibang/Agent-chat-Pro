@@ -855,13 +855,18 @@ function bindExternalLinks(container, onError) {
   });
 }
 
-async function renderAssistant(item, text) {
+async function renderAssistant(item, text, renderOptions = {}) {
   const content = item.querySelector(".message-content");
   // v3.20.0 F5：```plan 约定块抽离渲染 Agent plan 面板（正文剥离该块不再重复显示；
   // 同消息内多个块只取最后一块=最新全局进度；AI 没输出 plan 块则零渲染）
   const plan = extractPlanBlocks(text);
   if (plan.hasPlan) renderPlanPanel(item, plan.last.map((line, i) => ({ index: i + 1, text: line, status: "" })), false);
-  content.innerHTML = await window.agentChatPro.renderMarkdown(plan.rest);
+  // v3.25.0：```ask_user 约定块抽离渲染选择卡（本函数是全部模式 assistant 正文唯一汇聚点
+  // —— 云端真悬等工具卡之外，SSH/本机 claude/atomcode/custom 只要模型输出块即渲染；
+  // 历史重放 static 定格禁点，本轮流式可点点选=发新消息）
+  const asks = extractAskBlocks(plan.rest);
+  asks.blocks.forEach((block) => renderAskBlockCard(item, block, Boolean(renderOptions.static)));
+  content.innerHTML = await window.agentChatPro.renderMarkdown(asks.rest);
   content.classList.add("rendered");
   bindExternalLinks(content, (error) => alert(error.message));
   content.querySelectorAll("pre").forEach((pre) => {
@@ -1308,6 +1313,59 @@ function extractPlanBlocks(text) {
   return { rest: rest.trim(), blocks, hasPlan: blocks.length > 0, last: blocks.length ? blocks[blocks.length - 1] : null };
 }
 
+/** 约定路：抽离 assistant 文本中的 ```ask_user 块（v3.25.0 AI 选择题三模式补全）。
+ *  全部块剥出正文（不重复显示原始代码块）；解析形态：首行「问题：」一句话 +
+ *  随后编号选项行（1. 2. 3. / - 列表均可，行内「——」说明保留显示，最多取 4 项）；
+ *  容错：AI 省略「问题：」前缀时首行即问题。返回 {blocks:[{question,options}], rest} */
+function extractAskBlocks(text) {
+  const value = typeof text === "string" ? text : "";
+  const blocks = [];
+  const rest = value.replace(/```[ \t]*ask_user[ \t]*\r?\n([\s\S]*?)```/g, (_match, body) => {
+    const lines = String(body).split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+    const isQuestionLine = (line) => /^(?:问题|question)\s*[:：]/i.test(line);
+    const questionLine = lines.find(isQuestionLine);
+    const question = questionLine
+      ? questionLine.replace(/^(?:问题|question)\s*[:：]\s*/i, "").trim()
+      : (lines[0] || "").replace(/^(?:问题|question)\s*[:：]\s*/i, "").trim();
+    // 选项行来源：有「问题：」行时取其余行；无前缀形态时首行是问题、其余是选项
+    const optionSource = (questionLine ? lines.filter((line) => line !== questionLine) : lines.slice(1))
+      .filter((line) => !isQuestionLine(line)); // 容错：块内混入第二个「问题：」行不当选项
+    const options = optionSource
+      .map((line) => line.replace(/^(?:\d+\s*[.)、:：]|[-•*])\s*/, "").trim())
+      .filter(Boolean)
+      .slice(0, 4);
+    if (question && options.length) blocks.push({ question, options });
+    return "";
+  });
+  return { blocks, rest: rest.trim(), hasAsk: blocks.length > 0 };
+}
+
+/** ask 约定块选择卡渲染：与 SSH 特化卡同款交互（busy 时回滚提示等待/闲时点选=发新消息）；
+ *  块卡带 ask-conv-card 附加类做幂等（同气泡一张），与云端工具卡/SSH 工具事件卡共用骨架互不冲突 */
+function renderAskBlockCard(item, block, disabled) {
+  if (!item || item.querySelector(".ask-conv-card")) return;
+  const card = buildAskUserCard(
+    { question: String(block?.question || ""), options: Array.isArray(block?.options) ? block.options : [] },
+    Boolean(disabled), // 历史消息定格禁点；本轮流式可点（busy 兜底回滚+提示）
+    (cardEl, button, optionText) => {
+      if (cardEl.classList.contains("answered")) return;
+      if (activeId) {
+        // 任务仍在处理：回滚视觉，提示手动发送（约定块路没有悬等回传通道）
+        cardEl.classList.remove("answered");
+        cardEl.querySelectorAll(".ask-option").forEach((other) => { other.disabled = false; });
+        cardEl.querySelector(".ask-picked-note")?.remove();
+        setConnection("任务仍在处理中；请等待结束或直接在输入栏发送你的选择。", "connected");
+        return;
+      }
+      markAskCardAnswered(cardEl, button, optionText);
+      sendMessage(`我选择：${optionText}`);
+    }
+  );
+  card.classList.add("ask-conv-card");
+  item.append(card);
+  if (isNearBottom()) elements.messages.scrollTop = elements.messages.scrollHeight;
+}
+
 /** 新一轮 plan 面板出现时，把会话内其他消息上的旧面板收成紧凑态（用户点开仍可回看历史） */
 function supersedeOtherPlanPanels(currentItem) {
   document.querySelectorAll(".plan-panel").forEach((panel) => {
@@ -1721,7 +1779,8 @@ async function loadConversation(id) {
       finalizeToolList(item, message.tools || []);
       renderReturnedFiles(item, message.files || []);
       // v3.21.3 修复②：带工具牌的云端历史消息——剥掉 v3.15.5 起注入正文的孤立 `---` 分隔行（不再堆横线）
-      renderAssistant(item, (message.tools || []).length ? stripSeparatorLines(message.text) : message.text);
+      // v3.25.0：第三参 {static:true}=历史重放——ask 约定块卡定格禁点（本轮流式才可点选）
+      renderAssistant(item, (message.tools || []).length ? stripSeparatorLines(message.text) : message.text, { static: true });
     }
   });
   // v3.15.0 bug1：切回正在处理的对话——把后台流式元素重新挂载（同一引用，后续 delta 无缝衔接）

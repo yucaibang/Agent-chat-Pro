@@ -108,7 +108,9 @@ async function main() {
     assert.ok(body.includes("extractPlanBlocks(text)"), "应从 assistant 文本抽离");
     assert.ok(body.includes("if (plan.hasPlan) renderPlanPanel"), "hasPlan 才渲染（AI 没列就零渲染）");
     assert.ok(body.includes('renderPlanPanel(item, plan.last.map((line, i) => ({ index: i + 1, text: line, status: "" })), false)'), "约定路无状态语义");
-    assert.ok(body.includes("renderMarkdown(plan.rest)"), "正文应渲染剥离后的 rest");
+    // v3.25.0 锚点对齐：renderAssistant 增加 ask_user 约定块处理，正文改为渲染 asks.rest
+    // （语义等价——无 ask 块时 asks.rest === plan.rest）
+    assert.ok(body.includes("renderMarkdown(asks.rest)"), "正文应渲染剥离后的 rest（plan→asks 链）");
     assert.ok(!body.includes("renderMarkdown(text)"), "不应再渲染原始全文（plan 块不重复显示）");
   });
 
