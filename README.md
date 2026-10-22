@@ -4,9 +4,9 @@
 
 一个面向 Windows 桌面的 Electron 应用：把「连着云上的 AI 服务商」「SSH 到远端机器跑 Claude Code」「本机跑 Claude Code」三种工作方式装进同一个界面，并围绕它长出了一整套周边——云办公沙箱、N2N 虚拟专网体检与一键部署、设备联动、开发面板、防破解构建管线等。
 
-[![Version](https://img.shields.io/badge/version-3.24.7-blue.svg)]()
+[![Version](https://img.shields.io/badge/version-3.25.0-blue.svg)]()
 [![Platform](https://img.shields.io/badge/platform-Windows-green.svg)]()
-[![Tests](https://img.shields.io/badge/tests-40%20files%20green-brightgreen.svg)]()
+[![Tests](https://img.shields.io/badge/tests-33%20files%20green-brightgreen.svg)]()
 
 ---
 
@@ -51,6 +51,8 @@
 
 前往 **Releases** 页面下载最新版安装包。
 
+如果这个工具帮到了你，欢迎点一个 ⭐ **Star**，让更多人看到。
+
 **系统要求**：Windows 10/11（64 位）
 
 **安装步骤**：
@@ -84,7 +86,7 @@
 
 ```bash
 npm install
-npm run build:test     # 全量测试（40+ 测试文件）
+for f in test-v3-*.cjs; do node "$f" || exit 1; done   # 全量回归（33 个测试文件）
 npm run build:win:nsis # 构建 Windows NSIS 安装包
 node scripts/build-pipeline.cjs bridge   # Bridge Edition（阉割版产物线）
 ```
@@ -134,12 +136,17 @@ node scripts/build-pipeline.cjs bridge   # Bridge Edition（阉割版产物线�
 - 请遵守您所在地区的法律法规
 - 请遵守各 AI 服务商的使用条款
 
-**关于默认占位值**：本仓库为开源发布版本，代码与工具包文档中涉及超级节点地址、社区名、内网地址等处一律使用占位值（如 `entry.example.org`、`demo-community`、`10.66.x.x`），不携带任何部署者自己的真实环境信息。
+**关于默认占位值**：本仓库为源码可见的专有软件发布版本，代码与工具包文档中涉及超级节点地址、社区名、内网地址等处一律使用占位值（如 `entry.example.org`、`demo-community`、`10.66.x.x`），不携带任何部署者自己的真实环境信息。
 
 ---
 
-## ©️ 版权
+## ©️ 版权与授权
 
-Copyright © 2026 Jiang. **保留所有权利。**
+Copyright © 2026 Jiang. **保留所有权利（All Rights Reserved）**。
 
-本项目未附加开源许可证文档，未明确授予的复制、再分发与商用权利默认依著作权法保留。如需商业合作或授权，请通过仓库联系作者。
+本软件为**专有软件（Proprietary Software）**，不是开源软件：
+
+- 仓库公开**源码仅用于审阅、学习与安全检验**，作者未附开源许可证文档
+- **未明确授予的权利一律保留**：未经作者书面授权，不得复制、分发、修改、再打包、去除混淆/水印或将本项目（含源码与安装包）用于商业用途
+- 个人学习与自用不受上述限制；如需合作、分发或商用授权，请通过仓库（Issue）联系作者
+- 第三方依赖各自遵从其原始许可（见上方「第三方组件致谢」），本项目对其的引入方式符合相应条款

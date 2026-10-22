@@ -39,7 +39,7 @@ Version Date: 2026-08-19
 5.3. SSH connections are established directly between your device and the target server; the developer's servers are not involved in data transit.
 
 
-6. Open Source and Third-Party
+6. Bundled Components and Third-Party Licenses
 
 This software may include third-party open-source components, each governed by its original license.
 
