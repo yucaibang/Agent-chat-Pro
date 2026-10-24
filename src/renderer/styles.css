@@ -1018,7 +1018,7 @@ textarea { resize: vertical; min-height: 60px; }
 .think-slider::-webkit-slider-thumb {
   -webkit-appearance: none; appearance: none;
   /* v3.25.1：thumb 回正圆小圆点（DeepSeek UI 建议落地；v3.24.3 胶囊形态按用户新拍板回退），拖动 scale+发光手感保留。
-     14px 直径 → thumb 中心可动区 = [半径7px, 轨道宽-7px]，刻度点与文案按同几何对齐（renderer.js thinkMarkPcts）。 */
+     14px 直径 → thumb 中心可动区 = [半径7px, 轨道宽-7px]，刻度点与文案按同几何对齐（renderer.js thinkMarkLefts）。 */
   width: 14px; height: 14px; border-radius: 50%;
   background: #fff; border: 2px solid #4b5563;
   box-shadow: 0 1px 4px rgba(0, 0, 0, .35);
@@ -1032,7 +1032,9 @@ textarea { resize: vertical; min-height: 60px; }
 .think-slider.eco::-webkit-slider-thumb:active { box-shadow: 0 0 0 5px rgba(22, 163, 74, .25); }
 /* v3.25.1：轨道内刻度点层（覆盖层不抢指针事件）——与 thumb 圆点同几何，挡位数动态 2~7 档都精确均分 */
 .think-track-wrap { position: relative; }
-.think-ticks { position: absolute; inset: 0; pointer-events: none; }
+/* key fix（装机自查 2026-10-24）：层不 inset:0（wrap 高=3+12+8=23px，top:50% 会偏到 11.5px≠滑轨中心 9px，
+   刻度点整体下垂 2.5px）——改 top/bottom 精确对齐 .think-slider 盒（与其 margin 3/8 联动），点中心与轨道中线重合 */
+.think-ticks { position: absolute; top: 3px; bottom: 8px; left: 0; right: 0; pointer-events: none; }
 .think-tick {
   position: absolute; top: 50%;
   width: 4px; height: 4px; border-radius: 50%;

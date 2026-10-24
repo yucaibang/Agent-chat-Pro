@@ -3140,16 +3140,15 @@ const THINK_EGG_LINES = ["更高的工作质量", "燃烧你的钱包吧！", "�
 
 // v3.25.1 轨道刻度+文案同几何对齐（DeepSeek UI 建议落地；纯渲染层，thinking-levels.cjs 零触碰）。
 // 几何实锤：input range 的 thumb 中心可动区是 [半径R, 轨道宽-R]（首尾挡 thumb 不出轨）——
-// 第 i 挡中心 = R + (W-2R)·i/(N-1)，即百分比 pct_i = padPct + spanPct·i。
-// 刻度点、挡位文案、thumb 落位三层同用此函数 → 绝对居中对齐；挡位数动态（各家 2~7 档）。
+// 第 i 挡中心 = 7px + (100% - 14px)·i/(N-1)。刻度点、挡位文案、thumb 落位三层同用此函数 → 绝对居中对齐。
+// key fix（装机自查 2026-10-24）：left 用 CSS calc 表达式（%+px 混合）而非「读 clientWidth 再算百分数」——
+// 挡位浮层首次打开时 refresh 在 hidden（display:none）态执行，此时 clientWidth=0，百分数几何会疯狅乱飞；
+// calc 形态由浏览器在元素显示后按真实宽度解析，与时序/隐藏态完全解耦。挡位数动态（各家 2~7 档）。
 const THINK_THUMB_RADIUS = 7; // 与 styles.css thumb 14px 直径同步改（圆点半径）
-const thinkMarkPcts = (count, widthPx) => {
+const thinkMarkLefts = (count) => {
   const n = Math.max(1, Math.floor(Number(count) || 0));
-  const w = Math.max(1, Number(widthPx) || 0);
-  if (n === 1) return [50];
-  const padPct = (THINK_THUMB_RADIUS / w) * 100;
-  const span = (100 - padPct * 2) / (n - 1);
-  return Array.from({ length: n }, (_, i) => padPct + span * i);
+  if (n === 1) return ["50%"];
+  return Array.from({ length: n }, (_, i) => `calc(${THINK_THUMB_RADIUS}px + (100% - ${THINK_THUMB_RADIUS * 2}px)*${i}/${n - 1})`);
 };
 
 // v3.24.3：SSH/本机挡位浮层顶行补模型型号（装机反馈「没显示模型型号」）——
@@ -3272,25 +3271,26 @@ async function refreshComposerModePopup() {
     const mix = (a, b, t2) => Math.round(a + (b - a) * t2);
     return `rgb(${mix(c[0], n[0], frac)}, ${mix(c[1], n[1], frac)}, ${mix(c[2], n[2], frac)})`;
   };
-  // v3.25.1：挡位渲染改为「轨道内刻度点 + 下方文案」双层，同一几何函数定位（thinkMarkPcts）——
+  // v3.25.1：挡位渲染改为「轨道内刻度点 + 下方文案」双层，同一几何函数定位（thinkMarkLefts）——
   // 原 renderChips 的 flex space-between 文字中心与 thumb 中心有系统性偏差，本版三点重合；
-  // chips 渐进色语义保留（文字沿用 chipColor 插值，eco=深绿/默认=灰白/其余蓝系四阶）
-  const renderTrackMarks = (ticksRow, labelsRow, slider, levels, activeIndex) => {
-    const pcts = thinkMarkPcts(levels.length, slider.clientWidth);
+  // chips 渐进色语义保留（文字沿用 chipColor 插值，eco=深绿/默认=灰白/其余蓝系四阶）。
+  // 不读 clientWidth（hidden 态渲染时 clientWidth=0 会让几何疯狅——calc 表达式免疫时序，见 thinkMarkLefts 注）
+  const renderTrackMarks = (ticksRow, labelsRow, levels, activeIndex) => {
+    const lefts = thinkMarkLefts(levels.length);
     ticksRow.replaceChildren();
     labelsRow.replaceChildren();
     levels.forEach((level, index) => {
-      const pct = pcts[index] ?? 50;
+      const left = lefts[index] ?? "50%";
       const tick = document.createElement("span");
       tick.className = `think-tick${index === activeIndex ? " active" : ""}${level.id === "eco" ? " eco" : ""}`;
-      tick.style.left = `${pct}%`;
+      tick.style.left = left;
       ticksRow.append(tick);
       const label = document.createElement("span");
       label.className = `think-level${index === activeIndex ? " active" : ""}`;
       label.textContent = level.label;
       label.title = level.hint || "";
       label.style.color = level.id === "eco" ? "rgb(22, 101, 52)" : chipColor(index, levels.length);
-      label.style.left = `${pct}%`;
+      label.style.left = left;
       labelsRow.append(label);
     });
   };
@@ -3350,7 +3350,7 @@ async function refreshComposerModePopup() {
       const defaultIdx = Math.max(0, levels.findIndex((l) => l.id === "off"));
       slider.value = String(choice ? Math.max(0, levels.findIndex((l) => l.id === choice)) : defaultIdx);
       renderSliderTheme(slider, levels);
-      renderTrackMarks(ticksRow, levelsRow, slider, levels, Number(slider.value));
+      renderTrackMarks(ticksRow, levelsRow, levels, Number(slider.value));
       const active = levels[Number(slider.value)] || levels[0];
       renderMeta(active, Boolean(choice));
       slider.oninput = () => { renderSliderTheme(slider, levels); syncMarkActive(ticksRow, levelsRow, Number(slider.value)); };
@@ -3395,7 +3395,7 @@ async function refreshComposerModePopup() {
       slider.step = 1;
       slider.value = String(Math.max(0, levels.findIndex((l) => l.id === levelId)));
       renderSliderTheme(slider, levels);
-      renderTrackMarks(ticksRow, levelsRow, slider, levels, Number(slider.value));
+      renderTrackMarks(ticksRow, levelsRow, levels, Number(slider.value));
       const active = levels[Number(slider.value)] || levels[0];
       renderMeta(active, Boolean(sshChoice));
       slider.oninput = () => { renderSliderTheme(slider, levels); syncMarkActive(ticksRow, levelsRow, Number(slider.value)); };

@@ -13,10 +13,12 @@
  * 铁边界：只动渲染层（renderer.js/styles.css/index.html），
  *         thinking-levels.cjs 主进程取值与注入逻辑零触碰
  *
- * 几何核心（renderer.js thinkMarkPcts）：input range 的 thumb 中心可动区
+ * 几何核心（renderer.js thinkMarkLefts，calc 形态）：input range 的 thumb 中心可动区
  *   是 [半径R, 轨道宽-R]（首尾挡 thumb 不出轨）→ 第 i 挡中心
- *   pct_i = padPct + spanPct·i，padPct=R/W*100，spanPct=(100-2pad)/(N-1)。
- *   刻度点、文案、thumb 三层同用此函数 → 绝对居中重合。
+ *   left_i = calc(7px + (100% - 14px)*i/(N-1))。刻度点、文案、thumb 三层同用此函数。
+ * key fix（2026-10-24 装机自查）：left 用 CSS calc 表达式而非「读 clientWidth 算百分数」——
+ *   浮层首次打开在 hidden（display:none）态渲染，clientWidth=0 会让百分数几何疯狅乱飞；
+ *   calc 由浏览器显示后按真实宽度解析，与时序/隐藏态解耦，B 组假 DOM 也天然无法再掩盖该类 bug。
  * ═══════════════════════════════════════════════════════════════════ */
 
 const assert = require("assert");
@@ -205,53 +207,47 @@ const GLM5_LEVELS = [
   { id: "max", label: "Max", hint: "智谱默认挡" }
 ];
 
-/* ── A 组：thinkMarkPcts 几何纯函数 ── */
+/* ── A 组：thinkMarkLefts 几何纯函数（calc 形态） ── */
+
+const expLeft = (n, i) => `calc(7px + (100% - 14px)*${i}/${n - 1})`;
 
 async function runGeomTests() {
-  console.log("── A 组：thinkMarkPcts 几何纯函数 ──");
+  console.log("── A 组：thinkMarkLefts 几何纯函数（calc 形态） ──");
 
-  await test("A1 常量与函数在源码在册（渲染层符号，thinking-levels.cjs 零触碰见 C 组）", () => {
+  await test("A1 常量与函数在册（渲染层符号）+ 旧 clientWidth 百分比几何清除", () => {
     assert.ok(rendererSrc.includes("const THINK_THUMB_RADIUS = 7;"), "thumb 半径常量（与 CSS 14px 直径同步）");
-    assert.ok(rendererSrc.includes("const thinkMarkPcts = (count, widthPx) => {"), "几何纯函数在册");
+    assert.ok(rendererSrc.includes("const thinkMarkLefts = (count) => {"), "calc 几何纯函数在册（签名无 width 参数）");
+    assert.ok(!rendererSrc.includes("thinkMarkPcts"), "旧百分比几何函数清除（clientWidth 依赖源）");
   });
 
-  await test("A2 单挡居中 / 双挡两端对称（pad 区对称，末挡 = 100-首挡）", () => {
-    const p1 = sandbox.__acpSmoke.thinkMarkPcts(1, 288);
-    vmEq(p1, [50], "单挡 = 居中");
-    const p2 = sandbox.__acpSmoke.thinkMarkPcts(2, 288);
-    assert.strictEqual(p2.length, 2, "双挡两项");
-    const pad = (7 / 288) * 100;
-    assert.ok(Math.abs(p2[0] - pad) < 1e-9, `首挡 = padPct(${pad.toFixed(4)}%)`);
-    assert.ok(Math.abs(p2[1] - (100 - pad)) < 1e-9, "末挡 = 100-pad（对称，首尾 thumb 不出轨）");
+  await test("A2 单挡/异常 count 兜底居中；calc 串两端括号+空格符合 CSS calc 语法", () => {
+    vmEq(sandbox.__acpSmoke.thinkMarkLefts(0), ["50%"], "count=0 → 单挡居中");
+    vmEq(sandbox.__acpSmoke.thinkMarkLefts(-3), ["50%"], "负数 → 单挡居中");
+    vmEq(sandbox.__acpSmoke.thinkMarkLefts(1), ["50%"], "单挡 → 全局居中");
+    vmEq(sandbox.__acpSmoke.thinkMarkLefts(2.9).length, 2, "小数向下取整 2 项");
+    const two = sandbox.__acpSmoke.thinkMarkLefts(2);
+    assert.ok(two[0].startsWith("calc(") && two[0].endsWith(")"), "calc 包裹完整");
+    assert.ok(two[0].includes("7px + (100% - 14px)"), "+ 号两侧空格（CSS calc 语法硬性要求）");
   });
 
-  await test("A3 五挡等距（SSH 实档数）：相邻间距恒定且首尾对称", () => {
-    const p = sandbox.__acpSmoke.thinkMarkPcts(5, 288);
-    assert.strictEqual(p.length, 5, "五项");
-    const span = (100 - (7 / 288) * 100 * 2) / 4;
-    for (let i = 0; i < 5; i++) {
-      const expect = (7 / 288) * 100 + span * i;
-      assert.ok(Math.abs(p[i] - expect) < 1e-9, `第 ${i} 挡 = ${expect.toFixed(4)}%（实 ${p[i].toFixed(4)}%）`);
-    }
-    assert.ok(Math.abs(p[0] + p[4] - 100) < 1e-9, "首尾对称");
+  await test("A3 双挡两端对称（首挡=左端+R，末挡=右端-R），thumb 不出轨", () => {
+    const two = sandbox.__acpSmoke.thinkMarkLefts(2);
+    assert.strictEqual(two[0], expLeft(2, 0), "首挡 calc(7px + …*0/1) = 左端 7px");
+    assert.strictEqual(two[1], expLeft(2, 1), "末挡 calc(7px + …*1/1) = 右端 -7px（对称收边）");
   });
 
-  await test("A4 七挡（glm5 实档数上限）：间距恒定收窄、全部落在 (0,100) 开区间内", () => {
-    const p = sandbox.__acpSmoke.thinkMarkPcts(7, 288);
-    assert.strictEqual(p.length, 7, "七项");
-    let spanDelta = p[1] - p[0];
-    for (let i = 2; i < 7; i++) assert.ok(Math.abs((p[i] - p[i - 1]) - spanDelta) < 1e-9, "等距");
-    assert.ok(p[0] > 0 && p[6] < 100, "首尾不出轨（pad 区缓冲）");
+  await test("A4 七挡（glm5 实档数上限）逐项等差：第 i 挡系数恰为 i/6", () => {
+    const seven = sandbox.__acpSmoke.thinkMarkLefts(7);
+    assert.strictEqual(seven.length, 7, "七项");
+    for (let i = 0; i < 7; i++) assert.strictEqual(seven[i], expLeft(7, i), `第 ${i} 挡 calc 公式`);
   });
 
-  await test("A5 防御：count 0/负数/小数 与 width 0/undefined 均不炸（w 兜 1、n 兜 1）", () => {
-    vmEq(sandbox.__acpSmoke.thinkMarkPcts(0, 288), [50], "count=0 → 单挡居中");
-    vmEq(sandbox.__acpSmoke.thinkMarkPcts(-3, 288), [50], "负数 → 单挡居中");
-    vmEq(sandbox.__acpSmoke.thinkMarkPcts(2.9, 288).length, 2, "小数向下取整 2 项");
-    const narrow = sandbox.__acpSmoke.thinkMarkPcts(3, 0);
-    assert.strictEqual(narrow.length, 3, "width=0 → w 兜 1 不除零");
-    const noW = sandbox.__acpSmoke.thinkMarkPcts(4, undefined);
-    assert.strictEqual(noW.length, 4, "width=undefined → 不炸返回四项");
+  await test("A5 八挡（eco 前置 glm5=8 刻度实况）+五挡（SSH）公式形态一致", () => {
+    const eight = sandbox.__acpSmoke.thinkMarkLefts(8);
+    assert.strictEqual(eight.length, 8, "八项");
+    assert.strictEqual(eight[7], expLeft(8, 7), "末项 = calc(7px + (100% - 14px)*7/7)");
+    const five = sandbox.__acpSmoke.thinkMarkLefts(5);
+    assert.strictEqual(five[3], expLeft(5, 3), "SSH medium 挡 calc 公式");
   });
 }
 
@@ -260,7 +256,7 @@ async function runGeomTests() {
 async function runVmSmokeTests() {
   console.log("── B 组：vm 假 DOM 全链刷新冒烟 ──");
 
-  const source = rendererSrc + "\n;globalThis.__acpSmoke = { thinkMarkPcts, THINK_THUMB_RADIUS };";
+  const source = rendererSrc + "\n;globalThis.__acpSmoke = { thinkMarkLefts, THINK_THUMB_RADIUS };";
   await test("B0 renderer.js vm 假 DOM 全量求值零异常（v3.25.1 新代码含在内）", () => {
     let error = null;
     try { vm.createContext(sandbox); vm.runInContext(source, sandbox, { filename: "renderer.js" }); }
@@ -276,7 +272,7 @@ async function runVmSmokeTests() {
     methodMocks.getThinkingProfile = async () => ({ profile: { family: "zhipu", levels: GLM5_LEVELS } });
     const script = `currentConnectionMode = "cloud"; currentModeId = "regular"; currentLocalEngine = "claude";`;
     vm.runInContext(script, sandbox);
-    rt.getFake("#think-slider").clientWidth = 288;
+    // 注：不再伪造 clientWidth——几何为 calc 表达式，hidden 态渲染也应正确（本测试即修复实证）
     await vm.runInContext(`refreshComposerModePopup()`, sandbox);
     await new Promise((r) => setTimeout(r, 0));
     const ticks = rt.getFake("#think-ticks");
@@ -285,10 +281,10 @@ async function runVmSmokeTests() {
     assert.strictEqual(slider.max, "7", "八挡 → max=7");
     assert.strictEqual(ticks.children.length, 8, "刻度点数量 = 挡位数（动态）");
     assert.strictEqual(labels.children.length, 8, "文案条数 = 挡位数");
-    const pcts = sandbox.__acpSmoke.thinkMarkPcts(8, 288);
+    const lefts = sandbox.__acpSmoke.thinkMarkLefts(8);
     for (let i = 0; i < 8; i++) {
-      assert.strictEqual(ticks.children[i].style.left, `${pcts[i]}%`, `第 ${i} 刻度 left 与纯函数一致`);
-      assert.strictEqual(labels.children[i].style.left, `${pcts[i]}%`, `第 ${i} 文案 left 与刻度同几何（对齐实锤）`);
+      assert.strictEqual(ticks.children[i].style.left, lefts[i], `第 ${i} 刻度 left 与纯函数 calc 一致`);
+      assert.strictEqual(labels.children[i].style.left, ticks.children[i].style.left, `第 ${i} 文案 left 与刻度同几何（对齐实锤）`);
     }
     assert.ok(ticks.children[0].classList.contains("eco"), "eco 刻度点带绿系类");
     assert.ok(ticks.children[1].classList.contains("active"), "off 挡（defaultIdx=1）active");
@@ -355,19 +351,23 @@ async function runSourceTests() {
     assert.ok(stylesSrc.includes(".think-slider.blue::-webkit-slider-thumb { border-color: #38bdf8; }") && stylesSrc.includes(".think-slider.eco::-webkit-slider-thumb { border-color: #16a34a; }"), "蓝绿双系描边保留");
   });
 
-  await test("C2 轨道刻度层结构与文案绝对定位对齐", () => {
+  await test("C2 轨道刻度层结构与文案绝对定位对齐（垂直对齐实锤：ticks 层与 slider 盒同高）", () => {
     assert.ok(indexSrc.includes('<div class="think-track-wrap">') && indexSrc.includes('<div class="think-ticks" id="think-ticks"'), "index.html 轨道包裹层+刻度层骨架");
-    assert.ok(stylesSrc.includes(".think-ticks { position: absolute; inset: 0; pointer-events: none; }"), "刻度层覆盖轨道且不抢指针（拖动不受影响）");
+    assert.ok(stylesSrc.includes(".think-slider {\n  -webkit-appearance: none; appearance: none;\n  width: 100%; height: 12px; border-radius: 7px; margin: 3px 0 8px;"), "slider 高 12px+margin 3/8（wrap 内唯一盒）");
+    assert.ok(stylesSrc.includes(".think-ticks { position: absolute; top: 3px; bottom: 8px; left: 0; right: 0; pointer-events: none; }"), "刻度层 top/bottom 与 slider margin 联动（inset:0 会让点中心 11.5px≠轨道 9px，偏下 2.5px）");
+    assert.ok(!stylesSrc.includes(".think-ticks { position: absolute; inset: 0;"), "inset:0 形态清除（垂直偏移源）");
     assert.ok(stylesSrc.includes(".think-tick.eco"), "eco 刻度点绿系");
     assert.ok(stylesSrc.includes("transform: translateX(-50%)"), "文案中心锚定（对齐刻度）");
     assert.ok(stylesSrc.includes(".think-levels { position: relative; height: 17px; margin-top: -2px; }"), "文案行定高容器");
     assert.ok(rendererSrc.includes("renderTrackMarks(") && rendererSrc.includes("syncMarkActive(ticksRow, levelsRow"), "渲染接线在册");
     assert.ok(!rendererSrc.includes("const renderChips"), "旧 flex 文案渲染函数声明清除");
+    const rtmBody = rendererSrc.slice(rendererSrc.indexOf("const renderTrackMarks"), rendererSrc.indexOf("const syncMarkActive"));
+    assert.ok(rtmBody.includes("thinkMarkLefts") && !rtmBody.includes("clientWidth"), "renderTrackMarks 零 clientWidth 依赖（hidden 态渲染免疫，装机自查 key fix）");
   });
 
   await test("C3 边界：thinking-levels.cjs 零触碰（主进程不引用渲染层符号）+ 家族挡位数动态谱（2~7 档）", () => {
     const tlSrc = fs.readFileSync(path.join(ROOT, "src", "main", "thinking-levels.cjs"), "utf8");
-    assert.ok(!tlSrc.includes("think-tick") && !tlSrc.includes("thinkMarkPcts") && !tlSrc.includes("renderTrackMarks"), "主进程挡位表零渲染层符号（铁边界）");
+    assert.ok(!tlSrc.includes("think-tick") && !tlSrc.includes("thinkMarkLefts") && !tlSrc.includes("renderTrackMarks"), "主进程挡位表零渲染层符号（铁边界）");
     const tl = require(path.join(ROOT, "src", "main", "thinking-levels.cjs"));
     const counts = {};
     // 真实签名 resolveThinkingProfile(provider, model)（位置参数）——provider "unknown" 不命中精判，走模型前缀链
