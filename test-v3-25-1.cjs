@@ -290,6 +290,10 @@ async function runVmSmokeTests() {
     assert.ok(ticks.children[1].classList.contains("active"), "off 挡（defaultIdx=1）active");
     assert.ok(!ticks.children[1].classList.contains("eco"), "off 刻度点不带 eco 类");
     assert.ok(labels.children[1].classList.contains("active"), "文案 active 与刻度同位");
+    // 两端贴端对齐锚（DeepSeek 修复令吸收）：首挡文字左缘=刻度中心、末挡右缘=刻度中心、中间挡居中
+    assert.strictEqual(labels.children[0].style.transform, "translateX(0)", "首挡 ECO 文案贴端（左缘=刻度中心，不再探出滑轨盒左沿）");
+    assert.strictEqual(labels.children[7].style.transform, "translateX(-100%)", "末挡文案贴端（右缘=刻度中心）");
+    assert.strictEqual(labels.children[1].style.transform, "translateX(-50%)", "中间挡文案保持中心锚");
   });
 
   await test("B2 拖动 oninput：active 轻量同步到新挡（DOM 不重建，children 引用不换）", async () => {
@@ -364,6 +368,10 @@ async function runVmSmokeTests() {
     assert.strictEqual(labels.children[0].style.color, "rgb(22, 101, 52)", "ECO 文案深绿（渐进色语义）");
     assert.strictEqual(String(labels.children[1].textContent), "关", "第 2 挡文案=profile 首挡 label（动态透传）");
     assert.strictEqual(String(labels.children[3].textContent), "Max", "末挡文案=profile 末挡 label");
+    // 三挡场景同锚（首挡 ECO 贴左端/末挡 Max 贴右端/中间关·中居中）
+    assert.strictEqual(labels.children[0].style.transform, "translateX(0)", "三挡首端 ECO 贴端左（左缘=刻度中心）");
+    assert.strictEqual(labels.children[3].style.transform, "translateX(-100%)", "三挡末端 Max 贴端右（右缘=刻度中心）");
+    assert.strictEqual(labels.children[2].style.transform, "translateX(-50%)", "三挡中端居中锚");
     // 大宽裕度下（4 挡中心距 ≈ 91px）文案必然无重叠
     const gap4 = (288 - 14) / 3;
     assert.ok(gap4 > 60, `三挡中心距 ${gap4.toFixed(1)}px 远大于文案半宽和，无挤压重叠`);
@@ -396,6 +404,12 @@ async function runSourceTests() {
     assert.ok(stylesSrc.includes(".think-slider.blue::-webkit-slider-thumb:active { box-shadow: 0 0 0 3px rgba(56, 189, 248, .22), 0 0 14px rgba(56, 189, 248, .42); }"), "蓝系双层幽蓝光环（近环+远溢细腻化）");
     assert.ok(stylesSrc.includes(".think-slider.eco::-webkit-slider-thumb:active { box-shadow: 0 0 0 3px rgba(22, 163, 74, .22), 0 0 14px rgba(22, 163, 74, .42); }"), "绿系双层光环同步");
     assert.ok(!stylesSrc.includes("box-shadow: 0 0 0 5px rgba(56, 189, 248, .25);"), "旧单层 5px 粗糙环清除");
+    assert.ok(stylesSrc.includes(".think-slider.blue::-webkit-slider-thumb:hover { box-shadow: 0 0 8px rgba(56, 189, 248, .25); }"), "蓝系 hover 弱光预览（修复令吸收②）");
+    assert.ok(stylesSrc.includes(".think-slider.eco::-webkit-slider-thumb:hover { box-shadow: 0 0 8px rgba(22, 163, 74, .25); }"), "绿系 hover 弱光预览（修复令吸收②）");
+    assert.ok(
+      stylesSrc.indexOf("::-webkit-slider-thumb:hover") < stylesSrc.indexOf("::-webkit-slider-thumb:active { box-shadow"),
+      "hover 规则在 :active 之前声明（按住时双层光环覆盖 hover 弱光）"
+    );
   });
 
   await test("C2 轨道刻度层结构与文案绝对定位对齐（垂直对齐实锤：ticks 层与 slider 盒同高）", () => {

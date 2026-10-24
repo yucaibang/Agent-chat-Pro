@@ -3291,6 +3291,11 @@ async function refreshComposerModePopup() {
       label.title = level.hint || "";
       label.style.color = level.id === "eco" ? "rgb(22, 101, 52)" : chipColor(index, levels.length);
       label.style.left = left;
+      // 两端文案贴端对齐（DeepSeek 修复令吸收，2026-10-24）：首挡文字左缘=刻度中心（translateX(0)）、
+      // 末挡文字右缘=刻度中心（translateX(-100%)）——中心锚在滑轨最左/最右点会把文字探出滑轨盒
+      // （八挡 GLM5 288px 实算：ECO 左缘 -5.9px / Max 右缘 +4.1px，靠浮层 6px 内边距兜住不出框但已出血）；
+      // 中间挡保持中心锚；单挡两端同点居中
+      label.style.transform = levels.length === 1 ? "translateX(-50%)" : index === 0 ? "translateX(0)" : index === levels.length - 1 ? "translateX(-100%)" : "translateX(-50%)";
       labelsRow.append(label);
     });
   };
