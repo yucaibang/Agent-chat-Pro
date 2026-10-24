@@ -590,13 +590,13 @@ async function runV3241Tests() {
     assert.ok(rendererSrc.includes("const resetChoice = async () => {"), "重置处理器");
     assert.ok(rendererSrc.includes("delete ssh[currentModeId || \"regular\"];") && rendererSrc.includes("delete cloud[`${provider}/${model}`];"), "双模式重置清除偏好键");
     assert.ok(rendererSrc.includes('resetBtn.hidden = !hasMemory'), "有偏好记忆时才显示重置钮");
-    assert.ok(rendererSrc.includes('<b class="think-meta-level">${active.label}</b>'), "挡位名焦点 markup（label 来自内置挡位表，无用户输入）");
+    assert.ok(rendererSrc.includes('meta.innerHTML = "";'), "v3.25.1 简洁化（用户令）：「当前挡位」行删除——挡位名由下方 active 文案+顶行英文标承担，容器保留；重置钮逻辑保留");
   });
 
   await test("V5 index.html/styles.css：顶部行+重置钮+渐进色+焦点样式在册", () => {
     assert.ok(htmlSrc.includes('id="think-reset"') && htmlSrc.includes("think-model-row"), "骨架：顶部行+重置钮");
     assert.ok(stylesSrc.includes(".think-model-row") && stylesSrc.includes(".think-reset:hover"), "重置钮样式");
-    assert.ok(stylesSrc.includes(".think-level.active") && stylesSrc.includes(".think-meta-level"), "挡位聚焦样式在册（v3.24.2 起渐进色改 JS 插值，nth-child 死样式清除）");
+    assert.ok(stylesSrc.includes(".think-level.active") && !stylesSrc.includes(".think-meta-level"), "挡位聚焦样式在册；v3.25.1 简洁化：.think-meta-level 样式随「当前挡位」行一同清除（用户令）");
     assert.ok(!stylesSrc.includes(".think-level:nth-child"), "nth-child 硬编码渐进色应清除（chips 改渲染层上色）");
     assert.ok(!stylesSrc.includes(".composer-mode-trigger.unsupported {"), "徽标态死样式应清除（清理注释提及不算）");
   });
@@ -646,9 +646,9 @@ async function runV3242Tests() {
     assert.ok(rendererSrc.includes("const renderSliderTheme = (slider, levels) => {"), "轨道主题 helper");
     assert.ok(rendererSrc.includes('slider.classList.add("eco")') && rendererSrc.includes('slider.classList.add("blue")'), "eco/blue 双主题类切换");
     assert.ok(rendererSrc.includes('slider.style.setProperty("--fill"'), "--fill 填充变量（蓝系按滑距）");
-    assert.ok(rendererSrc.includes("const THINK_CHIP_RAMP = [[203, 213, 225], [125, 211, 252], [56, 189, 248], [12, 74, 110]];"), "chips 蓝系四阶渐变表");
+    assert.ok(rendererSrc.includes("const THINK_CHIP_RAMP = [[203, 213, 225], [157, 180, 247], [56, 120, 240], [30, 58, 138]];"), "chips 蓝系四阶渐变表（v3.25.1 配色：纯蓝 #3878f0 族）");
     assert.ok(rendererSrc.includes('label.style.color = level.id === "eco" ? "rgb(22, 101, 52)" : chipColor(index, levels.length);'), "文案渐进色沿用（v3.25.1 renderChips→renderTrackMarks，eco=深绿语义不变）");
-    assert.ok(rendererSrc.includes("slider.oninput = () => { renderSliderTheme(slider, levels); syncMarkActive(ticksRow, levelsRow, Number(slider.value)); };"), "oninput 即时换色+刻度 active 同步（v3.25.1）");
+    assert.ok(rendererSrc.includes("slider.oninput = () => { renderSliderTheme(slider, levels); syncMarkActive(ticksRow, levelsRow, Number(slider.value));"), "oninput 即时换色+刻度 active 同步（v3.25.1；顶行英文标拖挡即时重拼追加）");
     assert.ok(rendererSrc.includes("slider.onchange = () => { applyChoice(levels[Number(slider.value)].id); maybeShowThinkEgg(levels, Number(slider.value)); };"), "onchange 落盘+彩蛋（云/SSH 同款）");
     assert.strictEqual(rendererSrc.split("slider.onchange = () => { applyChoice(levels[Number(slider.value)].id); maybeShowThinkEgg(levels, Number(slider.value)); };").length - 1, 2, "云端与 SSH 分支都挂接");
   });
@@ -663,7 +663,7 @@ async function runV3242Tests() {
   });
 
   await test("W6 三层渐变轨道 CSS（用户拍板：蓝系白→浅蓝→蓝→深蓝 / eco 绿系深绿→白带颗粒 / 粗条+动画）", () => {
-    assert.ok(stylesSrc.includes("linear-gradient(90deg, #f8fafc 0%, #7dd3fc 34%, #38bdf8 67%, #0c4a6e 100%)"), "①蓝系填充层（白→浅蓝→蓝→深蓝）");
+    assert.ok(stylesSrc.includes("linear-gradient(90deg, #f8fafc 0%, #9db4f7 34%, #3878f0 67%, #1e3a8a 100%)"), "①蓝系填充层（白→浅蓝→纯蓝→深蓝；v3.25.1 配色换 Codex 图提取纯蓝 #3878f0）");
     assert.ok(stylesSrc.includes("radial-gradient(rgba(134, 239, 172, .5) 1px, transparent 1.4px)"), "②eco 浅绿颗粒层（repeat 平铺）");
     assert.ok(stylesSrc.includes("linear-gradient(90deg, #14532d 0%, #16a34a 32%, #86efac 62%, #f0fdf4 100%)"), "③eco 整轨渐变层（深绿→绿→浅绿→白）");
     assert.ok(stylesSrc.includes("background-size: var(--fill, 0%) 100%, var(--eco, 0%) 100%, var(--eco, 0%) 100%;"), "三变量控长显隐");
@@ -693,8 +693,9 @@ async function runV3243Tests() {
     assert.ok(rendererSrc.includes("const status = await window.agentChatPro.getModelStatus();"), "远程/本机生效模型探测（main.cjs 按连接方式分派）");
     assert.ok(rendererSrc.includes("const stamp = ++thinkModelStamp;"), "面板重建计数入口（buildSlider 顶部）");
     assert.ok(rendererSrc.includes("if (stamp !== thinkModelStamp || !remoteModel) return;"), "过期回包/空型号不写顶行（防竞态）");
-    assert.ok(rendererSrc.includes("modelEl.textContent = `${baseLabel} · ${modeModel}`;"), "模式显式配置直接显示");
-    assert.ok(rendererSrc.includes("modelEl.textContent = `${baseLabel} · ${remoteModel}`;"), "远程型号后台渐显追加");
+    assert.ok(rendererSrc.includes("const stampTop = (m, lvl) => composeThinkTop(currentConnectionMode, m, modeKey, lvl ?? levelId);"), "v3.25.1（用户令）：顶行改（连接模式）•（模型 工作模式英标 思考挡英标）——stampTop 闭包重拼（可参 lvl 供拖挡即时重拼）");
+    assert.ok(rendererSrc.includes("modelEl.textContent = stampTop(modeModel);"), "模式显式配置直接显示");
+    assert.ok(rendererSrc.includes("modelEl.textContent = stampTop(remoteModel);"), "远程型号后台渐显追加");
   });
 
   await test("X2 thumb 形态随 v3.25.1 回正圆小圆点（DeepSeek UI 建议落地：胶囊→圆点+轨道刻度；拖动手感保留）", () => {
@@ -702,7 +703,7 @@ async function runV3243Tests() {
     assert.ok(stylesSrc.includes("margin-top: -1px;"), "14px 高度与 12px 轨道居中");
     assert.ok(!stylesSrc.includes("border-radius: 9999px"), "v3.24.3 胶囊 9999px 已随 v3.25.1 清除");
     assert.ok(stylesSrc.includes(".think-slider::-webkit-slider-thumb:active { transform: scale(1.18); }"), "拖动放大手感保留");
-    assert.ok(stylesSrc.includes(".think-slider.blue::-webkit-slider-thumb { border-color: #38bdf8; }") && stylesSrc.includes(".think-slider.eco::-webkit-slider-thumb { border-color: #16a34a; }"), "蓝绿双系描边保留");
+    assert.ok(stylesSrc.includes(".think-slider.blue::-webkit-slider-thumb { border-color: #3878f0; }") && stylesSrc.includes(".think-slider.eco::-webkit-slider-thumb { border-color: #16a34a; }"), "蓝绿双系描边保留（蓝系=提取纯蓝 #3878f0）");
   });
 }
 

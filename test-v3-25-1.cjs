@@ -256,7 +256,7 @@ async function runGeomTests() {
 async function runVmSmokeTests() {
   console.log("── B 组：vm 假 DOM 全链刷新冒烟 ──");
 
-  const source = rendererSrc + "\n;globalThis.__acpSmoke = { thinkMarkLefts, THINK_THUMB_RADIUS };";
+  const source = rendererSrc + "\n;globalThis.__acpSmoke = { thinkMarkLefts, THINK_THUMB_RADIUS, WORK_MODE_EN, THINK_LEVEL_EN, composeThinkTop };";
   await test("B0 renderer.js vm 假 DOM 全量求值零异常（v3.25.1 新代码含在内）", () => {
     let error = null;
     try { vm.createContext(sandbox); vm.runInContext(source, sandbox, { filename: "renderer.js" }); }
@@ -390,6 +390,39 @@ async function runVmSmokeTests() {
       assert.ok(need < gap, `"${labels8[i]}"→"${labels8[i + 1]}" 半宽和 ${need.toFixed(1)}px < 中心距 ${gap.toFixed(1)}px（不重叠）`);
     }
   });
+
+  await test("B7 顶行体系（用户令三段调整③）：模型名随工作模式+思考挡加英文标——全场景映射表", () => {
+    const top = sandbox.__acpSmoke.composeThinkTop;
+    const CASES = [
+      // 完全权限（automatic→auto）：思考挡 eco/默认/轻度/中等/最高/ultra(云端)/Max(云端)
+      ["ssh", "GLM 5.3 flash", "automatic", "eco", "ssh•GLM 5.3 flash auto eco"],
+      ["ssh", "GLM 5.3 flash", "automatic", "off", "ssh•GLM 5.3 flash auto"], // 默认不加思考英文
+      ["ssh", "GLM 5.3 flash", "automatic", "low", "ssh•GLM 5.3 flash auto low"],
+      ["ssh", "GLM 5.3 flash", "automatic", "medium", "ssh•GLM 5.3 flash auto middle"],
+      ["ssh", "GLM 5.3 flash", "automatic", "high", "ssh•GLM 5.3 flash auto high"],
+      ["cloud", "GLM 5.3 flash", "automatic", "ultra", "cloud•GLM 5.3 flash auto ultra"], // 云端特有挡
+      ["cloud", "GLM 5.3 flash", "automatic", "max", "cloud•GLM 5.3 flash auto Max"], // 云端特有挡
+      // 高危审批（regular→High-Risk Approval）
+      ["ssh", "GLM 5.3 flash", "regular", "eco", "ssh•GLM 5.3 flash High-Risk Approval eco"],
+      ["ssh", "GLM 5.3 flash", "regular", "off", "ssh•GLM 5.3 flash High-Risk Approval"],
+      ["ssh", "GLM 5.3 flash", "regular", "medium", "ssh•GLM 5.3 flash High-Risk Approval middle"],
+      // 按需审批（eco→On-Demand Approval）
+      ["ssh", "GLM 5.3 flash", "eco", "eco", "ssh•GLM 5.3 flash On-Demand Approval eco"],
+      // 本机连接 + 自定义模式（无英标省略）+ 空模型域
+      ["local", "GLM 5.6", "regular", "high", "local•GLM 5.6 High-Risk Approval high"],
+      ["ssh", "", "regular", "medium", "ssh•High-Risk Approval middle"], // 模型待取：模型域自动省略
+      ["cloud", "", "custom-mode", "off", "cloud•未设置模型"] // 自定义模式无英标+未设置模型占位
+    ];
+    for (const [conn, model, modeId, levelId, expect] of CASES) {
+      assert.strictEqual(top(conn, model, modeId, levelId), expect, `composeThinkTop(${conn},${model || '∅'},${modeId},${levelId})`);
+    }
+    assert.strictEqual(sandbox.__acpSmoke.WORK_MODE_EN.automatic, "auto", "完全权限→auto");
+    assert.strictEqual(sandbox.__acpSmoke.WORK_MODE_EN.regular, "High-Risk Approval", "高危审批→High-Risk Approval");
+    assert.strictEqual(sandbox.__acpSmoke.WORK_MODE_EN.eco, "On-Demand Approval", "按需审批→On-Demand Approval");
+    assert.strictEqual(sandbox.__acpSmoke.THINK_LEVEL_EN.off, "", "默认挡不加英文");
+    assert.strictEqual(sandbox.__acpSmoke.THINK_LEVEL_EN.xhigh, "xhigh", "GLM5「超高」用户表未列→补字面 xhigh（汇报说明项）");
+    assert.strictEqual(sandbox.__acpSmoke.THINK_LEVEL_EN.on, "", "kimi/qwen「开」=默认态不加英文");
+  });
 }
 
 /* ── C 组：源码切片 + 边界（thinking-levels.cjs 零触碰） ── */
@@ -401,15 +434,17 @@ async function runSourceTests() {
     assert.ok(stylesSrc.includes("width: 14px; height: 14px; border-radius: 50%;"), "thumb 正圆 14px");
     assert.ok(!stylesSrc.includes("border-radius: 9999px"), "胶囊 9999px 已清除");
     assert.ok(stylesSrc.includes(".think-slider::-webkit-slider-thumb:active { transform: scale(1.18); }"), "拖动放大保留");
-    assert.ok(stylesSrc.includes(".think-slider.blue::-webkit-slider-thumb:active { box-shadow: 0 0 0 3px rgba(56, 189, 248, .22), 0 0 14px rgba(56, 189, 248, .42); }"), "蓝系双层幽蓝光环（近环+远溢细腻化）");
+    assert.ok(stylesSrc.includes(".think-slider.blue::-webkit-slider-thumb:active { box-shadow: 0 0 0 3px rgba(56, 120, 240, .22), 0 0 14px rgba(56, 120, 240, .42); }"), "蓝系双层光环（近环+远溢；v3.25.1 配色追改=提取纯蓝 #3878f0 即 rgb(56,120,240)）");
     assert.ok(stylesSrc.includes(".think-slider.eco::-webkit-slider-thumb:active { box-shadow: 0 0 0 3px rgba(22, 163, 74, .22), 0 0 14px rgba(22, 163, 74, .42); }"), "绿系双层光环同步");
-    assert.ok(!stylesSrc.includes("box-shadow: 0 0 0 5px rgba(56, 189, 248, .25);"), "旧单层 5px 粗糙环清除");
-    assert.ok(stylesSrc.includes(".think-slider.blue::-webkit-slider-thumb:hover { box-shadow: 0 0 8px rgba(56, 189, 248, .25); }"), "蓝系 hover 弱光预览（修复令吸收②）");
+    assert.ok(!stylesSrc.includes("rgba(56, 189, 248"), "旧 sky 蓝族光环清除（全量换纯蓝）");
+    assert.ok(stylesSrc.includes(".think-slider.blue::-webkit-slider-thumb:hover { box-shadow: 0 0 8px rgba(56, 120, 240, .25); }"), "蓝系 hover 弱光预览（修复令吸收②）");
     assert.ok(stylesSrc.includes(".think-slider.eco::-webkit-slider-thumb:hover { box-shadow: 0 0 8px rgba(22, 163, 74, .25); }"), "绿系 hover 弱光预览（修复令吸收②）");
     assert.ok(
       stylesSrc.indexOf("::-webkit-slider-thumb:hover") < stylesSrc.indexOf("::-webkit-slider-thumb:active { box-shadow"),
       "hover 规则在 :active 之前声明（按住时双层光环覆盖 hover 弱光）"
     );
+    assert.ok(stylesSrc.includes("linear-gradient(90deg, #f8fafc 0%, #9db4f7 34%, #3878f0 67%, #1e3a8a 100%)"), "填充层纯蓝渐变（提取色 #3878f0 主调）");
+    assert.ok(!stylesSrc.includes("#7dd3fc") && !stylesSrc.includes("#0c4a6e"), "旧 sky 蓝族渐变端点清除");
   });
 
   await test("C2 轨道刻度层结构与文案绝对定位对齐（垂直对齐实锤：ticks 层与 slider 盒同高）", () => {
@@ -453,6 +488,29 @@ async function runSourceTests() {
 async function runVersionTests() {
   console.log("── D 组：版本锚 ──");
   const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, "package.json"), "utf8"));
+  await test("C4 工作模式体系重写（用户令，2026-10-24）：id 保留·名称重定位审批语义 + 顶行唯一写入口径", () => {
+    const md = require(path.join(ROOT, "src", "main", "modes", "mode-defaults.cjs"));
+    const BUILTIN_MODES = md.BUILTIN_MODES;
+    assert.ok(BUILTIN_MODES.automatic && BUILTIN_MODES.regular && BUILTIN_MODES.eco, "三内置 id 全保留（存量偏好/会话快照零破坏）");
+    assert.strictEqual(BUILTIN_MODES.automatic.name, "完全权限", "自动化→完全权限");
+    assert.strictEqual(BUILTIN_MODES.regular.name, "高危审批", "常规→高危审批");
+    assert.strictEqual(BUILTIN_MODES.eco.name, "按需审批", "eco→按需审批（ECO 节能定位移交思考挡位）");
+    assert.strictEqual(BUILTIN_MODES.eco.skipPermissions, false, "按需审批语义校正：不再跳权限（原 eco 槽 bypass 与新名自相矛盾）");
+    assert.strictEqual(BUILTIN_MODES.eco.permissionMode, "default", "按需审批 permissionMode=default（SSH/本机 CLI 链硬编码 bypass 不受影响，云端审批语义生效）");
+    assert.strictEqual(BUILTIN_MODES.automatic.permissionMode, "bypassPermissions", "完全权限保持 bypass（语义自洽）");
+    assert.ok(
+      !Object.values(BUILTIN_MODES).some((m) => m.name.includes("自动化") || m.name.includes("常规") || m.name.includes("ECO 节能")),
+      "三内置 name 域旧名全清除（desc 保留「原 XX」溯引帮助老用户认知）"
+    );
+    assert.strictEqual(BUILTIN_MODES.automatic.name.indexOf("自动化"), -1, "「自动化模式」退场");
+    assert.ok(indexSrc.includes('id="mode-name">高危审批') && indexSrc.includes("🛡 高危审批"), "index.html 静态模式文案同步");
+    assert.ok(!indexSrc.includes("常规模式"), "旧静态文案清除");
+    assert.ok(rendererSrc.includes("modelEl.textContent = composeThinkTop("), "云端顶行唯一写入=composeThinkTop 全串");
+    assert.ok(rendererSrc.includes("modelEl.textContent = stampTop("), "SSH/本机顶行走 stampTop（含后台渐显重拼）");
+    assert.ok(rendererSrc.includes('const WORK_MODE_EN = { automatic: "auto", regular: "High-Risk Approval", eco: "On-Demand Approval" };'), "工作模式英标映射表在册");
+    assert.ok(rendererSrc.includes("meta.innerHTML = \"\";"), "「当前挡位」行已删（用户令简洁化）");
+  });
+
   await test("D1 package.json 版本 3.25.1", () => {
     assert.strictEqual(pkg.version, "3.25.1", "版本号 = 3.25.1");
   });

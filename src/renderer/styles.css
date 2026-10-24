@@ -991,11 +991,15 @@ textarea { resize: vertical; min-height: 60px; }
 /* v3.24.2：面板加宽 + 挡位条重做（粗条轨道 + eco 绿系/其他挡蓝系双渐变 + 滑动过渡动画 + 最高挡彩蛋行） */
 .think-panel { padding: 4px 6px 8px; }
 .think-model-row { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
-.think-model { font-size: 12.5px; font-weight: 600; color: var(--text-primary); padding: 6px 6px 10px; letter-spacing: .2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1 1 auto; }
+/* v3.25.1 顶行重写：连接模式•模型 工作模式英标 思考挡英标串变长（如 cloud•GLM 5.3 flash High-Risk Approval middle）
+   → 允许两行换行（word-break）替代单行截断截尾；#think-model 兜 title 全文；↻ 按钮固定右侧 */
+.think-model { font-size: 12px; font-weight: 600; color: var(--text-primary); padding: 6px 6px 10px; letter-spacing: .2px; line-height: 1.45; word-break: break-word; flex: 1 1 auto; min-width: 0; }
 .think-reset { flex: 0 0 auto; margin: 4px 4px 0 0; padding: 2px 7px; border: 0; border-radius: 6px; background: transparent; color: var(--text-secondary); font-size: 13px; line-height: 1.4; cursor: pointer; transition: all .12s; }
 .think-reset:hover { background: var(--bg-input); color: var(--accent, #4f8ef7); }
 /* v3.24.2 挡位条重做（用户拍板参考 IMG_2679）：粗条轨道 + 三层背景渐变 + 滑动过渡动画
-   层序（上→下）：① 蓝系已选填充层（白→浅蓝→蓝→深蓝，--fill 控长=滑块位置比例）
+   v3.25.1 配色追改（用户令 2026-10-24）：蓝系全量换 Codex 参考图（IMG_2715）像素采样提取的纯蓝
+   #3878f0（蓝像素主簇 24.8%，量化 ±8）——旧 sky 蓝族全部清除（值不再留痕），eco 绿系三行零触碰
+   层序（上→下）：① 蓝系已选填充层（白→浅蓝→纯蓝→深蓝，--fill 控长=滑块位置比例）
                  ② eco 绿系颗粒层（浅绿小点 repeat 平铺，--eco 控显隐）
                  ③ eco 绿系整轨渐变层（深绿→绿→浅绿→白）
    底色 = 深灰（默认挡/未填充态）。--fill 由渲染层 renderSliderTheme 按挡位 inline 设置，
@@ -1005,7 +1009,7 @@ textarea { resize: vertical; min-height: 60px; }
   width: 100%; height: 12px; border-radius: 7px; margin: 3px 0 8px;
   background-color: #2b323b;
   background-image:
-    linear-gradient(90deg, #f8fafc 0%, #7dd3fc 34%, #38bdf8 67%, #0c4a6e 100%),
+    linear-gradient(90deg, #f8fafc 0%, #9db4f7 34%, #3878f0 67%, #1e3a8a 100%),
     radial-gradient(rgba(134, 239, 172, .5) 1px, transparent 1.4px),
     linear-gradient(90deg, #14532d 0%, #16a34a 32%, #86efac 62%, #f0fdf4 100%);
   background-repeat: no-repeat, repeat, no-repeat;
@@ -1026,11 +1030,11 @@ textarea { resize: vertical; min-height: 60px; }
   transition: transform .18s ease, box-shadow .18s ease, border-color .18s ease;
 }
 .think-slider::-webkit-slider-thumb:active { transform: scale(1.18); }
-.think-slider.blue::-webkit-slider-thumb { border-color: #38bdf8; }
+.think-slider.blue::-webkit-slider-thumb { border-color: #3878f0; }
 /* v3.25.1 修复令吸收②（2026-10-24）：hover 弱光预览——此前只有按住 :active 才发光，悬停零反馈；
    弱单层 8px 不与 :active 双层光环争艳（:active 规则在后声明，按住时覆盖 hover 光） */
-.think-slider.blue::-webkit-slider-thumb:hover { box-shadow: 0 0 8px rgba(56, 189, 248, .25); }
-.think-slider.blue::-webkit-slider-thumb:active { box-shadow: 0 0 0 3px rgba(56, 189, 248, .22), 0 0 14px rgba(56, 189, 248, .42); }
+.think-slider.blue::-webkit-slider-thumb:hover { box-shadow: 0 0 8px rgba(56, 120, 240, .25); }
+.think-slider.blue::-webkit-slider-thumb:active { box-shadow: 0 0 0 3px rgba(56, 120, 240, .22), 0 0 14px rgba(56, 120, 240, .42); }
 .think-slider.eco::-webkit-slider-thumb { border-color: #16a34a; }
 .think-slider.eco::-webkit-slider-thumb:hover { box-shadow: 0 0 8px rgba(22, 163, 74, .25); }
 .think-slider.eco::-webkit-slider-thumb:active { box-shadow: 0 0 0 3px rgba(22, 163, 74, .22), 0 0 14px rgba(22, 163, 74, .42); }
@@ -1064,8 +1068,7 @@ textarea { resize: vertical; min-height: 60px; }
 .think-egg.show { opacity: 1; transform: translateY(0); }
 .think-unsupported { font-size: 12px; color: var(--text-secondary); opacity: .8; }
 .think-meta { font-size: 11.5px; color: var(--text-secondary); line-height: 1.55; padding: 8px 6px 0; opacity: .9; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-/* v3.24.1：当前挡位名视觉焦点（对齐参考产品浮层「轻度」蓝字） */
-.think-meta-level { color: var(--accent, #4f8ef7); font-weight: 700; font-size: 12.5px; }
+/* v3.25.1 简洁化（用户令）：「当前挡位：X」行删除（挡位名由下方 active 文案+顶行英文标承担），挡位名焦点样式一并移除 */
 .think-divider { height: 1px; background: var(--border-sidebar); margin: 10px 6px; opacity: .6; }
 .think-modes { display: flex; gap: 6px; padding: 0 6px; flex-wrap: wrap; }
 .think-mode-chip { flex: 1 1 auto; display: inline-flex; align-items: center; justify-content: center; gap: 4px; padding: 6px 10px; border-radius: 8px; border: 1px solid var(--border-sidebar); background: transparent; color: var(--text-secondary); font-size: 12px; cursor: pointer; transition: all .12s; }

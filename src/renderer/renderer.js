@@ -3157,6 +3157,18 @@ const thinkMarkLefts = (count) => {
 // 5 分钟 TTL 缓存防面板开合反复建 SSH 连接；拿不到/未连接静默不追加（只显模式名）。
 // stamp 防竞态：面板任何重建（切模式/切连接方式/换挡渲染）都作废旧异步结果，过期回包不写 modelEl。
 let thinkModelCache = null; // { model: string, at: number }
+// v3.25.1 顶行体系（用户令 2026-10-24）：（连接模式）•（模型 工作模式英文标 思考挡英文标）——例 ssh•GLM 5.3 flash auto eco；
+// 「当前挡位」行删除（挡位名由下方 active 文案+顶行英文标承担）。工作模式三改 id 保留（完全权限 auto/高危审批 High-Risk Approval/按需审批 On-Demand Approval）；
+// 思考挡英标：默认(off)不加字/eco/low/middle/high；ultra/Max 仅云端挡位表存在；kimi/qwen 的 on（开=默认态）同 off 无标；GLM5「超高」(xhigh) 用户表未列，补字面 xhigh。
+const WORK_MODE_EN = { automatic: "auto", regular: "High-Risk Approval", eco: "On-Demand Approval" };
+const THINK_LEVEL_EN = { eco: "eco", off: "", low: "low", medium: "middle", high: "high", xhigh: "xhigh", ultra: "ultra", max: "Max", on: "" };
+const composeThinkTop = (conn, model, modeId, levelId) => {
+  const connLabel = conn === "cloud" ? "cloud" : conn === "local" ? "local" : "ssh";
+  const modeEn = WORK_MODE_EN[modeId] || ""; // 自定义模式无英标：省略，模型名原样
+  const levelEn = THINK_LEVEL_EN[levelId] ?? "";
+  const tail = [String(model || "").trim(), modeEn, levelEn].filter(Boolean).join(" ");
+  return `${connLabel}•${tail || "未设置模型"}`;
+};
 let thinkModelStamp = 0;
 const THINK_MODEL_TTL = 5 * 60 * 1000;
 const thinkModeModelText = (mode) => {
@@ -3207,9 +3219,9 @@ async function refreshComposerModePopup() {
     } catch (error) { setConnection("思考挡位保存失败：" + error.message, "error"); }
   };
 
-  // v3.24.1：挡位名视觉焦点（参考产品浮层：当前挡位大字强调）+ ↻ 重置按钮可见性
-  const renderMeta = (active, hasMemory) => {
-    meta.innerHTML = active ? `当前挡位：<b class="think-meta-level">${active.label}</b>${active.hint ? ` · ${active.hint}` : ""}` : "";
+  // ↻ 重置按钮可见性（v3.24.1 机制保留；v3.25.1 简洁化删除挡位名大字行）
+  const renderMeta = (_active, hasMemory) => {
+    meta.innerHTML = ""; // 简洁化（用户令 2026-10-24）：「当前挡位」行删除，挡位名由下方 active 文案+顶行英文标承担；容器保留（id 锚/桥版兼容）
     const resetBtn = document.querySelector("#think-reset");
     if (resetBtn) resetBtn.hidden = !hasMemory;
   };
@@ -3259,7 +3271,8 @@ async function refreshComposerModePopup() {
     slider.style.setProperty("--fill", `${(ratio * 100).toFixed(1)}%`);
   };
   // 挡位 chips 颜色与轨道色系统一：eco=深绿；默认=灰白；其余按 index 蓝系四阶插值（白→浅蓝→蓝→深蓝）
-  const THINK_CHIP_RAMP = [[203, 213, 225], [125, 211, 252], [56, 189, 248], [12, 74, 110]];
+  // v3.25.1 配色追改：蓝系渐进基色齐步换 Codex 图提取纯蓝 #3878f0 族（浅蓝 #9db4f7/深蓝 #1e3a8a）
+  const THINK_CHIP_RAMP = [[203, 213, 225], [157, 180, 247], [56, 120, 240], [30, 58, 138]];
   const chipColor = (index, count) => {
     if (index === 1 || count <= 2) return "rgb(203, 213, 225)";
     const t = Math.max(0, Math.min(1, (index - 1) / Math.max(1, count - 2)));
@@ -3336,7 +3349,7 @@ async function refreshComposerModePopup() {
       const choice = String(((snapshot.thinkingChoices || {}).cloud || {})[`${provider}/${model}`] || "");
       let profile = null;
       try { profile = (await window.agentChatPro.getThinkingProfile({ provider, model })).profile; } catch {}
-      modelEl.textContent = `☁️ ${provider} · ${model || "未设置模型"}`;
+      modelEl.textContent = `cloud•${model || "未设置模型"}`; // 顶行先占位（模型域），挡位解出后重拼含英文标全串（composeThinkTop）
       if (!profile || !Array.isArray(profile.levels) || !profile.levels.length) {
         slider.disabled = true;
         slider.value = 0;
@@ -3357,8 +3370,9 @@ async function refreshComposerModePopup() {
       renderSliderTheme(slider, levels);
       renderTrackMarks(ticksRow, levelsRow, levels, Number(slider.value));
       const active = levels[Number(slider.value)] || levels[0];
+      modelEl.textContent = composeThinkTop("cloud", model, currentModeId, active.id);
       renderMeta(active, Boolean(choice));
-      slider.oninput = () => { renderSliderTheme(slider, levels); syncMarkActive(ticksRow, levelsRow, Number(slider.value)); };
+      slider.oninput = () => { renderSliderTheme(slider, levels); syncMarkActive(ticksRow, levelsRow, Number(slider.value)); modelEl.textContent = composeThinkTop("cloud", model, currentModeId, levels[Number(slider.value)].id); };
       slider.onchange = () => { applyChoice(levels[Number(slider.value)].id); maybeShowThinkEgg(levels, Number(slider.value)); };
     } else {
       // SSH / 本机 claude 引擎：挡位=会话偏好（settings.thinkingChoices.ssh[工作模式]），
@@ -3373,17 +3387,15 @@ async function refreshComposerModePopup() {
       const sshChoice = String((((snapshot.thinkingChoices || {}).ssh || {})[modeKey]) || "").trim();
       const levelValue = ["eco", "high", "medium", "low", "none"].includes(sshChoice) ? sshChoice : modeLevel;
       const levelId = THINK_CLAUDE_LEVEL_REVERSE[levelValue] || "medium";
-      // v3.24.3：顶行补模型型号——模式显式配置优先（thinkModeModelText 去 [后缀]），否则后台拉远程/本机生效模型渐显
-      const engineLabel = currentConnectionMode === "local" ? "💻 本机 " + (currentLocalEngine || "claude") : "🖥️ SSH 远程 Claude";
-      const baseLabel = `${engineLabel} · ${mode?.name || "工作模式"}`;
+      // v3.25.1 顶行重写（用户令）：（连接模式）•（模型 工作模式英标 思考挡英标）——ssh•GLM 5.3 flash auto 形态；
+      // v3.24.3 模型渐显机制保留（模式显式配置优先 thinkModeModelText 去[后缀]，否则后台拉生效模型重拼）
+      const stampTop = (m, lvl) => composeThinkTop(currentConnectionMode, m, modeKey, lvl ?? levelId);
       const modeModel = thinkModeModelText(mode);
-      if (modeModel) {
-        modelEl.textContent = `${baseLabel} · ${modeModel}`;
-      } else {
-        modelEl.textContent = baseLabel;
+      modelEl.textContent = stampTop(modeModel);
+      if (!modeModel) {
         fetchThinkRemoteModel().then((remoteModel) => {
           if (stamp !== thinkModelStamp || !remoteModel) return; // 面板已重建/拿不到 → 不追加
-          modelEl.textContent = `${baseLabel} · ${remoteModel}`;
+          modelEl.textContent = stampTop(remoteModel);
         });
       }
       const levels = THINK_SSH_LEVELS;
@@ -3403,7 +3415,7 @@ async function refreshComposerModePopup() {
       renderTrackMarks(ticksRow, levelsRow, levels, Number(slider.value));
       const active = levels[Number(slider.value)] || levels[0];
       renderMeta(active, Boolean(sshChoice));
-      slider.oninput = () => { renderSliderTheme(slider, levels); syncMarkActive(ticksRow, levelsRow, Number(slider.value)); };
+      slider.oninput = () => { renderSliderTheme(slider, levels); syncMarkActive(ticksRow, levelsRow, Number(slider.value)); modelEl.textContent = stampTop(modeModel || (thinkModelCache && thinkModelCache.model) || "", levels[Number(slider.value)].id); };
       slider.onchange = () => { applyChoice(levels[Number(slider.value)].id); maybeShowThinkEgg(levels, Number(slider.value)); };
     }
   };
