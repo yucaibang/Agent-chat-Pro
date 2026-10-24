@@ -1027,9 +1027,9 @@ textarea { resize: vertical; min-height: 60px; }
 }
 .think-slider::-webkit-slider-thumb:active { transform: scale(1.18); }
 .think-slider.blue::-webkit-slider-thumb { border-color: #38bdf8; }
-.think-slider.blue::-webkit-slider-thumb:active { box-shadow: 0 0 0 5px rgba(56, 189, 248, .25); }
+.think-slider.blue::-webkit-slider-thumb:active { box-shadow: 0 0 0 3px rgba(56, 189, 248, .22), 0 0 14px rgba(56, 189, 248, .42); }
 .think-slider.eco::-webkit-slider-thumb { border-color: #16a34a; }
-.think-slider.eco::-webkit-slider-thumb:active { box-shadow: 0 0 0 5px rgba(22, 163, 74, .25); }
+.think-slider.eco::-webkit-slider-thumb:active { box-shadow: 0 0 0 3px rgba(22, 163, 74, .22), 0 0 14px rgba(22, 163, 74, .42); }
 /* v3.25.1：轨道内刻度点层（覆盖层不抢指针事件）——与 thumb 圆点同几何，挡位数动态 2~7 档都精确均分 */
 .think-track-wrap { position: relative; }
 /* key fix（装机自查 2026-10-24）：层不 inset:0（wrap 高=3+12+8=23px，top:50% 会偏到 11.5px≠滑轨中心 9px，

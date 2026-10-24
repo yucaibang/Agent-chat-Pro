@@ -337,6 +337,51 @@ async function runVmSmokeTests() {
     assert.strictEqual(ticks.children.length, 0, "刻度点清空");
     assert.ok(String(labels.innerHTML).includes("think-unsupported"), "levelsRow 换不支持提示");
   });
+
+  await test("B5 三挡 profile 自适应（DeepSeek 令点名 关/中/Max）：渲染层 ECO 恒前置 → 4 点 4 文案同几何不多不少", async () => {
+    const THREE = [
+      { id: "off", label: "关" },
+      { id: "medium", label: "中" },
+      { id: "max", label: "Max" }
+    ];
+    methodMocks.getThinkingProfile = async () => ({ profile: { family: "gemini3", levels: THREE } });
+    windowStub._cachedModes = [{ id: "regular", name: "常规", icon: "💬", description: "", isBuiltIn: true, thinkingLevel: "" }];
+    const script = `currentConnectionMode = "cloud"; currentModeId = "regular";`;
+    vm.runInContext(script, sandbox);
+    await vm.runInContext(`refreshComposerModePopup()`, sandbox);
+    await new Promise((r) => setTimeout(r, 0));
+    const ticks = rt.getFake("#think-ticks");
+    const labels = rt.getFake("#think-levels");
+    const slider = rt.getFake("#think-slider");
+    assert.strictEqual(slider.max, "3", "三挡 profile + ECO 前置 → max=3（渲染层恒加 ECO 挡，renderer.js 3345 行语义）");
+    assert.strictEqual(ticks.children.length, 4, "刻度点=渲染挡位数，不多不少（「多出小圆点」缺陷被数量断言锁死）");
+    assert.strictEqual(labels.children.length, 4, "文案 4 条同数");
+    const lefts = sandbox.__acpSmoke.thinkMarkLefts(4);
+    for (let i = 0; i < 4; i++) {
+      assert.strictEqual(ticks.children[i].style.left, lefts[i], `第 ${i} 刻度 calc 一致`);
+      assert.strictEqual(labels.children[i].style.left, ticks.children[i].style.left, `第 ${i} 文案与刻度同几何（滑块在哪文字在哪）`);
+    }
+    assert.strictEqual(labels.children[0].style.color, "rgb(22, 101, 52)", "ECO 文案深绿（渐进色语义）");
+    assert.strictEqual(String(labels.children[1].textContent), "关", "第 2 挡文案=profile 首挡 label（动态透传）");
+    assert.strictEqual(String(labels.children[3].textContent), "Max", "末挡文案=profile 末挡 label");
+    // 大宽裕度下（4 挡中心距 ≈ 91px）文案必然无重叠
+    const gap4 = (288 - 14) / 3;
+    assert.ok(gap4 > 60, `三挡中心距 ${gap4.toFixed(1)}px 远大于文案半宽和，无挤压重叠`);
+  });
+
+  await test("B6 文案挤压不重叠（288px 浮层宽 × 8 挡最挤场景）：相邻文案估算半宽和 < 中心距", () => {
+    // 近似字宽（11.5px 字号）：全角≈12.5 / 大写英文≈8.6 / 小写数字≈6.8
+    const approxW = (s) => Array.from(s).reduce((sum, ch) => sum + (/[　-鿿！-～]/.test(ch) ? 12.5 : /[A-Z]/.test(ch) ? 8.6 : /[a-z0-9]/.test(ch) ? 6.8 : 6), 0);
+    const W = 288;
+    const labels8 = ["ECO", ...GLM5_LEVELS.map((l) => l.label)]; // 云端渲染层 ECO 前置实况（B1 同构）
+    assert.strictEqual(labels8.length, 8, "八挡最挤场景");
+    const gap = (W - 14) / 7; // 相邻中心距 ≈ 39.14px（与刻度/滑块同几何）
+    assert.ok(gap >= 39, `八挡中心距 ${gap.toFixed(2)}px 在册`);
+    for (let i = 0; i < labels8.length - 1; i++) {
+      const need = approxW(labels8[i]) / 2 + approxW(labels8[i + 1]) / 2;
+      assert.ok(need < gap, `"${labels8[i]}"→"${labels8[i + 1]}" 半宽和 ${need.toFixed(1)}px < 中心距 ${gap.toFixed(1)}px（不重叠）`);
+    }
+  });
 }
 
 /* ── C 组：源码切片 + 边界（thinking-levels.cjs 零触碰） ── */
@@ -348,7 +393,9 @@ async function runSourceTests() {
     assert.ok(stylesSrc.includes("width: 14px; height: 14px; border-radius: 50%;"), "thumb 正圆 14px");
     assert.ok(!stylesSrc.includes("border-radius: 9999px"), "胶囊 9999px 已清除");
     assert.ok(stylesSrc.includes(".think-slider::-webkit-slider-thumb:active { transform: scale(1.18); }"), "拖动放大保留");
-    assert.ok(stylesSrc.includes(".think-slider.blue::-webkit-slider-thumb { border-color: #38bdf8; }") && stylesSrc.includes(".think-slider.eco::-webkit-slider-thumb { border-color: #16a34a; }"), "蓝绿双系描边保留");
+    assert.ok(stylesSrc.includes(".think-slider.blue::-webkit-slider-thumb:active { box-shadow: 0 0 0 3px rgba(56, 189, 248, .22), 0 0 14px rgba(56, 189, 248, .42); }"), "蓝系双层幽蓝光环（近环+远溢细腻化）");
+    assert.ok(stylesSrc.includes(".think-slider.eco::-webkit-slider-thumb:active { box-shadow: 0 0 0 3px rgba(22, 163, 74, .22), 0 0 14px rgba(22, 163, 74, .42); }"), "绿系双层光环同步");
+    assert.ok(!stylesSrc.includes("box-shadow: 0 0 0 5px rgba(56, 189, 248, .25);"), "旧单层 5px 粗糙环清除");
   });
 
   await test("C2 轨道刻度层结构与文案绝对定位对齐（垂直对齐实锤：ticks 层与 slider 盒同高）", () => {
