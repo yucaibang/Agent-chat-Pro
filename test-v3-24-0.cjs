@@ -698,10 +698,10 @@ async function runV3243Tests() {
     assert.ok(rendererSrc.includes("modelEl.textContent = stampTop(remoteModel);"), "远程型号后台渐显追加");
   });
 
-  await test("X2 thumb 形态随 v3.25.1 回正圆小圆点（DeepSeek UI 建议落地：胶囊→圆点+轨道刻度；拖动手感保留）", () => {
-    assert.ok(stylesSrc.includes("width: 14px; height: 14px; border-radius: 50%;"), "thumb 正圆 14px（v3.25.1 回退圆点）");
+  await test("X2 thumb 胶囊随 v3.25.1 第六发改回（用户令「改回胶囊式滑动条」：两端半圆长条+轨道刻度保留；初版圆点撤销）", () => {
+    assert.ok(stylesSrc.includes("width: 26px; height: 14px; border-radius: 9999px;"), "thumb 胶囊形（第六发回 v3.24.3 两端半圆长条）");
     assert.ok(stylesSrc.includes("margin-top: -1px;"), "14px 高度与 12px 轨道居中");
-    assert.ok(!stylesSrc.includes("border-radius: 9999px"), "v3.24.3 胶囊 9999px 已随 v3.25.1 清除");
+    assert.ok(!stylesSrc.includes("width: 14px; height: 14px; border-radius: 50%;"), "初版正圆 14px 圆点组合清除（.think-tick 4px 不连坐）");
     assert.ok(stylesSrc.includes(".think-slider::-webkit-slider-thumb:active { transform: scale(1.18); }"), "拖动放大手感保留");
     assert.ok(stylesSrc.includes(".think-slider.blue::-webkit-slider-thumb { border-color: #3878f0; }") && stylesSrc.includes(".think-slider.eco::-webkit-slider-thumb { border-color: #16a34a; }"), "蓝绿双系描边保留（蓝系=提取纯蓝 #3878f0）");
   });

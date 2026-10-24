@@ -1021,9 +1021,10 @@ textarea { resize: vertical; min-height: 60px; }
 .think-slider:disabled { opacity: .4; cursor: not-allowed; }
 .think-slider::-webkit-slider-thumb {
   -webkit-appearance: none; appearance: none;
-  /* v3.25.1：thumb 回正圆小圆点（DeepSeek UI 建议落地；v3.24.3 胶囊形态按用户新拍板回退），拖动 scale+发光手感保留。
-     14px 直径 → thumb 中心可动区 = [半径7px, 轨道宽-7px]，刻度点与文案按同几何对齐（renderer.js thinkMarkLefts）。 */
-  width: 14px; height: 14px; border-radius: 50%;
+  /* v3.24.3：thumb 两端半圆长条（胶囊形，用户拍板「两边半圆的长条」）——v3.25.1 第六发用户再令改回胶囊
+     （初版 DeepSeek 建议圆点撤销），拖动 scale+发光手感保留。26px 宽 → thumb 中心可动区 =
+     [13px, 轨道宽-13px]，刻度点与文案同几何 R=13（renderer.js 胶囊宽 26px 的一半），三层继续重合。 */
+  width: 26px; height: 14px; border-radius: 9999px;
   background: #fff; border: 2px solid #4b5563;
   box-shadow: 0 1px 4px rgba(0, 0, 0, .35);
   margin-top: -1px;
@@ -1038,7 +1039,7 @@ textarea { resize: vertical; min-height: 60px; }
 .think-slider.eco::-webkit-slider-thumb { border-color: #16a34a; }
 .think-slider.eco::-webkit-slider-thumb:hover { box-shadow: 0 0 8px rgba(22, 163, 74, .25); }
 .think-slider.eco::-webkit-slider-thumb:active { box-shadow: 0 0 0 3px rgba(22, 163, 74, .22), 0 0 14px rgba(22, 163, 74, .42); }
-/* v3.25.1：轨道内刻度点层（覆盖层不抢指针事件）——与 thumb 圆点同几何，挡位数动态 2~7 档都精确均分 */
+/* v3.25.1：轨道内刻度点层（覆盖层不抢指针事件）——与 thumb 同几何（第六发起 thumb=胶囊 26×14，R=13），挡位数动态 2~7 档都精确均分 */
 .think-track-wrap { position: relative; }
 /* key fix（装机自查 2026-10-24）：层不 inset:0（wrap 高=3+12+8=23px，top:50% 会偏到 11.5px≠滑轨中心 9px，
    刻度点整体下垂 2.5px）——改 top/bottom 精确对齐 .think-slider 盒（与其 margin 3/8 联动），点中心与轨道中线重合 */
