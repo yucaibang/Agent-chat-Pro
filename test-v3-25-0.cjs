@@ -403,9 +403,10 @@ async function runVmTests() {
 async function runAssetTests() {
   console.log("── E 组：资产/版本 ──");
 
-  await test("E1 package.json 3.25.0", () => {
+  await test("E1 package.json 版本 ≥ 3.25.0（v3.25.1 起 patch 演进不写死）", () => {
     const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, "package.json"), "utf8"));
-    assert.strictEqual(pkg.version, "3.25.0");
+    const rank = pkg.version.split(".").reduce((sum, part) => sum * 1000 + Number(part), 0);
+    assert.ok(rank >= 325000, `版本 ${pkg.version} 应 ≥ 3.25.0`);
   });
 
   await test("E2 混淆 medium 名单登记 ask-convention.cjs", () => {

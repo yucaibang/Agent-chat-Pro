@@ -495,7 +495,7 @@ async function runWiringTests() {
   });
 
   await test("D10 index.html：think-panel 骨架六元素（v3.24.1 + 重置钮/顶部行）", () => {
-    for (const id of ["think-panel", "think-model", "think-slider", "think-levels", "think-meta", "think-modes"]) {
+    for (const id of ["think-panel", "think-model", "think-slider", "think-ticks", "think-levels", "think-meta", "think-modes"]) {
       assert.ok(htmlSrc.includes(`id="${id}"`), `缺 #${id}`);
     }
     assert.ok(htmlSrc.includes('id="think-reset"'), "v3.24.1 缺 #think-reset 重置钮");
@@ -647,8 +647,8 @@ async function runV3242Tests() {
     assert.ok(rendererSrc.includes('slider.classList.add("eco")') && rendererSrc.includes('slider.classList.add("blue")'), "eco/blue 双主题类切换");
     assert.ok(rendererSrc.includes('slider.style.setProperty("--fill"'), "--fill 填充变量（蓝系按滑距）");
     assert.ok(rendererSrc.includes("const THINK_CHIP_RAMP = [[203, 213, 225], [125, 211, 252], [56, 189, 248], [12, 74, 110]];"), "chips 蓝系四阶渐变表");
-    assert.ok(rendererSrc.includes('chip.style.color = level.id === "eco" ? "rgb(22, 101, 52)" : chipColor(index, levels.length);'), "chips JS 插值上色（eco=深绿）");
-    assert.ok(rendererSrc.includes("slider.oninput = () => renderSliderTheme(slider, levels);"), "oninput 即时换色");
+    assert.ok(rendererSrc.includes('label.style.color = level.id === "eco" ? "rgb(22, 101, 52)" : chipColor(index, levels.length);'), "文案渐进色沿用（v3.25.1 renderChips→renderTrackMarks，eco=深绿语义不变）");
+    assert.ok(rendererSrc.includes("slider.oninput = () => { renderSliderTheme(slider, levels); syncMarkActive(ticksRow, levelsRow, Number(slider.value)); };"), "oninput 即时换色+刻度 active 同步（v3.25.1）");
     assert.ok(rendererSrc.includes("slider.onchange = () => { applyChoice(levels[Number(slider.value)].id); maybeShowThinkEgg(levels, Number(slider.value)); };"), "onchange 落盘+彩蛋（云/SSH 同款）");
     assert.strictEqual(rendererSrc.split("slider.onchange = () => { applyChoice(levels[Number(slider.value)].id); maybeShowThinkEgg(levels, Number(slider.value)); };").length - 1, 2, "云端与 SSH 分支都挂接");
   });
@@ -697,10 +697,10 @@ async function runV3243Tests() {
     assert.ok(rendererSrc.includes("modelEl.textContent = `${baseLabel} · ${remoteModel}`;"), "远程型号后台渐显追加");
   });
 
-  await test("X2 thumb 两端半圆长条（用户拍板胶囊形；原 18px 正圆清除）", () => {
-    assert.ok(stylesSrc.includes("width: 26px; height: 14px; border-radius: 9999px;"), "thumb 胶囊形（26×14 两端半圆）");
+  await test("X2 thumb 形态随 v3.25.1 回正圆小圆点（DeepSeek UI 建议落地：胶囊→圆点+轨道刻度；拖动手感保留）", () => {
+    assert.ok(stylesSrc.includes("width: 14px; height: 14px; border-radius: 50%;"), "thumb 正圆 14px（v3.25.1 回退圆点）");
     assert.ok(stylesSrc.includes("margin-top: -1px;"), "14px 高度与 12px 轨道居中");
-    assert.ok(!/(?:thumb \{\s*[\s\S]{0,120}?)border-radius: 50%/.test(stylesSrc), "旧正圆 thumb 应清除（border-radius: 50% 不再用于 thumb）");
+    assert.ok(!stylesSrc.includes("border-radius: 9999px"), "v3.24.3 胶囊 9999px 已随 v3.25.1 清除");
     assert.ok(stylesSrc.includes(".think-slider::-webkit-slider-thumb:active { transform: scale(1.18); }"), "拖动放大手感保留");
     assert.ok(stylesSrc.includes(".think-slider.blue::-webkit-slider-thumb { border-color: #38bdf8; }") && stylesSrc.includes(".think-slider.eco::-webkit-slider-thumb { border-color: #16a34a; }"), "蓝绿双系描边保留");
   });

@@ -3138,6 +3138,20 @@ const THINK_CLAUDE_LEVEL_REVERSE = { eco: "eco", none: "off", low: "low", medium
 // v3.24.2：最高挡彩蛋（随机三选一，2s 后消失）
 const THINK_EGG_LINES = ["更高的工作质量", "燃烧你的钱包吧！", "更快的消耗额度"];
 
+// v3.25.1 轨道刻度+文案同几何对齐（DeepSeek UI 建议落地；纯渲染层，thinking-levels.cjs 零触碰）。
+// 几何实锤：input range 的 thumb 中心可动区是 [半径R, 轨道宽-R]（首尾挡 thumb 不出轨）——
+// 第 i 挡中心 = R + (W-2R)·i/(N-1)，即百分比 pct_i = padPct + spanPct·i。
+// 刻度点、挡位文案、thumb 落位三层同用此函数 → 绝对居中对齐；挡位数动态（各家 2~7 档）。
+const THINK_THUMB_RADIUS = 7; // 与 styles.css thumb 14px 直径同步改（圆点半径）
+const thinkMarkPcts = (count, widthPx) => {
+  const n = Math.max(1, Math.floor(Number(count) || 0));
+  const w = Math.max(1, Number(widthPx) || 0);
+  if (n === 1) return [50];
+  const padPct = (THINK_THUMB_RADIUS / w) * 100;
+  const span = (100 - padPct * 2) / (n - 1);
+  return Array.from({ length: n }, (_, i) => padPct + span * i);
+};
+
 // v3.24.3：SSH/本机挡位浮层顶行补模型型号（装机反馈「没显示模型型号」）——
 // 型号来源优先级：模式显式 modelConfig.model（构建命令同款 sanitize 去 [后缀]）> 远程/本机 Claude 实际生效模型
 // （getModelStatus 读 ~/.claude/settings.json——SSH 走远端 cat、本机走 fs，main.cjs 按连接方式分派）；
@@ -3167,10 +3181,11 @@ async function refreshComposerModePopup() {
   const modelEl = document.querySelector("#think-model");
   const slider = document.querySelector("#think-slider");
   const levelsRow = document.querySelector("#think-levels");
+  const ticksRow = document.querySelector("#think-ticks");
   const meta = document.querySelector("#think-meta");
   const modesRow = document.querySelector("#think-modes");
   // 面板骨架不存在（HTML 未升级/桥版）→ 静默退出
-  if (!slider || !modesRow) return;
+  if (!slider || !modesRow || !ticksRow) return;
 
   const applyChoice = async (choiceId) => {
     try {
@@ -3257,16 +3272,32 @@ async function refreshComposerModePopup() {
     const mix = (a, b, t2) => Math.round(a + (b - a) * t2);
     return `rgb(${mix(c[0], n[0], frac)}, ${mix(c[1], n[1], frac)}, ${mix(c[2], n[2], frac)})`;
   };
-  const renderChips = (row, levels, activeIndex) => {
-    row.replaceChildren();
+  // v3.25.1：挡位渲染改为「轨道内刻度点 + 下方文案」双层，同一几何函数定位（thinkMarkPcts）——
+  // 原 renderChips 的 flex space-between 文字中心与 thumb 中心有系统性偏差，本版三点重合；
+  // chips 渐进色语义保留（文字沿用 chipColor 插值，eco=深绿/默认=灰白/其余蓝系四阶）
+  const renderTrackMarks = (ticksRow, labelsRow, slider, levels, activeIndex) => {
+    const pcts = thinkMarkPcts(levels.length, slider.clientWidth);
+    ticksRow.replaceChildren();
+    labelsRow.replaceChildren();
     levels.forEach((level, index) => {
-      const chip = document.createElement("span");
-      chip.className = `think-level${index === activeIndex ? " active" : ""}`;
-      chip.textContent = level.label;
-      chip.title = level.hint || "";
-      chip.style.color = level.id === "eco" ? "rgb(22, 101, 52)" : chipColor(index, levels.length);
-      row.append(chip);
+      const pct = pcts[index] ?? 50;
+      const tick = document.createElement("span");
+      tick.className = `think-tick${index === activeIndex ? " active" : ""}${level.id === "eco" ? " eco" : ""}`;
+      tick.style.left = `${pct}%`;
+      ticksRow.append(tick);
+      const label = document.createElement("span");
+      label.className = `think-level${index === activeIndex ? " active" : ""}`;
+      label.textContent = level.label;
+      label.title = level.hint || "";
+      label.style.color = level.id === "eco" ? "rgb(22, 101, 52)" : chipColor(index, levels.length);
+      label.style.left = `${pct}%`;
+      labelsRow.append(label);
     });
+  };
+  // v3.25.1：拖动/选挡时轻量同步 active（不重建 DOM 防闪烁）
+  const syncMarkActive = (ticksRow, labelsRow, activeIndex) => {
+    Array.from(ticksRow.children).forEach((el, i) => el.classList.toggle("active", i === activeIndex));
+    Array.from(labelsRow.children).forEach((el, i) => el.classList.toggle("active", i === activeIndex));
   };
   // 最高挡彩蛋：拉到最高挡瞬间，面板下方随机文案显示 2s 后淡出
   let thinkEggTimer = null;
@@ -3304,6 +3335,7 @@ async function refreshComposerModePopup() {
       if (!profile || !Array.isArray(profile.levels) || !profile.levels.length) {
         slider.disabled = true;
         slider.value = 0;
+        ticksRow.replaceChildren();
         levelsRow.innerHTML = `<span class="think-unsupported">该模型不支持思考调节</span>`;
         if (meta) meta.textContent = "思考挡位按模型原生支持显示；未列出时不注入任何思考参数。";
         return;
@@ -3318,10 +3350,10 @@ async function refreshComposerModePopup() {
       const defaultIdx = Math.max(0, levels.findIndex((l) => l.id === "off"));
       slider.value = String(choice ? Math.max(0, levels.findIndex((l) => l.id === choice)) : defaultIdx);
       renderSliderTheme(slider, levels);
-      renderChips(levelsRow, levels, Number(slider.value));
+      renderTrackMarks(ticksRow, levelsRow, slider, levels, Number(slider.value));
       const active = levels[Number(slider.value)] || levels[0];
       renderMeta(active, Boolean(choice));
-      slider.oninput = () => renderSliderTheme(slider, levels);
+      slider.oninput = () => { renderSliderTheme(slider, levels); syncMarkActive(ticksRow, levelsRow, Number(slider.value)); };
       slider.onchange = () => { applyChoice(levels[Number(slider.value)].id); maybeShowThinkEgg(levels, Number(slider.value)); };
     } else {
       // SSH / 本机 claude 引擎：挡位=会话偏好（settings.thinkingChoices.ssh[工作模式]），
@@ -3353,6 +3385,7 @@ async function refreshComposerModePopup() {
       if (!engineClaude) {
         slider.disabled = true;
         slider.value = 0;
+        ticksRow.replaceChildren();
         levelsRow.innerHTML = `<span class="think-unsupported">当前引擎不支持思考调节</span>`;
         return;
       }
@@ -3362,10 +3395,10 @@ async function refreshComposerModePopup() {
       slider.step = 1;
       slider.value = String(Math.max(0, levels.findIndex((l) => l.id === levelId)));
       renderSliderTheme(slider, levels);
-      renderChips(levelsRow, levels, Number(slider.value));
+      renderTrackMarks(ticksRow, levelsRow, slider, levels, Number(slider.value));
       const active = levels[Number(slider.value)] || levels[0];
       renderMeta(active, Boolean(sshChoice));
-      slider.oninput = () => renderSliderTheme(slider, levels);
+      slider.oninput = () => { renderSliderTheme(slider, levels); syncMarkActive(ticksRow, levelsRow, Number(slider.value)); };
       slider.onchange = () => { applyChoice(levels[Number(slider.value)].id); maybeShowThinkEgg(levels, Number(slider.value)); };
     }
   };

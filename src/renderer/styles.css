@@ -1017,8 +1017,9 @@ textarea { resize: vertical; min-height: 60px; }
 .think-slider:disabled { opacity: .4; cursor: not-allowed; }
 .think-slider::-webkit-slider-thumb {
   -webkit-appearance: none; appearance: none;
-  /* v3.24.3：thumb 改两端半圆的长条（胶囊形，用户拍板「两边半圆的长条」；原 18px 正圆） */
-  width: 26px; height: 14px; border-radius: 9999px;
+  /* v3.25.1：thumb 回正圆小圆点（DeepSeek UI 建议落地；v3.24.3 胶囊形态按用户新拍板回退），拖动 scale+发光手感保留。
+     14px 直径 → thumb 中心可动区 = [半径7px, 轨道宽-7px]，刻度点与文案按同几何对齐（renderer.js thinkMarkPcts）。 */
+  width: 14px; height: 14px; border-radius: 50%;
   background: #fff; border: 2px solid #4b5563;
   box-shadow: 0 1px 4px rgba(0, 0, 0, .35);
   margin-top: -1px;
@@ -1029,8 +1030,27 @@ textarea { resize: vertical; min-height: 60px; }
 .think-slider.blue::-webkit-slider-thumb:active { box-shadow: 0 0 0 5px rgba(56, 189, 248, .25); }
 .think-slider.eco::-webkit-slider-thumb { border-color: #16a34a; }
 .think-slider.eco::-webkit-slider-thumb:active { box-shadow: 0 0 0 5px rgba(22, 163, 74, .25); }
-.think-levels { display: flex; justify-content: space-between; gap: 4px; padding: 0 2px; }
-.think-level { font-size: 11.5px; cursor: default; white-space: nowrap; transition: color .2s; }
+/* v3.25.1：轨道内刻度点层（覆盖层不抢指针事件）——与 thumb 圆点同几何，挡位数动态 2~7 档都精确均分 */
+.think-track-wrap { position: relative; }
+.think-ticks { position: absolute; inset: 0; pointer-events: none; }
+.think-tick {
+  position: absolute; top: 50%;
+  width: 4px; height: 4px; border-radius: 50%;
+  background: rgba(148, 163, 184, .55);
+  transform: translate(-50%, -50%);
+  transition: background .15s ease, transform .15s ease;
+}
+.think-tick.active { background: #e2e8f0; transform: translate(-50%, -50%) scale(1.55); }
+.think-tick.eco { background: rgba(134, 239, 172, .75); }
+.think-tick.eco.active { background: #86efac; }
+/* v3.25.1：挡位文案改绝对定位与刻度点/thumb 同几何（translateX(-50%) 锚中心）——
+   原 flex space-between 的文字中心与 thumb 中心存在系统性偏差（首尾挡最明显），本版三点重合 */
+.think-levels { position: relative; height: 17px; margin-top: -2px; }
+.think-level {
+  position: absolute; top: 0;
+  transform: translateX(-50%);
+  font-size: 11.5px; cursor: default; white-space: nowrap; transition: color .2s;
+}
 .think-level.active { font-weight: 700; }
 /* v3.24.2：chips 颜色改由渲染层按挡位序列插值（eco=深绿/默认=灰白/其余蓝系四阶），nth-child 硬编码渐进移除 */
 /* 最高挡彩蛋行（拉到最高挡：2s 随机文案，淡入淡出） */

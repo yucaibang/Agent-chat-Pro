@@ -172,7 +172,10 @@
                 <div class="think-model" id="think-model">—</div>
                 <button type="button" class="think-reset" id="think-reset" title="恢复默认挡位（清除挡位偏好记忆）" hidden>↻</button>
               </div>
-              <input class="think-slider" id="think-slider" type="range" min="0" max="0" step="1" value="0" disabled />
+              <div class="think-track-wrap">
+                <input class="think-slider" id="think-slider" type="range" min="0" max="0" step="1" value="0" disabled />
+                <div class="think-ticks" id="think-ticks" aria-hidden="true"></div>
+              </div>
               <div class="think-levels" id="think-levels"></div>
               <div class="think-meta" id="think-meta"></div>
               <div class="think-egg" id="think-egg" hidden></div>
