@@ -291,10 +291,11 @@ async function runVmSmokeTests() {
     assert.ok(ticks.children[1].classList.contains("active"), "off 挡（defaultIdx=1）active");
     assert.ok(!ticks.children[1].classList.contains("eco"), "off 刻度点不带 eco 类");
     assert.ok(labels.children[1].classList.contains("active"), "文案 active 与刻度同位");
-    // 两端贴端对齐锚（DeepSeek 修复令吸收）：首挡文字左缘=刻度中心、末挡右缘=刻度中心、中间挡居中
-    assert.strictEqual(labels.children[0].style.transform, "translateX(0)", "首挡 ECO 文案贴端（左缘=刻度中心，不再探出滑轨盒左沿）");
-    assert.strictEqual(labels.children[7].style.transform, "translateX(-100%)", "末挡文案贴端（右缘=刻度中心）");
-    assert.strictEqual(labels.children[1].style.transform, "translateX(-50%)", "中间挡文案保持中心锚");
+    // 挡位文案全表中心锚（v3.25.2 装机位移修复，用户拍板 A）——v3.25.1 贴端形态实锤位移作废：
+    // 文字中心=刻度中心=胶囊中心三点重合，任何挡位都是同一个锚
+    assert.strictEqual(labels.children[0].style.transform, "translateX(-50%)", "首挡 ECO 文案中心锚（与刻度/胶囊三点重合）");
+    assert.strictEqual(labels.children[7].style.transform, "translateX(-50%)", "末挡文案中心锚");
+    assert.strictEqual(labels.children[1].style.transform, "translateX(-50%)", "中间挡文案中心锚");
   });
 
   await test("B2 拖动 oninput：active 轻量同步到新挡（DOM 不重建，children 引用不换）", async () => {
@@ -369,10 +370,10 @@ async function runVmSmokeTests() {
     assert.strictEqual(labels.children[0].style.color, "rgb(22, 101, 52)", "ECO 文案深绿（渐进色语义）");
     assert.strictEqual(String(labels.children[1].textContent), "关", "第 2 挡文案=profile 首挡 label（动态透传）");
     assert.strictEqual(String(labels.children[3].textContent), "Max", "末挡文案=profile 末挡 label");
-    // 三挡场景同锚（首挡 ECO 贴左端/末挡 Max 贴右端/中间关·中居中）
-    assert.strictEqual(labels.children[0].style.transform, "translateX(0)", "三挡首端 ECO 贴端左（左缘=刻度中心）");
-    assert.strictEqual(labels.children[3].style.transform, "translateX(-100%)", "三挡末端 Max 贴端右（右缘=刻度中心）");
-    assert.strictEqual(labels.children[2].style.transform, "translateX(-50%)", "三挡中端居中锚");
+    // 三挡场景同锚（v3.25.2 全表中心锚）：首挡 ECO/末挡 Max/中间关 文字中心都与刻度中心重合
+    assert.strictEqual(labels.children[0].style.transform, "translateX(-50%)", "三挡首端 ECO 中心锚");
+    assert.strictEqual(labels.children[3].style.transform, "translateX(-50%)", "三挡末端 Max 中心锚");
+    assert.strictEqual(labels.children[2].style.transform, "translateX(-50%)", "三挡中端中心锚");
     // 大宽裕度下（4 挡中心距 ≈ 91px）文案必然无重叠
     const gap4 = (288 - 14) / 3;
     assert.ok(gap4 > 60, `三挡中心距 ${gap4.toFixed(1)}px 远大于文案半宽和，无挤压重叠`);
@@ -451,15 +452,31 @@ async function runSourceTests() {
   await test("C2 轨道刻度层结构与文案绝对定位对齐（垂直对齐实锤：ticks 层与 slider 盒同高）", () => {
     assert.ok(indexSrc.includes('<div class="think-track-wrap">') && indexSrc.includes('<div class="think-ticks" id="think-ticks"'), "index.html 轨道包裹层+刻度层骨架");
     assert.ok(stylesSrc.includes(".think-slider {\n  -webkit-appearance: none; appearance: none;\n  width: 100%; height: 12px; border-radius: 7px; margin: 3px 0 8px;"), "slider 高 12px+margin 3/8（wrap 内唯一盒）");
-    assert.ok(stylesSrc.includes(".think-ticks { position: absolute; top: 3px; bottom: 8px; left: 0; right: 0; pointer-events: none; }"), "刻度层 top/bottom 与 slider margin 联动（inset:0 会让点中心 11.5px≠轨道 9px，偏下 2.5px）");
+    assert.ok(stylesSrc.includes(".think-ticks { position: absolute; top: 3px; bottom: 8px; left: 0; right: 0; pointer-events: none; z-index: 1; }"), "刻度层 top/bottom 与 slider margin 联动+层序 z1（inset:0 会让点中心 11.5px≠轨道 9px，偏下 2.5px）");
     assert.ok(!stylesSrc.includes(".think-ticks { position: absolute; inset: 0;"), "inset:0 形态清除（垂直偏移源）");
     assert.ok(stylesSrc.includes(".think-tick.eco"), "eco 刻度点绿系");
     assert.ok(stylesSrc.includes("transform: translateX(-50%)"), "文案中心锚定（对齐刻度）");
     assert.ok(stylesSrc.includes(".think-levels { position: relative; height: 17px; margin-top: -2px; }"), "文案行定高容器");
+    // v3.25.2 层序修复锚（装机实锤：白胶囊中央透出刻度点）——轨道渐变拎 ::before + z 三层序
+    assert.ok(stylesSrc.includes(".think-track-wrap::before"), "::before 独立轨道渐变层在册");
     assert.ok(rendererSrc.includes("renderTrackMarks(") && rendererSrc.includes("syncMarkActive(ticksRow, levelsRow"), "渲染接线在册");
     assert.ok(!rendererSrc.includes("const renderChips"), "旧 flex 文案渲染函数声明清除");
     const rtmBody = rendererSrc.slice(rendererSrc.indexOf("const renderTrackMarks"), rendererSrc.indexOf("const syncMarkActive"));
     assert.ok(rtmBody.includes("thinkMarkLefts") && !rtmBody.includes("clientWidth"), "renderTrackMarks 零 clientWidth 依赖（hidden 态渲染免疫，装机自查 key fix）");
+  });
+
+  await test("C2b 层序三分：轨道渐变(z0::before) < 刻度点(z1) < 原生 thumb(z2) + 变量落 wrap", () => {
+    const before = stylesSrc.slice(stylesSrc.indexOf(".think-track-wrap::before"), stylesSrc.indexOf(".think-slider {"));
+    assert.ok(before.includes("z-index: 0;") && before.includes("background-image:"), "轨道渐变层（z0）承载三重背景");
+    assert.ok(before.includes("var(--fill, 0%) 100%, var(--eco, 0%) 100%"), "--fill/--eco 变量消费在 ::before（继承 wrap）");
+    assert.ok(stylesSrc.includes(".think-ticks { position: absolute; top: 3px; bottom: 8px; left: 0; right: 0; pointer-events: none; z-index: 1; }"), "刻度层 z1（夹轨道与 thumb 之间）");
+    const sliderRule = stylesSrc.slice(stylesSrc.indexOf(".think-slider {"), stylesSrc.indexOf(".think-slider:disabled"));
+    assert.ok(sliderRule.includes("background: none;") && sliderRule.includes("z-index: 2;"), "slider 背景清空+thumb 层提到刻度上（z2）");
+    assert.ok(!stylesSrc.includes(".think-slider.eco { --eco: 100%; }"), "旧 --eco class 规则清除（变量走 renderSliderTheme 显式落 wrap）");
+    const rst = rendererSrc.slice(rendererSrc.indexOf("const renderSliderTheme"), rendererSrc.indexOf("const THINK_CHIP_RAMP"));
+    assert.ok(rst.includes("slider.parentElement || slider") && rst.includes('wrap.style.setProperty'), "renderSliderTheme 变量落 wrap（伪元素继承）");
+    assert.ok(!rendererSrc.includes('translateX(0)"') && !rendererSrc.includes('translateX(-100%)"'), "贴端三态条件全清除（v3.25.1 位移根因）");
+    assert.ok(rendererSrc.includes('label.style.transform = "translateX(-50%)"'), "全表恒中心锚（一点一写）");
   });
 
   await test("C3 边界：thinking-levels.cjs 零触碰（主进程不引用渲染层符号）+ 家族挡位数动态谱（2~7 档）", () => {
@@ -512,12 +529,12 @@ async function runVersionTests() {
     assert.ok(rendererSrc.includes("meta.innerHTML = \"\";"), "「当前挡位」行已删（用户令简洁化）");
   });
 
-  await test("D1 package.json 版本 3.25.1", () => {
-    assert.strictEqual(pkg.version, "3.25.1", "版本号 = 3.25.1");
+  await test("D1 package.json 版本 3.25.2", () => {
+    assert.strictEqual(pkg.version, "3.25.2", "版本号 = 3.25.2（装机位移+tick 层序修复版）");
   });
   await test("D2 README badge 同步", () => {
-    assert.ok(rendererSrc.includes("v3.25.1 轨道刻度"), "renderer.js 版本注释在册");
-    assert.ok(stylesSrc.includes("v3.25.1"), "styles.css 版本注释在册");
+    assert.ok(rendererSrc.includes("v3.25.2 装机位移修复"), "renderer.js 版本注释在册");
+    assert.ok(stylesSrc.includes("v3.25.2"), "styles.css 版本注释在册");
   });
 }
 

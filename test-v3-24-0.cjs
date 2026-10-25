@@ -645,7 +645,7 @@ async function runV3242Tests() {
   await test("W4 挡位条主题接线：renderSliderTheme/chips 上色/双分支挂接（蓝绿双系 + 滑动动画）", () => {
     assert.ok(rendererSrc.includes("const renderSliderTheme = (slider, levels) => {"), "轨道主题 helper");
     assert.ok(rendererSrc.includes('slider.classList.add("eco")') && rendererSrc.includes('slider.classList.add("blue")'), "eco/blue 双主题类切换");
-    assert.ok(rendererSrc.includes('slider.style.setProperty("--fill"'), "--fill 填充变量（蓝系按滑距）");
+    assert.ok(rendererSrc.includes('wrap.style.setProperty("--fill"'), "--fill 填充变量（蓝系按滑距；v3.25.2 层序修复：变量落 wrap 供 ::before 继承，eco/blue 类仍挂 slider）");
     assert.ok(rendererSrc.includes("const THINK_CHIP_RAMP = [[203, 213, 225], [157, 180, 247], [56, 120, 240], [30, 58, 138]];"), "chips 蓝系四阶渐变表（v3.25.1 配色：纯蓝 #3878f0 族）");
     assert.ok(rendererSrc.includes('label.style.color = level.id === "eco" ? "rgb(22, 101, 52)" : chipColor(index, levels.length);'), "文案渐进色沿用（v3.25.1 renderChips→renderTrackMarks，eco=深绿语义不变）");
     assert.ok(rendererSrc.includes("slider.oninput = () => { renderSliderTheme(slider, levels); syncMarkActive(ticksRow, levelsRow, Number(slider.value));"), "oninput 即时换色+刻度 active 同步（v3.25.1；顶行英文标拖挡即时重拼追加）");
@@ -668,7 +668,7 @@ async function runV3242Tests() {
     assert.ok(stylesSrc.includes("linear-gradient(90deg, #14532d 0%, #16a34a 32%, #86efac 62%, #f0fdf4 100%)"), "③eco 整轨渐变层（深绿→绿→浅绿→白）");
     assert.ok(stylesSrc.includes("background-size: var(--fill, 0%) 100%, var(--eco, 0%) 100%, var(--eco, 0%) 100%;"), "三变量控长显隐");
     assert.ok(stylesSrc.includes("transition: background-size .22s ease;"), "滑动过渡动画（Chromium 原生）");
-    assert.ok(stylesSrc.includes(".think-slider.eco { --eco: 100%; }"), "eco 类切绿系");
+    assert.ok(!stylesSrc.includes(".think-slider.eco { --eco: 100%; }"), "旧 --eco class 规则清除（v3.25.2 层序修复：--eco 由 renderSliderTheme 显式设 wrap，::before 消费）");
     assert.ok(stylesSrc.includes("height: 12px; border-radius: 7px;"), "粗条轨道（IMG_2679：做宽做粗）");
     assert.ok(stylesSrc.includes(".think-slider::-webkit-slider-thumb:active { transform: scale(1.18); }"), "拖动放大手感");
     assert.ok(stylesSrc.includes(".composer-mode-popup") && stylesSrc.includes("min-width: 300px;"), "面板加宽（220→300px）");

@@ -998,15 +998,17 @@ textarea { resize: vertical; min-height: 60px; }
 .think-reset:hover { background: var(--bg-input); color: var(--accent, #4f8ef7); }
 /* v3.24.2 挡位条重做（用户拍板参考 IMG_2679）：粗条轨道 + 三层背景渐变 + 滑动过渡动画
    v3.25.1 配色追改（用户令 2026-10-24）：蓝系全量换 Codex 参考图（IMG_2715）像素采样提取的纯蓝
-   #3878f0（蓝像素主簇 24.8%，量化 ±8）——旧 sky 蓝族全部清除（值不再留痕），eco 绿系三行零触碰
-   层序（上→下）：① 蓝系已选填充层（白→浅蓝→纯蓝→深蓝，--fill 控长=滑块位置比例）
-                 ② eco 绿系颗粒层（浅绿小点 repeat 平铺，--eco 控显隐）
-                 ③ eco 绿系整轨渐变层（深绿→绿→浅绿→白）
-   底色 = 深灰（默认挡/未填充态）。--fill 由渲染层 renderSliderTheme 按挡位 inline 设置，
-   .think-slider.eco { --eco:100% } 切绿系；background-size 过渡 = 滑块平滑动画（Chromium 原生）。 */
-.think-slider {
-  -webkit-appearance: none; appearance: none;
-  width: 100%; height: 12px; border-radius: 7px; margin: 3px 0 8px;
+   #3878f0（蓝像素主簇 24.8%，量化 ±8）——旧 sky 蓝族全部清除（值不再留痕），eco 绿系零触碰
+   v3.25.2 层序修复（装机实锤 2026-10-25，拍板 A）：tick 层原是 slider 的后置兄弟节点 → 绘制序永远
+   在原生 thumb 之上，白色胶囊中央必然透出刻度点（真机截图：ECO 挡左缘绿点/最高挡右缘灰点）。
+   修复 = 轨道渐变背景拎出 .think-track-wrap::before 独立层 + z 三层序：
+   ::before 轨道渐变(z:0) < .think-ticks 刻度点(z:1) < .think-slider 原生 thumb(z:2)——
+   tick 在轨道上可见、与胶囊重叠区被 thumb 罩住。--fill/--eco 由 renderSliderTheme 设在 wrap
+   （伪元素 var() 继承父级变量）；滑距动画 transition 随层走。 */
+.think-track-wrap::before {
+  content: ""; position: absolute; z-index: 0; pointer-events: none;
+  top: 3px; bottom: 8px; left: 0; right: 0;   /* 与 .think-slider 盒（margin 3/8）精确对齐 */
+  border-radius: 7px;
   background-color: #2b323b;
   background-image:
     linear-gradient(90deg, #f8fafc 0%, #9db4f7 34%, #3878f0 67%, #1e3a8a 100%),
@@ -1015,9 +1017,14 @@ textarea { resize: vertical; min-height: 60px; }
   background-repeat: no-repeat, repeat, no-repeat;
   background-size: var(--fill, 0%) 100%, var(--eco, 0%) 100%, var(--eco, 0%) 100%;
   transition: background-size .22s ease;
+}
+.think-slider {
+  -webkit-appearance: none; appearance: none;
+  width: 100%; height: 12px; border-radius: 7px; margin: 3px 0 8px;
+  background: none;                /* 轨道渐变挪 ::before（层序修复） */
+  position: relative; z-index: 2;  /* 原生 thumb 提到刻度层上（罩住重叠区 tick） */
   cursor: pointer;
 }
-.think-slider.eco { --eco: 100%; }
 .think-slider:disabled { opacity: .4; cursor: not-allowed; }
 .think-slider::-webkit-slider-thumb {
   -webkit-appearance: none; appearance: none;
@@ -1043,7 +1050,7 @@ textarea { resize: vertical; min-height: 60px; }
 .think-track-wrap { position: relative; }
 /* key fix（装机自查 2026-10-24）：层不 inset:0（wrap 高=3+12+8=23px，top:50% 会偏到 11.5px≠滑轨中心 9px，
    刻度点整体下垂 2.5px）——改 top/bottom 精确对齐 .think-slider 盒（与其 margin 3/8 联动），点中心与轨道中线重合 */
-.think-ticks { position: absolute; top: 3px; bottom: 8px; left: 0; right: 0; pointer-events: none; }
+.think-ticks { position: absolute; top: 3px; bottom: 8px; left: 0; right: 0; pointer-events: none; z-index: 1; }
 .think-tick {
   position: absolute; top: 50%;
   width: 4px; height: 4px; border-radius: 50%;

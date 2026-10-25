@@ -3256,21 +3256,27 @@ async function refreshComposerModePopup() {
   const renderSliderTheme = (slider, levels) => {
     const index = Number(slider.value);
     const active = levels[index] || levels[0];
+    // v3.25.2 层序修复：轨道渐变背景挪 .think-track-wrap::before——--fill/--eco 改设 wrap（伪元素 var() 继承父级）；
+    // eco/blue class 仍留在 slider（thumb 描边/光环选择器 .think-slider.blue|.eco 依赖）
+    const wrap = slider.parentElement || slider;
     if (!active || active.id === "off") {
       slider.classList.remove("eco", "blue");
-      slider.style.setProperty("--fill", "0%");
+      wrap.style.setProperty("--fill", "0%");
+      wrap.style.setProperty("--eco", "0%");
       return;
     }
     if (active.id === "eco") {
       slider.classList.add("eco");
       slider.classList.remove("blue");
-      slider.style.setProperty("--fill", "0%");
+      wrap.style.setProperty("--fill", "0%");
+      wrap.style.setProperty("--eco", "100%");
       return;
     }
     const ratio = levels.length > 1 ? index / (levels.length - 1) : 1;
     slider.classList.add("blue");
     slider.classList.remove("eco");
-    slider.style.setProperty("--fill", `${(ratio * 100).toFixed(1)}%`);
+    wrap.style.setProperty("--fill", `${(ratio * 100).toFixed(1)}%`);
+    wrap.style.setProperty("--eco", "0%");
   };
   // 挡位 chips 颜色与轨道色系统一：eco=深绿；默认=灰白；其余按 index 蓝系四阶插值（白→浅蓝→蓝→深蓝）
   // v3.25.1 配色追改：蓝系渐进基色齐步换 Codex 图提取纯蓝 #3878f0 族（浅蓝 #9db4f7/深蓝 #1e3a8a）
@@ -3306,11 +3312,11 @@ async function refreshComposerModePopup() {
       label.title = level.hint || "";
       label.style.color = level.id === "eco" ? "rgb(22, 101, 52)" : chipColor(index, levels.length);
       label.style.left = left;
-      // 两端文案贴端对齐（DeepSeek 修复令吸收，2026-10-24）：首挡文字左缘=刻度中心（translateX(0)）、
-      // 末挡文字右缘=刻度中心（translateX(-100%)）——中心锚在滑轨最左/最右点会把文字探出滑轨盒
-      // （八挡 GLM5 288px 实算：ECO 左缘 -5.9px / Max 右缘 +4.1px，靠浮层 6px 内边距兜住不出框但已出血）；
-      // 中间挡保持中心锚；单挡两端同点居中
-      label.style.transform = levels.length === 1 ? "translateX(-50%)" : index === 0 ? "translateX(0)" : index === levels.length - 1 ? "translateX(-100%)" : "translateX(-50%)";
+      // 挡位文案全表中心锚（v3.25.2 装机位移修复，用户拍板 A）：文字中心=刻度中心=胶囊中心三点重合——
+      // v3.25.1 终版首尾「贴端对齐」（07e6c2e 吸收 DeepSeek 令）实锤位移：首挡文字左缘压在胶囊中心线上
+      // → ECO 文字中心偏右半字（11.5px）、末挡「最高」中心偏左半字（12.5px），真机截图（ECO/最高两端端点挡）实锤；
+      // 中心锚八挡 GLM5 首尾出血 ±6px 由浮层 6px 内边距兜住（68188c5 时代形态，装机无位移报告）
+      label.style.transform = "translateX(-50%)";
       labelsRow.append(label);
     });
   };
