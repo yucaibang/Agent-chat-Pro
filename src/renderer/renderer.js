@@ -3144,9 +3144,11 @@ const THINK_EGG_LINES = ["更高的工作质量", "燃烧你的钱包吧！", "�
 // key fix（装机自查 2026-10-24）：left 用 CSS calc 表达式（%+px 混合）而非「读 clientWidth 再算百分数」——
 // 挡位浮层首次打开时 refresh 在 hidden（display:none）态执行，此时 clientWidth=0，百分数几何会疯狅乱飞；
 // calc 形态由浏览器在元素显示后按真实宽度解析，与时序/隐藏态完全解耦。挡位数动态（各家 2~7 档）。
-// 第六发（用户令「改回胶囊式滑动条」）：thumb 回 v3.24.3 胶囊 26×14——半径=宽的一半 13px，
-// 刻度点/文案几何随 R=13 与 thumb 中心继续三点重合（末挡贴端系数同步 i/(N-1) 内缩 13px）。
-const THINK_THUMB_RADIUS = 13; // 与 styles.css thumb 胶囊 26px 宽同步改（宽的一半）
+// v3.25.3（用户令 2026-10-27 批注图）：thumb=白色正圆 16px、轨道高 16px 同径——
+// 用户原话「轨道半径要和新的滑动条相同」：轨道端部全半圆收口，圆角半径=thumb 半径=8px，
+// 圆 thumb 恒嵌在轨道内（胶囊 26×14 撤销——用户翻旧账：几个版本始终没给到圆的）。
+// 刻度点/文案几何随 R=8 与 thumb 中心继续三点重合（可动区 [8px, 宽-8px] 随原生 thumb 语义内缩 8px）。
+const THINK_THUMB_RADIUS = 8; // 与 styles.css thumb 正圆 16px 直径同步改（半径）
 const thinkMarkLefts = (count) => {
   const n = Math.max(1, Math.floor(Number(count) || 0));
   if (n === 1) return ["50%"];

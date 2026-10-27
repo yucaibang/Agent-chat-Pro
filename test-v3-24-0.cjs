@@ -669,7 +669,7 @@ async function runV3242Tests() {
     assert.ok(stylesSrc.includes("background-size: var(--fill, 0%) 100%, var(--eco, 0%) 100%, var(--eco, 0%) 100%;"), "三变量控长显隐");
     assert.ok(stylesSrc.includes("transition: background-size .22s ease;"), "滑动过渡动画（Chromium 原生）");
     assert.ok(!stylesSrc.includes(".think-slider.eco { --eco: 100%; }"), "旧 --eco class 规则清除（v3.25.2 层序修复：--eco 由 renderSliderTheme 显式设 wrap，::before 消费）");
-    assert.ok(stylesSrc.includes("height: 12px; border-radius: 7px;"), "粗条轨道（IMG_2679：做宽做粗）");
+    assert.ok(stylesSrc.includes("height: 16px; border-radius: 8px;"), "粗条轨道（v3.25.3 加粗 16px+端部 8px 全半圆收口）");
     assert.ok(stylesSrc.includes(".think-slider::-webkit-slider-thumb:active { transform: scale(1.18); }"), "拖动放大手感");
     assert.ok(stylesSrc.includes(".composer-mode-popup") && stylesSrc.includes("min-width: 300px;"), "面板加宽（220→300px）");
   });
@@ -698,10 +698,10 @@ async function runV3243Tests() {
     assert.ok(rendererSrc.includes("modelEl.textContent = stampTop(remoteModel);"), "远程型号后台渐显追加");
   });
 
-  await test("X2 thumb 胶囊随 v3.25.1 第六发改回（用户令「改回胶囊式滑动条」：两端半圆长条+轨道刻度保留；初版圆点撤销）", () => {
-    assert.ok(stylesSrc.includes("width: 26px; height: 14px; border-radius: 9999px;"), "thumb 胶囊形（第六发回 v3.24.3 两端半圆长条）");
-    assert.ok(stylesSrc.includes("margin-top: -1px;"), "14px 高度与 12px 轨道居中");
-    assert.ok(!stylesSrc.includes("width: 14px; height: 14px; border-radius: 50%;"), "初版正圆 14px 圆点组合清除（.think-tick 4px 不连坐）");
+  await test("X2 thumb 随 v3.25.3 终定正圆（用户令 2026-10-27「我想让滑动条是圆的」+批注图白色圆圈实锤：胶囊 26×14 终结）", () => {
+    assert.ok(stylesSrc.includes("width: 16px; height: 16px; border-radius: 50%;"), "thumb 正圆 16px（直径=轨道高 16px，用户令「半径相同」）");
+    assert.ok(stylesSrc.includes("margin-top: 0;"), "16px 圆与 16px 轨道同径天然居中（无 -1px 偏移）");
+    assert.ok(!stylesSrc.includes("border-radius: 9999px;"), "胶囊 9999px 组合清除（.think-tick 4px 不连坐）");
     assert.ok(stylesSrc.includes(".think-slider::-webkit-slider-thumb:active { transform: scale(1.18); }"), "拖动放大手感保留");
     assert.ok(stylesSrc.includes(".think-slider.blue::-webkit-slider-thumb { border-color: #3878f0; }") && stylesSrc.includes(".think-slider.eco::-webkit-slider-thumb { border-color: #16a34a; }"), "蓝绿双系描边保留（蓝系=提取纯蓝 #3878f0）");
   });

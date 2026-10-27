@@ -15,8 +15,9 @@
  *
  * 几何核心（renderer.js thinkMarkLefts，calc 形态）：input range 的 thumb 中心可动区
  *   是 [半径R, 轨道宽-R]（首尾挡 thumb 不出轨）→ 第 i 挡中心
- *   left_i = calc(13px + (100% - 26px)*i/(N-1))。刻度点、文案、thumb 三层同用此函数。
- *   （第六发 2026-10-24 用户令「改回胶囊式滑动条」：thumb=胶囊 26×14 → R=宽的一半 13px）
+ *   left_i = calc(8px + (100% - 16px)*i/(N-1))。刻度点、文案、thumb 三层同用此函数。
+ *   （第六发胶囊 26×14 终结于 v3.25.3：用户 2026-10-27 令「我想让滑动条是圆的」+批注图白色圆圈
+ *    实锤——thumb=白色正圆 16px、轨道高 16px 同径、轨道端部圆角 8px=thumb 半径全半圆收口）
  * key fix（2026-10-24 装机自查）：left 用 CSS calc 表达式而非「读 clientWidth 算百分数」——
  *   浮层首次打开在 hidden（display:none）态渲染，clientWidth=0 会让百分数几何疯狅乱飞；
  *   calc 由浏览器显示后按真实宽度解析，与时序/隐藏态解耦，B 组假 DOM 也天然无法再掩盖该类 bug。
@@ -210,13 +211,13 @@ const GLM5_LEVELS = [
 
 /* ── A 组：thinkMarkLefts 几何纯函数（calc 形态） ── */
 
-const expLeft = (n, i) => `calc(13px + (100% - 26px)*${i}/${n - 1})`;
+const expLeft = (n, i) => `calc(8px + (100% - 16px)*${i}/${n - 1})`;
 
 async function runGeomTests() {
   console.log("── A 组：thinkMarkLefts 几何纯函数（calc 形态） ──");
 
   await test("A1 常量与函数在册（渲染层符号）+ 旧 clientWidth 百分比几何清除", () => {
-    assert.ok(rendererSrc.includes("const THINK_THUMB_RADIUS = 13;"), "thumb 半径常量（第六发胶囊 26px 宽的一半，与 CSS 同步）");
+    assert.ok(rendererSrc.includes("const THINK_THUMB_RADIUS = 8;"), "thumb 半径常量（v3.25.3 正圆 16px 的半径，与 CSS 同步）");
     assert.ok(rendererSrc.includes("const thinkMarkLefts = (count) => {"), "calc 几何纯函数在册（签名无 width 参数）");
     assert.ok(!rendererSrc.includes("thinkMarkPcts"), "旧百分比几何函数清除（clientWidth 依赖源）");
   });
@@ -228,13 +229,13 @@ async function runGeomTests() {
     vmEq(sandbox.__acpSmoke.thinkMarkLefts(2.9).length, 2, "小数向下取整 2 项");
     const two = sandbox.__acpSmoke.thinkMarkLefts(2);
     assert.ok(two[0].startsWith("calc(") && two[0].endsWith(")"), "calc 包裹完整");
-    assert.ok(two[0].includes("13px + (100% - 26px)"), "+ 号两侧空格（CSS calc 语法硬性要求）");
+    assert.ok(two[0].includes("8px + (100% - 16px)"), "+ 号两侧空格（CSS calc 语法硬性要求）");
   });
 
   await test("A3 双挡两端对称（首挡=左端+R，末挡=右端-R），thumb 不出轨", () => {
     const two = sandbox.__acpSmoke.thinkMarkLefts(2);
-    assert.strictEqual(two[0], expLeft(2, 0), "首挡 calc(13px + …*0/1) = 左端 13px");
-    assert.strictEqual(two[1], expLeft(2, 1), "末挡 calc(13px + …*1/1) = 右端 -13px（对称收边）");
+    assert.strictEqual(two[0], expLeft(2, 0), "首挡 calc(8px + …*0/1) = 左端 8px");
+    assert.strictEqual(two[1], expLeft(2, 1), "末挡 calc(8px + …*1/1) = 右端 -8px（对称收边）");
   });
 
   await test("A4 七挡（glm5 实档数上限）逐项等差：第 i 挡系数恰为 i/6", () => {
@@ -246,7 +247,7 @@ async function runGeomTests() {
   await test("A5 八挡（eco 前置 glm5=8 刻度实况）+五挡（SSH）公式形态一致", () => {
     const eight = sandbox.__acpSmoke.thinkMarkLefts(8);
     assert.strictEqual(eight.length, 8, "八项");
-    assert.strictEqual(eight[7], expLeft(8, 7), "末项 = calc(13px + (100% - 26px)*7/7)");
+    assert.strictEqual(eight[7], expLeft(8, 7), "末项 = calc(8px + (100% - 16px)*7/7)");
     const five = sandbox.__acpSmoke.thinkMarkLefts(5);
     assert.strictEqual(five[3], expLeft(5, 3), "SSH medium 挡 calc 公式");
   });
@@ -264,7 +265,7 @@ async function runVmSmokeTests() {
     catch (err) { error = err; }
     assert.ifError(error);
     assert.ok(sandbox.__acpSmoke, "求值后应挂 __acpSmoke");
-    assert.ok(sandbox.__acpSmoke.THINK_THUMB_RADIUS === 13, "半径常量导出对位（胶囊 26px 宽的一半）");
+    assert.ok(sandbox.__acpSmoke.THINK_THUMB_RADIUS === 8, "半径常量导出对位（正圆 16px 的半径）");
   });
   // B0 之后 sandbox 已 contextified 且 __acpSmoke 已挂 → A 组可直接宿主侧调用（跨 realm 数组一律 vmEq）
   await runGeomTests();
@@ -375,7 +376,7 @@ async function runVmSmokeTests() {
     assert.strictEqual(labels.children[3].style.transform, "translateX(-50%)", "三挡末端 Max 中心锚");
     assert.strictEqual(labels.children[2].style.transform, "translateX(-50%)", "三挡中端中心锚");
     // 大宽裕度下（4 挡中心距 ≈ 91px）文案必然无重叠
-    const gap4 = (288 - 14) / 3;
+    const gap4 = (288 - 16) / 3;
     assert.ok(gap4 > 60, `三挡中心距 ${gap4.toFixed(1)}px 远大于文案半宽和，无挤压重叠`);
   });
 
@@ -385,8 +386,8 @@ async function runVmSmokeTests() {
     const W = 288;
     const labels8 = ["ECO", ...GLM5_LEVELS.map((l) => l.label)]; // 云端渲染层 ECO 前置实况（B1 同构）
     assert.strictEqual(labels8.length, 8, "八挡最挤场景");
-    const gap = (W - 26) / 7; // 相邻中心距 ≈ 37.43px（与刻度/滑块同几何；第六发胶囊 26px 同步）
-    assert.ok(gap >= 37, `八挡中心距 ${gap.toFixed(2)}px 在册`);
+    const gap = (W - 16) / 7; // 相邻中心距 ≈ 38.86px（与刻度/滑块同几何；v3.25.3 圆 thumb 16px 直径同步）
+    assert.ok(gap >= 38, `八挡中心距 ${gap.toFixed(2)}px 在册`);
     for (let i = 0; i < labels8.length - 1; i++) {
       const need = approxW(labels8[i]) / 2 + approxW(labels8[i + 1]) / 2;
       assert.ok(need < gap, `"${labels8[i]}"→"${labels8[i + 1]}" 半宽和 ${need.toFixed(1)}px < 中心距 ${gap.toFixed(1)}px（不重叠）`);
@@ -432,9 +433,11 @@ async function runVmSmokeTests() {
 async function runSourceTests() {
   console.log("── C 组：源码切片与边界 ──");
 
-  await test("C1 thumb 胶囊回退（第六发用户令「改回胶囊式滑动条」：v3.24.3 两端半圆长条，初版圆点撤销）+拖动手感与蓝绿描边保留", () => {
-    assert.ok(stylesSrc.includes("width: 26px; height: 14px; border-radius: 9999px;"), "thumb 胶囊形（26×14 两端半圆）");
-    assert.ok(!stylesSrc.includes("width: 14px; height: 14px; border-radius: 50%;"), "初版正圆小圆点精确组合已清除（.think-tick 4px 点不受连坐）");
+  await test("C1 thumb 正圆（v3.25.3 用户令 2026-10-27+批注图实锤：白色圆圈当滑动条，胶囊 26×14 撤销）+拖动手感与蓝绿描边保留", () => {
+    assert.ok(stylesSrc.includes("width: 16px; height: 16px; border-radius: 50%;"), "thumb 正圆 16px（批注图白色圆圈同形，直径=轨道高）");
+    assert.ok(!stylesSrc.includes("border-radius: 9999px;"), "胶囊 9999px 组合清除（v3.24.3 六发形态终结）");
+    assert.ok(stylesSrc.includes("margin-top: 0;   /* thumb 16px = slider 高 16px，天然居中 */"), "圆 thumb 与轨道同径天然居中（无 -1px 偏移）");
+    assert.ok(stylesSrc.includes("border-radius: 8px;   /* = 轨道高 16px 的一半 = 圆 thumb 半径（端部全半圆，用户令「半径相同」） */"), "轨道端部圆角=thumb 半径（用户令「滑动框半径要和新滑动条相同」）");
     assert.ok(stylesSrc.includes(".think-slider::-webkit-slider-thumb:active { transform: scale(1.18); }"), "拖动放大保留");
     assert.ok(stylesSrc.includes(".think-slider.blue::-webkit-slider-thumb:active { box-shadow: 0 0 0 3px rgba(56, 120, 240, .22), 0 0 14px rgba(56, 120, 240, .42); }"), "蓝系双层光环（近环+远溢；v3.25.1 配色追改=提取纯蓝 #3878f0 即 rgb(56,120,240)）");
     assert.ok(stylesSrc.includes(".think-slider.eco::-webkit-slider-thumb:active { box-shadow: 0 0 0 3px rgba(22, 163, 74, .22), 0 0 14px rgba(22, 163, 74, .42); }"), "绿系双层光环同步");
@@ -451,7 +454,7 @@ async function runSourceTests() {
 
   await test("C2 轨道刻度层结构与文案绝对定位对齐（垂直对齐实锤：ticks 层与 slider 盒同高）", () => {
     assert.ok(indexSrc.includes('<div class="think-track-wrap">') && indexSrc.includes('<div class="think-ticks" id="think-ticks"'), "index.html 轨道包裹层+刻度层骨架");
-    assert.ok(stylesSrc.includes(".think-slider {\n  -webkit-appearance: none; appearance: none;\n  width: 100%; height: 12px; border-radius: 7px; margin: 3px 0 8px;"), "slider 高 12px+margin 3/8（wrap 内唯一盒）");
+    assert.ok(stylesSrc.includes(".think-slider {\n  -webkit-appearance: none; appearance: none;\n  width: 100%; height: 16px; border-radius: 8px; margin: 3px 0 8px;"), "slider 高 16px+端部圆角 8px（=圆 thumb 半径全半圆收口）+margin 3/8（wrap 内唯一盒）");
     assert.ok(stylesSrc.includes(".think-ticks { position: absolute; top: 3px; bottom: 8px; left: 0; right: 0; pointer-events: none; z-index: 1; }"), "刻度层 top/bottom 与 slider margin 联动+层序 z1（inset:0 会让点中心 11.5px≠轨道 9px，偏下 2.5px）");
     assert.ok(!stylesSrc.includes(".think-ticks { position: absolute; inset: 0;"), "inset:0 形态清除（垂直偏移源）");
     assert.ok(stylesSrc.includes(".think-tick.eco"), "eco 刻度点绿系");
@@ -529,12 +532,12 @@ async function runVersionTests() {
     assert.ok(rendererSrc.includes("meta.innerHTML = \"\";"), "「当前挡位」行已删（用户令简洁化）");
   });
 
-  await test("D1 package.json 版本 3.25.2", () => {
-    assert.strictEqual(pkg.version, "3.25.2", "版本号 = 3.25.2（装机位移+tick 层序修复版）");
+  await test("D1 package.json 版本 3.25.3", () => {
+    assert.strictEqual(pkg.version, "3.25.3", "版本号 = 3.25.3（thumb 正圆+轨道同径版）");
   });
   await test("D2 README badge 同步", () => {
-    assert.ok(rendererSrc.includes("v3.25.2 装机位移修复"), "renderer.js 版本注释在册");
-    assert.ok(stylesSrc.includes("v3.25.2"), "styles.css 版本注释在册");
+    assert.ok(rendererSrc.includes("v3.25.3（用户令 2026-10-27"), "renderer.js 版本注释在册");
+    assert.ok(stylesSrc.includes("v3.25.3"), "styles.css 版本注释在册");
   });
 }
 

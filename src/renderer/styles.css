@@ -1003,12 +1003,15 @@ textarea { resize: vertical; min-height: 60px; }
    在原生 thumb 之上，白色胶囊中央必然透出刻度点（真机截图：ECO 挡左缘绿点/最高挡右缘灰点）。
    修复 = 轨道渐变背景拎出 .think-track-wrap::before 独立层 + z 三层序：
    ::before 轨道渐变(z:0) < .think-ticks 刻度点(z:1) < .think-slider 原生 thumb(z:2)——
-   tick 在轨道上可见、与胶囊重叠区被 thumb 罩住。--fill/--eco 由 renderSliderTheme 设在 wrap
-   （伪元素 var() 继承父级变量）；滑距动画 transition 随层走。 */
+   tick 在轨道上可见、与 thumb 重叠区被 thumb 罩住。--fill/--eco 由 renderSliderTheme 设在 wrap
+   （伪元素 var() 继承父级变量）；滑距动画 transition 随层走。
+   v3.25.3 几何重定（用户令 2026-10-27，批注图白色圆圈实锤）：轨道加粗 12→16px，端部圆角半径
+   7→8px 全半圆收口——用户原话「滑动框的半径要和新的滑动条相同」：轨道圆角半径=圆 thumb 半径，
+   轨道高=thumb 直径，圆 thumb 恒嵌在轨道内两端不凸出。 */
 .think-track-wrap::before {
   content: ""; position: absolute; z-index: 0; pointer-events: none;
   top: 3px; bottom: 8px; left: 0; right: 0;   /* 与 .think-slider 盒（margin 3/8）精确对齐 */
-  border-radius: 7px;
+  border-radius: 8px;   /* = 轨道高 16px 的一半 = 圆 thumb 半径（端部全半圆，用户令「半径相同」） */
   background-color: #2b323b;
   background-image:
     linear-gradient(90deg, #f8fafc 0%, #9db4f7 34%, #3878f0 67%, #1e3a8a 100%),
@@ -1020,7 +1023,7 @@ textarea { resize: vertical; min-height: 60px; }
 }
 .think-slider {
   -webkit-appearance: none; appearance: none;
-  width: 100%; height: 12px; border-radius: 7px; margin: 3px 0 8px;
+  width: 100%; height: 16px; border-radius: 8px; margin: 3px 0 8px;   /* v3.25.3：高 16=圆 thumb 直径，端部同半径 8px */
   background: none;                /* 轨道渐变挪 ::before（层序修复） */
   position: relative; z-index: 2;  /* 原生 thumb 提到刻度层上（罩住重叠区 tick） */
   cursor: pointer;
@@ -1028,13 +1031,15 @@ textarea { resize: vertical; min-height: 60px; }
 .think-slider:disabled { opacity: .4; cursor: not-allowed; }
 .think-slider::-webkit-slider-thumb {
   -webkit-appearance: none; appearance: none;
-  /* v3.24.3：thumb 两端半圆长条（胶囊形，用户拍板「两边半圆的长条」）——v3.25.1 第六发用户再令改回胶囊
-     （初版 DeepSeek 建议圆点撤销），拖动 scale+发光手感保留。26px 宽 → thumb 中心可动区 =
-     [13px, 轨道宽-13px]，刻度点与文案同几何 R=13（renderer.js 胶囊宽 26px 的一半），三层继续重合。 */
-  width: 26px; height: 14px; border-radius: 9999px;
+  /* v3.25.3（用户令 2026-10-27+批注图实锤）：thumb=白色正圆 16px——用户翻旧账「我想让滑动条是圆的
+     很难吗」+「抠批注图里的白色圆圈当滑动条」+「轨道半径=新滑动条半径」，胶囊 26×14 撤销（v3.24.3
+     六发形态终结）。直径 16px=轨道高 16px → 圆恒嵌轨道内；描边 2px 保留（纯白圆与轨道浅端
+     #f8fafc 需要边界区分，功能性差异，形状语义按批注图=正圆）；拖动 scale+发光手感保留。
+     16px 直径 → thumb 中心可动区=[8px, 轨道宽-8px]，刻度点与文案同几何 R=8（renderer.js 直径一半），三层重合。 */
+  width: 16px; height: 16px; border-radius: 50%;
   background: #fff; border: 2px solid #4b5563;
   box-shadow: 0 1px 4px rgba(0, 0, 0, .35);
-  margin-top: -1px;
+  margin-top: 0;   /* thumb 16px = slider 高 16px，天然居中 */
   transition: transform .18s ease, box-shadow .18s ease, border-color .18s ease;
 }
 .think-slider::-webkit-slider-thumb:active { transform: scale(1.18); }
@@ -1046,9 +1051,9 @@ textarea { resize: vertical; min-height: 60px; }
 .think-slider.eco::-webkit-slider-thumb { border-color: #16a34a; }
 .think-slider.eco::-webkit-slider-thumb:hover { box-shadow: 0 0 8px rgba(22, 163, 74, .25); }
 .think-slider.eco::-webkit-slider-thumb:active { box-shadow: 0 0 0 3px rgba(22, 163, 74, .22), 0 0 14px rgba(22, 163, 74, .42); }
-/* v3.25.1：轨道内刻度点层（覆盖层不抢指针事件）——与 thumb 同几何（第六发起 thumb=胶囊 26×14，R=13），挡位数动态 2~7 档都精确均分 */
+/* v3.25.1：轨道内刻度点层（覆盖层不抢指针事件）——与 thumb 同几何（v3.25.3 起 thumb=正圆 16px，R=8），挡位数动态 2~7 档都精确均分 */
 .think-track-wrap { position: relative; }
-/* key fix（装机自查 2026-10-24）：层不 inset:0（wrap 高=3+12+8=23px，top:50% 会偏到 11.5px≠滑轨中心 9px，
+/* key fix（装机自查 2026-10-24）：层不 inset:0（wrap 高=3+16+8=27px，top:50% 会偏到 13.5px≠滑轨中心 11px，
    刻度点整体下垂 2.5px）——改 top/bottom 精确对齐 .think-slider 盒（与其 margin 3/8 联动），点中心与轨道中线重合 */
 .think-ticks { position: absolute; top: 3px; bottom: 8px; left: 0; right: 0; pointer-events: none; z-index: 1; }
 .think-tick {
