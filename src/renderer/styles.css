@@ -493,7 +493,7 @@ textarea::placeholder { color: var(--text-muted); }
 .composer-mode-trigger.automatic { color: #efb86f; background: #413322; }
 .composer-mode-trigger.safe { color: #6db3f2; background: #1a2a3a; }
 .composer-mode-selector { position: relative; }
-.composer-mode-popup { position: absolute; bottom: 100%; right: 0; margin-bottom: 6px; border: 1px solid var(--border-popover); border-radius: 10px; background: var(--bg-mode-dropdown); box-shadow: var(--shadow-dropdown); z-index: 70; padding: 8px; min-width: 350px; }   /* v3.25.4 用户令「拉宽」：300→350 + padding 6→8 */
+.composer-mode-popup { position: absolute; bottom: 100%; right: 0; margin-bottom: 6px; border: 1px solid var(--border-popover); border-radius: 10px; background: var(--bg-mode-dropdown); box-shadow: var(--shadow-dropdown); z-index: 70; padding: 8px; width: 460px; }   /* v3.25.5 用户令「拉宽」改定宽 460px：v3.25.4 的 min-width 300→350 无效——浮层实际宽被顶行长串（v3.25.1 起英标串变长，max-content≈380+）撑出，min-width 从未再起决定作用 → 定宽硬拉（box-sizing:border-box 含边距）；滑条/文案随 width:100% 全部变宽 */
 .composer-mode-list { display: flex; flex-direction: column; gap: 2px; max-height: 280px; overflow-y: auto; }
 .composer-mode-item { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: 7px; cursor: pointer; color: var(--text-secondary); font-size: 13px; transition: background .12s; }
 .composer-mode-item:hover { background: var(--bg-active); }

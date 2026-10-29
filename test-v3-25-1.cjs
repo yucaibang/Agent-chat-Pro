@@ -20,7 +20,9 @@
  *    实锤——thumb=白色正圆 16px、轨道高 16px 同径、轨道端部圆角 8px=thumb 半径全半圆收口）
  *   （v3.25.4 用户 2026-10-29 令「两端的定位点最左往右/最右往左」：刻度带内收——pad=R8+INSET5=13，
  *    全表在 [13, 宽-13] 等分（公式字面回 13/26 形态）；端点挡白圆覆盖 [0,16] 仍罩住端点刻度；
- *    +浮层拉宽 300→350px+纵向拉长（margin 3/8→4/10、文案行 17→20px/+2px）
+ *    +浮层纵向拉长（margin 3/8→4/10、文案行 17→20px/+2px）
+ *   （v3.25.5 用户 2026-10-29 复验「拉长了，但没拉宽」实锤：min-width 从未起决定作用——浮层
+ *    实际宽被顶行长串 max-content≈380+ 撑出 → 改定宽 width:460px 硬拉，滑条/文案随 100% 全变宽）
  * key fix（2026-10-24 装机自查）：left 用 CSS calc 表达式而非「读 clientWidth 算百分数」——
  *   浮层首次打开在 hidden（display:none）态渲染，clientWidth=0 会让百分数几何疯狅乱飞；
  *   calc 由浏览器显示后按真实宽度解析，与时序/隐藏态解耦，B 组假 DOM 也天然无法再掩盖该类 bug。
@@ -465,8 +467,8 @@ async function runSourceTests() {
     assert.ok(stylesSrc.includes(".think-tick.eco"), "eco 刻度点绿系");
     assert.ok(stylesSrc.includes("transform: translateX(-50%)"), "文案中心锚定（对齐刻度）");
     assert.ok(stylesSrc.includes(".think-levels { position: relative; height: 20px; margin-top: 2px; }"), "文案行定高容器（v3.25.4 拉长 20px/+2px）");
-    assert.ok(stylesSrc.includes("min-width: 350px;"), "浮层拉宽 300→350px（v3.25.4 用户令）");
-    assert.ok(!stylesSrc.includes("min-width: 300px;"), "旧 300px 宽清除");
+    assert.ok(stylesSrc.includes("width: 460px;"), "浮层定宽 460px（v3.25.5 用户复验「没拉宽」→ min-width 无效改定宽硬拉）");
+    assert.ok(!stylesSrc.includes("min-width: 350px;") && !stylesSrc.includes("min-width: 300px;"), "min-width 撑宽路线废弃（被顶行 max-content 穿透）");
     // v3.25.2 层序修复锚（装机实锤：白胶囊中央透出刻度点）——轨道渐变拎 ::before + z 三层序
     assert.ok(stylesSrc.includes(".think-track-wrap::before"), "::before 独立轨道渐变层在册");
     assert.ok(rendererSrc.includes("renderTrackMarks(") && rendererSrc.includes("syncMarkActive(ticksRow, levelsRow"), "渲染接线在册");
@@ -539,12 +541,12 @@ async function runVersionTests() {
     assert.ok(rendererSrc.includes("meta.innerHTML = \"\";"), "「当前挡位」行已删（用户令简洁化）");
   });
 
-  await test("D1 package.json 版本 3.25.4", () => {
-    assert.strictEqual(pkg.version, "3.25.4", "版本号 = 3.25.4（定位点内收+浮层拉宽拉长版）");
+  await test("D1 package.json 版本 3.25.5", () => {
+    assert.strictEqual(pkg.version, "3.25.5", "版本号 = 3.25.5（浮层定宽 460px 硬拉版）");
   });
   await test("D2 README badge 同步", () => {
-    assert.ok(rendererSrc.includes("v3.25.4（用户令"), "renderer.js 版本注释在册（v3.25.3 批注图段保留）");
-    assert.ok(stylesSrc.includes("v3.25.4"), "styles.css 版本注释在册");
+    assert.ok(rendererSrc.includes("v3.25.4（用户令"), "renderer.js v3.25.4 注释保留");
+    assert.ok(stylesSrc.includes("v3.25.5 用户令「拉宽」改定宽"), "styles.css v3.25.5 注释在册");
   });
 }
 
