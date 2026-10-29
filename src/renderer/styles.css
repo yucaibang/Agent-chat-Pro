@@ -1007,11 +1007,13 @@ textarea { resize: vertical; min-height: 60px; }
    （伪元素 var() 继承父级变量）；滑距动画 transition 随层走。
    v3.25.3 几何重定（用户令 2026-10-27，批注图白色圆圈实锤）：轨道加粗 12→16px，端部圆角半径
    7→8px 全半圆收口——用户原话「滑动框的半径要和新的滑动条相同」：轨道圆角半径=圆 thumb 半径，
-   轨道高=thumb 直径，圆 thumb 恒嵌在轨道内两端不凸出。 */
+   轨道高=thumb 直径，圆 thumb 恒嵌在轨道内两端不凸出。
+   v3.25.6（用户令 2026-10-29「我说了是拉宽，是将半圆边的直径变大」）：半圆直径 16→24px——
+   轨道粗度拉宽一半+白圆 thumb 同步 24px（「半径相同」铁令不变），圆嵌粗轨道形态整段保真。 */
 .think-track-wrap::before {
   content: ""; position: absolute; z-index: 0; pointer-events: none;
   top: 4px; bottom: 10px; left: 0; right: 0;   /* 与 .think-slider 盒（margin 4/10）精确对齐 */
-  border-radius: 8px;   /* = 轨道高 16px 的一半 = 圆 thumb 半径（端部全半圆，用户令「半径相同」） */
+  border-radius: 12px;   /* v3.25.6 用户令「拉宽=半圆边的直径变大」：轨道高 16→24px、半圆直径 24、半径 12=thumb 半径（铁令半径相同） */
   background-color: #2b323b;
   background-image:
     linear-gradient(90deg, #f8fafc 0%, #9db4f7 34%, #3878f0 67%, #1e3a8a 100%),
@@ -1023,7 +1025,7 @@ textarea { resize: vertical; min-height: 60px; }
 }
 .think-slider {
   -webkit-appearance: none; appearance: none;
-  width: 100%; height: 16px; border-radius: 8px; margin: 4px 0 10px;   /* v3.25.3：高 16=圆 thumb 直径，端部同半径 8px；v3.25.4 用户令「拉长」：margin 3/8→4/10 */
+  width: 100%; height: 24px; border-radius: 12px; margin: 4px 0 10px;   /* v3.25.6 用户令「半圆边直径变大」：高 16→24px=半圆直径 24、端部 12px 全半圆；margin 4/10（v3.25.4 拉长）保留 */
   background: none;                /* 轨道渐变挪 ::before（层序修复） */
   position: relative; z-index: 2;  /* 原生 thumb 提到刻度层上（罩住重叠区 tick） */
   cursor: pointer;
@@ -1036,10 +1038,10 @@ textarea { resize: vertical; min-height: 60px; }
      六发形态终结）。直径 16px=轨道高 16px → 圆恒嵌轨道内；描边 2px 保留（纯白圆与轨道浅端
      #f8fafc 需要边界区分，功能性差异，形状语义按批注图=正圆）；拖动 scale+发光手感保留。
      16px 直径 → thumb 中心可动区=[8px, 轨道宽-8px]，刻度点与文案同几何 R=8（renderer.js 直径一半），三层重合。 */
-  width: 16px; height: 16px; border-radius: 50%;
+  width: 24px; height: 24px; border-radius: 50%;   /* v3.25.6：白圆随半圆直径同步 16→24px（半径 12 同径嵌合） */
   background: #fff; border: 2px solid #4b5563;
   box-shadow: 0 1px 4px rgba(0, 0, 0, .35);
-  margin-top: 0;   /* thumb 16px = slider 高 16px，天然居中 */
+  margin-top: 0;   /* thumb 24px = slider 高 24px，天然居中 */
   transition: transform .18s ease, box-shadow .18s ease, border-color .18s ease;
 }
 .think-slider::-webkit-slider-thumb:active { transform: scale(1.18); }

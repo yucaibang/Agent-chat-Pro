@@ -669,7 +669,7 @@ async function runV3242Tests() {
     assert.ok(stylesSrc.includes("background-size: var(--fill, 0%) 100%, var(--eco, 0%) 100%, var(--eco, 0%) 100%;"), "三变量控长显隐");
     assert.ok(stylesSrc.includes("transition: background-size .22s ease;"), "滑动过渡动画（Chromium 原生）");
     assert.ok(!stylesSrc.includes(".think-slider.eco { --eco: 100%; }"), "旧 --eco class 规则清除（v3.25.2 层序修复：--eco 由 renderSliderTheme 显式设 wrap，::before 消费）");
-    assert.ok(stylesSrc.includes("height: 16px; border-radius: 8px;"), "粗条轨道（v3.25.3 加粗 16px+端部 8px 全半圆收口）");
+    assert.ok(stylesSrc.includes("height: 24px; border-radius: 12px;"), "粗条轨道（v3.25.3 加粗 16px→v3.25.6 拉宽 24px+端部 12px 全半圆收口）");
     assert.ok(stylesSrc.includes(".think-slider::-webkit-slider-thumb:active { transform: scale(1.18); }"), "拖动放大手感");
     assert.ok(stylesSrc.includes(".composer-mode-popup") && stylesSrc.includes("width: 460px;"), "面板加宽（220→300→350→460 定宽，v3.25.5 硬拉）");
   });
@@ -699,8 +699,8 @@ async function runV3243Tests() {
   });
 
   await test("X2 thumb 随 v3.25.3 终定正圆（用户令 2026-10-27「我想让滑动条是圆的」+批注图白色圆圈实锤：胶囊 26×14 终结）", () => {
-    assert.ok(stylesSrc.includes("width: 16px; height: 16px; border-radius: 50%;"), "thumb 正圆 16px（直径=轨道高 16px，用户令「半径相同」）");
-    assert.ok(stylesSrc.includes("margin-top: 0;"), "16px 圆与 16px 轨道同径天然居中（无 -1px 偏移）");
+    assert.ok(stylesSrc.includes("width: 24px; height: 24px; border-radius: 50%;"), "thumb 白圆 24px（直径=轨道半圆直径 24px，用户令「半径相同」+v3.25.6 拉宽）");
+    assert.ok(stylesSrc.includes("margin-top: 0;"), "24px 圆与 24px 轨道同径天然居中（无 -1px 偏移）");
     assert.ok(!stylesSrc.includes("border-radius: 9999px;"), "胶囊 9999px 组合清除（.think-tick 4px 不连坐）");
     assert.ok(stylesSrc.includes(".think-slider::-webkit-slider-thumb:active { transform: scale(1.18); }"), "拖动放大手感保留");
     assert.ok(stylesSrc.includes(".think-slider.blue::-webkit-slider-thumb { border-color: #3878f0; }") && stylesSrc.includes(".think-slider.eco::-webkit-slider-thumb { border-color: #16a34a; }"), "蓝绿双系描边保留（蓝系=提取纯蓝 #3878f0）");
