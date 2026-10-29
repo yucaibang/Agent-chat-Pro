@@ -671,7 +671,7 @@ async function runV3242Tests() {
     assert.ok(!stylesSrc.includes(".think-slider.eco { --eco: 100%; }"), "旧 --eco class 规则清除（v3.25.2 层序修复：--eco 由 renderSliderTheme 显式设 wrap，::before 消费）");
     assert.ok(stylesSrc.includes("height: 16px; border-radius: 8px;"), "粗条轨道（v3.25.3 加粗 16px+端部 8px 全半圆收口）");
     assert.ok(stylesSrc.includes(".think-slider::-webkit-slider-thumb:active { transform: scale(1.18); }"), "拖动放大手感");
-    assert.ok(stylesSrc.includes(".composer-mode-popup") && stylesSrc.includes("min-width: 300px;"), "面板加宽（220→300px）");
+    assert.ok(stylesSrc.includes(".composer-mode-popup") && stylesSrc.includes("min-width: 350px;"), "面板加宽（220→300→350px，v3.25.4 用户令再宽）");
   });
 
   await test("W7 渲染层 SSH 挡位值域含 eco（面板读取 + 反向映射 + levelValue）", () => {

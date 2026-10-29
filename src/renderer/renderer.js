@@ -3149,10 +3149,15 @@ const THINK_EGG_LINES = ["更高的工作质量", "燃烧你的钱包吧！", "�
 // 圆 thumb 恒嵌在轨道内（胶囊 26×14 撤销——用户翻旧账：几个版本始终没给到圆的）。
 // 刻度点/文案几何随 R=8 与 thumb 中心继续三点重合（可动区 [8px, 宽-8px] 随原生 thumb 语义内缩 8px）。
 const THINK_THUMB_RADIUS = 8; // 与 styles.css thumb 正圆 16px 直径同步改（半径）
+// v3.25.4（用户令 2026-10-29「两端的定位点：最左的往右点，最右的往左点」）：刻度带内收——
+// 定位点不再贴轨道端部半圆弧，全表在 [R+INSET, 宽-R-INSET] 区间等分重排（中间诸点同步内缩）。
+// 端点挡 thumb 白圆（直径16，中心8）覆盖 [0,16] 仍罩住内收后的端点刻度（13∈[0,16]），选中不露点。
+const THINK_TRACK_INSET = 5; // 刻度带两端各内收 5px（首尾点离轨道端部弧线 5px）
 const thinkMarkLefts = (count) => {
   const n = Math.max(1, Math.floor(Number(count) || 0));
   if (n === 1) return ["50%"];
-  return Array.from({ length: n }, (_, i) => `calc(${THINK_THUMB_RADIUS}px + (100% - ${THINK_THUMB_RADIUS * 2}px)*${i}/${n - 1})`);
+  const pad = THINK_THUMB_RADIUS + THINK_TRACK_INSET;
+  return Array.from({ length: n }, (_, i) => `calc(${pad}px + (100% - ${pad * 2}px)*${i}/${n - 1})`);
 };
 
 // v3.24.3：SSH/本机挡位浮层顶行补模型型号（装机反馈「没显示模型型号」）——

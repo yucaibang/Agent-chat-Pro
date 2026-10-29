@@ -493,7 +493,7 @@ textarea::placeholder { color: var(--text-muted); }
 .composer-mode-trigger.automatic { color: #efb86f; background: #413322; }
 .composer-mode-trigger.safe { color: #6db3f2; background: #1a2a3a; }
 .composer-mode-selector { position: relative; }
-.composer-mode-popup { position: absolute; bottom: 100%; right: 0; margin-bottom: 6px; border: 1px solid var(--border-popover); border-radius: 10px; background: var(--bg-mode-dropdown); box-shadow: var(--shadow-dropdown); z-index: 70; padding: 6px; min-width: 300px; }
+.composer-mode-popup { position: absolute; bottom: 100%; right: 0; margin-bottom: 6px; border: 1px solid var(--border-popover); border-radius: 10px; background: var(--bg-mode-dropdown); box-shadow: var(--shadow-dropdown); z-index: 70; padding: 8px; min-width: 350px; }   /* v3.25.4 用户令「拉宽」：300→350 + padding 6→8 */
 .composer-mode-list { display: flex; flex-direction: column; gap: 2px; max-height: 280px; overflow-y: auto; }
 .composer-mode-item { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: 7px; cursor: pointer; color: var(--text-secondary); font-size: 13px; transition: background .12s; }
 .composer-mode-item:hover { background: var(--bg-active); }
@@ -1010,7 +1010,7 @@ textarea { resize: vertical; min-height: 60px; }
    轨道高=thumb 直径，圆 thumb 恒嵌在轨道内两端不凸出。 */
 .think-track-wrap::before {
   content: ""; position: absolute; z-index: 0; pointer-events: none;
-  top: 3px; bottom: 8px; left: 0; right: 0;   /* 与 .think-slider 盒（margin 3/8）精确对齐 */
+  top: 4px; bottom: 10px; left: 0; right: 0;   /* 与 .think-slider 盒（margin 4/10）精确对齐 */
   border-radius: 8px;   /* = 轨道高 16px 的一半 = 圆 thumb 半径（端部全半圆，用户令「半径相同」） */
   background-color: #2b323b;
   background-image:
@@ -1023,7 +1023,7 @@ textarea { resize: vertical; min-height: 60px; }
 }
 .think-slider {
   -webkit-appearance: none; appearance: none;
-  width: 100%; height: 16px; border-radius: 8px; margin: 3px 0 8px;   /* v3.25.3：高 16=圆 thumb 直径，端部同半径 8px */
+  width: 100%; height: 16px; border-radius: 8px; margin: 4px 0 10px;   /* v3.25.3：高 16=圆 thumb 直径，端部同半径 8px；v3.25.4 用户令「拉长」：margin 3/8→4/10 */
   background: none;                /* 轨道渐变挪 ::before（层序修复） */
   position: relative; z-index: 2;  /* 原生 thumb 提到刻度层上（罩住重叠区 tick） */
   cursor: pointer;
@@ -1055,7 +1055,7 @@ textarea { resize: vertical; min-height: 60px; }
 .think-track-wrap { position: relative; }
 /* key fix（装机自查 2026-10-24）：层不 inset:0（wrap 高=3+16+8=27px，top:50% 会偏到 13.5px≠滑轨中心 11px，
    刻度点整体下垂 2.5px）——改 top/bottom 精确对齐 .think-slider 盒（与其 margin 3/8 联动），点中心与轨道中线重合 */
-.think-ticks { position: absolute; top: 3px; bottom: 8px; left: 0; right: 0; pointer-events: none; z-index: 1; }
+.think-ticks { position: absolute; top: 4px; bottom: 10px; left: 0; right: 0; pointer-events: none; z-index: 1; }   /* v3.25.4 与 margin 4/10 联动 */
 .think-tick {
   position: absolute; top: 50%;
   width: 4px; height: 4px; border-radius: 50%;
@@ -1068,7 +1068,7 @@ textarea { resize: vertical; min-height: 60px; }
 .think-tick.eco.active { background: #86efac; }
 /* v3.25.1：挡位文案改绝对定位与刻度点/thumb 同几何（translateX(-50%) 锚中心）——
    原 flex space-between 的文字中心与 thumb 中心存在系统性偏差（首尾挡最明显），本版三点重合 */
-.think-levels { position: relative; height: 17px; margin-top: -2px; }
+.think-levels { position: relative; height: 20px; margin-top: 2px; }   /* v3.25.4 用户令「拉长」：17px/-2px → 20px/+2px */
 .think-level {
   position: absolute; top: 0;
   transform: translateX(-50%);
