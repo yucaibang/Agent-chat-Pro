@@ -823,6 +823,23 @@ function addMessage(kind, text = "", meta = {}) {
   elements.empty.hidden = true;
   const item = document.createElement("article");
   item.className = `message ${kind}`;
+  // v3.26.0 群聊：成员名牌 header（assistant 消息带 meta.agent 时渲染 @成员名 + 类型徽章；
+  // 模块二独立精神的界面体现——每个发言肉眼可辨归属，A 绝不冒充 B）
+  if (meta.agent?.name) {
+    item.classList.add("group-agent");
+    const head = document.createElement("div");
+    head.className = "agent-tag";
+    const kindLabel = meta.agent.kind === "cloud" ? "云端" : meta.agent.kind === "ssh" ? "SSH" : "本机";
+    head.textContent = `@${meta.agent.name} · ${kindLabel}`;
+    // 成员配色（按名字哈希取色，亮暗主题均用主题内变量）
+    item.dataset.agentName = meta.agent.name;
+    head.classList.add(`agent-kind-${meta.agent.kind || "cloud"}`);
+    item.append(head);
+  }
+  // v3.26.0 模块四：子 Agent 汇报=轻注记（样式弱化，可读但不当主角）
+  if (meta.senderType === "subagent-result") {
+    item.classList.add("subagent-note");
+  }
   // 阉割版 Bridge Edition：云端AI 经 HTTP 桥注入的消息——气泡顶部强制徽章（文本本体另带
   // 「【云端AI消息 · 非用户本人】」前缀，双保险：前缀进 NAS Agent 上下文，徽章防人看走眼）
   if (meta.senderType === "cloud-ai") {
@@ -1758,6 +1775,8 @@ async function loadConversation(id) {
   }
   conversationId = conversation.id;
   sessionId = conversation.sessionId || "";
+  // v3.26.0 群聊：该对话绑定工作组 → 群聊布局（成员名牌条 + 群工具栏：自主讨论开关 / 大红停止）
+  applyGroupLayout(conversation);
   // v3.15.6：恢复该对话的输入框草稿（文本+附件）——不再粗暴清空丢字/丢附件，切换互不串扰
   const composerDraft = composerDrafts.get(conversation.id) || { text: "", attachments: [] };
   attachments = [...(composerDraft.attachments || [])];
@@ -1779,7 +1798,7 @@ async function loadConversation(id) {
   const streamingOngoing = Boolean(activeId && streamingConversationId === conversation.id);
   conversation.messages.forEach((message) => {
     if (message.draft && streamingOngoing) return;
-    const item = addMessage(message.role, message.text, { senderType: message.senderType || "" });
+    const item = addMessage(message.role, message.text, { senderType: message.senderType || "", agent: message.agent || null });
     // v3.15.5 修复2：写入落库锚点（mid/at/role）——右键「删除此条及下方所有消息」据此同步落库删除
     item.dataset.msgId = message.mid || "";
     item.dataset.msgAt = message.at || "";
@@ -1828,6 +1847,253 @@ async function loadConversation(id) {
   resetStreamingTokens();
   updateTokenDisplay();
   refreshConversationList();
+}
+
+// ── v3.26.0 多 AI 对话（工作）：群聊引擎（模块三）+ Sub-Agent 树气泡（模块四）──────
+// 群聊对话 = 绑定工作组的 team 对话；发送走专用 chat:group-send（单聊闸门不适用——
+// 红线①：多流渲染由此模块的串行队列收口，DOM 每 ≤24ms 合帧写一次，防 OOM）。
+
+let groupActiveConversationId = ""; // 当前处于群聊布局的对话 id
+let groupActiveWorkgroupId = ""; // 该对话绑定的工作组
+let groupMemberNames = []; // 成员名（@解析白名单——非成员提及忽略，广播兜底在主进程）
+let groupRosterAgents = []; // 成员完整信息（名牌条渲染）
+let groupAutoDiscussOn = false; // 自主讨论开关（按序接力，发言上限=工作组 maxTurns）
+let groupTurnsLive = new Map(); // requestId → { item, name, kind, conversationId }（渲染层群轮登记）
+const groupDeltaBuffer = new Map(); // 红线①：delta 合帧缓冲
+let groupDeltaTimer = null;
+
+/** 群布局切换（loadConversation 进入时调用）：建群对话挂成员名牌条 + 群工具栏 */
+async function applyGroupLayout(conversation) {
+  const isGroup = normalizeWorkspace(conversation.workspaceType) === "team" && Boolean(conversation.workgroupId);
+  groupActiveConversationId = isGroup ? conversation.id : "";
+  groupActiveWorkgroupId = isGroup ? (conversation.workgroupId || "") : "";
+  const composer = elements.composer;
+  composer?.classList?.toggle("group-mode", isGroup);
+  document.getElementById("group-toolbar")?.remove();
+  document.getElementById("group-roster")?.remove();
+  if (!isGroup) { groupMemberNames = []; groupRosterAgents = []; return; }
+  // 成员名解析（工作组配置 → 池节点名）
+  try {
+    const workgroups = await window.agentChatPro.listWorkgroups();
+    const group = (workgroups || []).find((item) => item.id === groupActiveWorkgroupId);
+    const pool = await window.agentChatPro.listAgentPool();
+    groupRosterAgents = (group?.members || [])
+      .map((member) => pool.find((node) => node.id === member.agentId))
+      .filter(Boolean);
+    groupMemberNames = groupRosterAgents.map((node) => node.name);
+  } catch { groupMemberNames = []; groupRosterAgents = []; }
+  // 群工具栏（composer 上方）：成员 @ 快捷点选 + 自主讨论开关 + 大红停止
+  if (composer) {
+    const toolbar = document.createElement("div");
+    toolbar.id = "group-toolbar";
+    toolbar.className = "group-toolbar";
+    const roster = groupRosterAgents.map((node) => {
+      const chip = document.createElement("button");
+      chip.type = "button";
+      chip.className = "group-chip";
+      chip.textContent = `@${node.name}`;
+      chip.title = "点此把该成员点名进下一条消息（@路由）";
+      chip.addEventListener("click", () => {
+        const prompt = elements.prompt;
+        const value = prompt.value;
+        prompt.value = value && !value.endsWith(" ") ? `${value} @${node.name} ` : `${value}@${node.name} `;
+        prompt.focus();
+      });
+      return chip;
+    });
+    const autodiscuss = document.createElement("label");
+    autodiscuss.className = "group-autodiscuss";
+    autodiscuss.title = "自主讨论（Auto-Discuss）：全员按工作组顺序自动接力，最多 " + (groupRosterAgents.length ? "按工作组轮数上限" : "maxTurns") + " 发言";
+    const discussCheck = document.createElement("input");
+    discussCheck.type = "checkbox";
+    discussCheck.id = "group-autodiscuss-toggle";
+    discussCheck.checked = groupAutoDiscussOn;
+    discussCheck.addEventListener("change", () => { groupAutoDiscussOn = discussCheck.checked; });
+    autodiscuss.append(discussCheck, document.createTextNode(" 自主讨论"));
+    const stopBtn = document.createElement("button");
+    stopBtn.type = "button";
+    stopBtn.id = "group-stop-button";
+    stopBtn.className = "group-stop-button";
+    stopBtn.textContent = "🛑 紧急停止";
+    stopBtn.title = "立即中断所有正在发言的成员（含子 Agent）；自主讨论接力一并掐断";
+    stopBtn.addEventListener("click", emergencyStopGroup);
+    toolbar.append(...roster, autodiscuss, stopBtn);
+    composer.prepend(toolbar);
+    // 成员名牌条（聊天区顶）
+    const rosterBar = document.createElement("div");
+    rosterBar.id = "group-roster";
+    rosterBar.className = "group-roster";
+    const label = document.createElement("span");
+    label.className = "group-roster-label";
+    label.textContent = "群成员";
+    rosterBar.append(label);
+    groupRosterAgents.forEach((node) => {
+      const tag = document.createElement("span");
+      tag.className = `group-roster-tag agent-kind-${node.kind || "cloud"}`;
+      const kindLabel = node.kind === "cloud" ? `云端·${node.cloud?.model || ""}` : node.kind === "ssh" ? `SSH·${node.ssh?.profileId || ""}` : `本机·${node.local?.engine || ""}`;
+      tag.textContent = `@${node.name}`;
+      tag.title = `${node.name}（${kindLabel}${node.thinkingLevel ? ` · 思考:${node.thinkingLevel}` : ""}）`;
+      rosterBar.append(tag);
+    });
+    elements.messages.parentElement?.prepend(rosterBar) || elements.messages.prepend(rosterBar);
+  }
+}
+
+function appendMentionsToIds(message) {
+  const wanted = new Set();
+  for (const name of groupMemberNames) if (message.includes(`@${name}`)) wanted.add(name);
+  return [...wanted];
+}
+
+/** 红线①：群流渲染队列——delta 只入缓冲，≤24ms 合帧一次 DOM 写（多成员并行不炸） */
+function enqueueGroupDelta(requestId, text) {
+  const entry = groupTurnsLive.get(requestId);
+  if (!entry) return;
+  groupDeltaBuffer.set(requestId, (groupDeltaBuffer.get(requestId) || "") + String(text || ""));
+  const flush = () => {
+    groupDeltaTimer = null;
+    for (const [rid, chunkText] of groupDeltaBuffer.entries()) {
+      groupDeltaBuffer.delete(rid);
+      const live = groupTurnsLive.get(rid);
+      if (!live || !chunkText) continue;
+      const content = live.item.querySelector(".message-content");
+      if (content) content.textContent += chunkText;
+      live.text += chunkText;
+    }
+    if (isNearBottom()) elements.messages.scrollTop = elements.messages.scrollHeight;
+  };
+  if (!groupDeltaTimer) groupDeltaTimer = setTimeout(flush, 24);
+}
+
+function renderGroupTurnBubble(turn) {
+  const item = addMessage("assistant", "", { agent: { id: turn.agentId, name: turn.name, kind: turn.kind } });
+  item.classList.add("group-streaming");
+  const note = document.createElement("div");
+  note.className = "draft-note";
+  note.textContent = `@${turn.name} 正在处理…`;
+  item.prepend(note);
+  item.dataset.groupTurn = turn.requestId;
+  messages.set(turn.requestId, item); // 群轮也入单流 Map：通用 onChatEvent（thinking/ask-user/round）按 id 找气泡
+  elements.messages.append(item);
+  if (isNearBottom()) elements.messages.scrollTop = elements.messages.scrollHeight;
+  groupTurnsLive.set(turn.requestId, { item, name: turn.name, kind: turn.kind, conversationId: turn.conversationId || groupActiveConversationId, text: "" });
+  return item;
+}
+
+/** 群轮终态转正：markdown 渲染 + 去占位 + 失败态样式 */
+async function finalizeGroupTurn(requestId, turnResult) {
+  const live = groupTurnsLive.get(requestId);
+  if (!live) return;
+  groupTurnsLive.delete(requestId);
+  messages.delete(requestId);
+  const item = live.item;
+  item.classList.remove("group-streaming");
+  const note = item.querySelector(".draft-note");
+  if (note) note.remove();
+  if (turnResult?.failed) item.classList.add("group-failed");
+  const finalText = String(turnResult?.text ?? live.text ?? "");
+  const content = item.querySelector(".message-content");
+  if (content) {
+    if (finalText) await renderAssistant(item, finalText, { static: true });
+    else content.textContent = "（本轮无输出）";
+  }
+  if (isNearBottom()) elements.messages.scrollTop = elements.messages.scrollHeight;
+}
+
+/** 群发送（主入口）：@ 路由解析 → sendGroupMessage → 轮气泡建挂 → 每轮 awaitGroupTurn 悬等转正 */
+async function sendGroupTurn() {
+  const prompt = elements.prompt;
+  const text = prompt.value.trim();
+  if (!groupActiveConversationId) return false;
+  if (!text) return false;
+  prompt.value = "";
+  adjustTextarea();
+  renderAttachments(); // 清空当前输入附件（群发送暂不支持附件——CLI 成员暂不接附件）
+  attachments = [];
+  const message = addMessage("user", text);
+  message.dataset.msgRole = "user";
+  conversationTokens += estimateTokens(text);
+  updateTokenDisplay();
+  const mentioned = appendMentionsToIds(text);
+  if (!mentioned.length && groupMemberNames.length) { /* 非成员提及/无提及=广播（主进程兜底） */ }
+  setConnection(`${groupAutoDiscussOn ? "自主讨论接力中" : "群聊进行中"}`, "connected");
+  try {
+    const result = await window.agentChatPro.sendGroupMessage({
+      conversationId: groupActiveConversationId,
+      workgroupId: groupActiveWorkgroupId,
+      message: text,
+      mentionedAgentIds: mentioned,
+      autoDiscuss: groupAutoDiscussOn
+    });
+    (result.turns || []).forEach((turn) => renderGroupTurnBubble({ ...turn, conversationId: result.conversationId || groupActiveConversationId }));
+    // 悬等各轮终态（不阻塞群输入——继续轮询；多轮并行/接力逐个转正）
+    (result.turns || []).forEach((turn) => {
+      window.agentChatPro.awaitGroupTurn(turn.requestId)
+        .then((turnResult) => finalizeGroupTurn(turn.requestId, turnResult))
+        .catch(() => finalizeGroupTurn(turn.requestId, { text: "（该轮无返回）", failed: true }));
+    });
+    setConnection("群聊已结束本轮，等待下一次发言", "connected");
+    return true;
+  } catch (error) {
+    setConnection(error.message || "群聊发送失败", "error");
+    return true; // 群已接管本次提交（不再落入单聊路）
+  }
+}
+
+/** 紧急停止大红按钮（模块三④）：全员 stop（activeRequests cancel + 停止旗 + 子 Agent 悬等收口） */
+async function emergencyStopGroup() {
+  if (!groupActiveConversationId) return;
+  try {
+    await window.agentChatPro.stopGroupTurns(groupActiveConversationId);
+    for (const [requestId, live] of groupTurnsLive.entries()) {
+      live.item.classList.remove("group-streaming");
+      live.item.classList.add("interrupted");
+      const note = live.item.querySelector(".draft-note");
+      if (note) note.textContent = "已紧急停止";
+      else {
+        const note2 = document.createElement("div");
+        note2.className = "draft-note";
+        note2.textContent = "已紧急停止";
+        live.item.prepend(note2);
+      }
+      groupTurnsLive.delete(requestId);
+    }
+    setConnection("已紧急停止全部群聊成员", "connected");
+  } catch (error) {
+    setConnection(error.message || "停止失败", "error");
+  }
+}
+
+/** Sub-Agent 树状折叠气泡（模块四）：└─ 子 Agent [名] 正在处理…（挂到父轮气泡内） */
+function renderSubagentTreeLine(payload) {
+  const parentId = String(payload?.parentId || "");
+  const live = groupTurnsLive.get(parentId);
+  if (!live) return;
+  const item = live.item;
+  if (!payload || payload.type !== "subagent") return;
+  let list = item.querySelector(".subagent-tree");
+  if (!list) {
+    list = document.createElement("details");
+    list.className = "subagent-tree";
+    const summary = document.createElement("summary");
+    summary.textContent = "└─ 子 Agent 工作树";
+    list.append(summary);
+    item.querySelector(".message-content")?.before(list);
+  }
+  const agentName = payload.agent?.name ? `[${payload.agent.name}]` : "";
+  const stateLabels = {
+    "processing": `└─ 子 Agent [${payload.agent?.name || ""}] 正在处理…`,
+    "brain-swap-wait": `└─ 子 Agent ${agentName} 请求换脑 → ${JSON.stringify(payload.payload || {})}`,
+    "done": `└─ 子 Agent ${agentName} 完成：${payload.text || ""}`,
+    "rejected": `└─ 子 Agent ${agentName} 已拒绝：${payload.text || ""}`,
+    "failed": `└─ 子 Agent ${agentName} 失败：${payload.payload?.message || payload.text || ""}`,
+    "reported": `└─ 子 Agent ${agentName} 结果已注入群聊上下文`
+  };
+  const line = document.createElement("div");
+  line.className = `subagent-line subagent-${payload.state || "processing"}`;
+  line.textContent = stateLabels[payload.state] || `└─ 子 Agent ${agentName}（${payload.state || ""}）`;
+  list.append(line);
+  if (isNearBottom()) elements.messages.scrollTop = elements.messages.scrollHeight;
 }
 
 async function createNewConversation() {
@@ -1892,6 +2158,14 @@ async function setWorkspace(workspaceId) {
   closeWorkspaceDropdown();
   const next = normalizeWorkspace(workspaceId);
   if (next === currentWorkspace) return;
+  // v3.26.0 群聊状态重置：群布局/成员/群轮登记全部清回默认（规格 UI 需求 3）
+  groupActiveConversationId = "";
+  groupActiveWorkgroupId = "";
+  groupMemberNames = [];
+  groupRosterAgents = [];
+  elements.composer?.classList?.remove("group-mode");
+  document.getElementById("group-toolbar")?.remove();
+  document.getElementById("group-roster")?.remove();
   // 切走前保存当前对话草稿（与 loadConversation 同约定——切回不丢字）
   if (conversationId) composerDrafts.set(conversationId, { text: elements.prompt.value, attachments });
   const hadOpenConversation = Boolean(conversationId);
@@ -1913,6 +2187,7 @@ async function setWorkspace(workspaceId) {
   try { localStorage.setItem("acp-workspace", next); } catch { /* 存储不可写不阻断 */ }
   setWorkspaceDisplay();
   renderWorkspaceList();
+  ensureEmptyStateGroupEntry();
   await refreshConversationList(); // 历史列表按新工作区物理刷新
 }
 
@@ -1976,6 +2251,11 @@ function setBusy(busy) {
 }
 
 function stopActiveMessage() {
+  // v3.26.0 群聊：群对话的停止=紧急停止大红按钮同一语义（全员 stop，含子 Agent 悬等收口）
+  if (groupActiveConversationId === conversationId && groupActiveConversationId && groupTurnsLive.size) {
+    emergencyStopGroup();
+    return;
+  }
   if (!activeId) return;
   if (elements.send.classList.contains("stopping")) {
     // 第二次按 ESC：强制清除状态（防止 Promise 永不 settle 导致界面卡死）
@@ -2061,6 +2341,11 @@ async function openSettings() {
 }
 
 async function sendMessage(composerText = elements.prompt.value, opts = {}) {
+  // v3.26.0 群聊分流：绑了工作组的对话走群聊引擎（chat:group-send）——单聊闸门（activeId）不适用
+  if (groupActiveConversationId === conversationId && groupActiveConversationId) {
+    const result = await sendGroupTurn();
+    if (result) return;
+  }
   // 阉割版 Bridge Edition：云端AI 经 HTTP 桥放的轮（opts.bridge.msgId 在场）——终态必须回报给桥
   //（云端AI 轮询 /api/message 拿回复），busy/取消/失败/成功四态都回报，不让云端AI 悬等
   const viaBridge = Boolean(opts.bridge && opts.bridge.msgId);
@@ -3611,6 +3896,8 @@ document.addEventListener("visibilitychange", () => {
 window.agentChatPro.onDelta(({ id, text }) => {
   const answer = messages.get(id);
   if (!answer) return;
+  // v3.26.0：群轮走专用通道（chat:group-delta → onGroupDelta；单聊 delta 见下方群轮过滤）
+  if (groupTurnsLive.has(id)) return;
   answer.querySelector(".message-content").textContent += text;
   // v3.15.1：仅当进行中任务属于当前显示的对话才刷新 token 计数与滚动（后台任务不挪用当前对话的计量）
   if (streamingConversationId === conversationId) {
@@ -3623,6 +3910,23 @@ window.agentChatPro.onDelta(({ id, text }) => {
 });
 window.agentChatPro.onChatEvent((event) => {
   const answer = messages.get(event.id);
+  // v3.26.0 群轮分支：群轮的 connection/lifecycle/usage 不再单聊状态条投影（多成员互踩红线①；
+  // thinking/round/ask-user 走下方通用分支按 messages.get(id) 挂群轮气泡）
+  const GROUP_OPAQUE_EVENTS = ["upload", "connection", "lifecycle", "usage"];
+  if (groupTurnsLive.has(String(event?.id || ""))) {
+    if (GROUP_OPAQUE_EVENTS.includes(event.type)) return;
+    if (event.type === "group-agent-failed") {
+      const live = groupTurnsLive.get(event.id);
+      if (live) {
+        live.item.classList.add("group-failed");
+        const note = document.createElement("div");
+        note.className = "draft-note";
+        note.textContent = `@${live.name} 本轮失败：${event.error?.message || ""}`.slice(0, 200);
+        live.item.prepend(note);
+      }
+      return;
+    }
+  }
   if (event.type === "upload") {
     setConnection(`正在上传 ${event.name} · ${Math.round(event.overall * 100)}%`, "");
   } else if (event.type === "connection") {
@@ -3687,6 +3991,15 @@ window.agentChatPro.onChatEvent((event) => {
   }
 });
 
+// ── v3.26.0 群聊事件通道 ──
+window.agentChatPro.onGroupDelta(({ id, text }) => {
+  // 红线①：入缓冲合帧（enqueueGroupDelta 内部 ≤24ms 一次 DOM 写）
+  enqueueGroupDelta(id, text);
+});
+window.agentChatPro.onSubagentEvent?.((payload) => {
+  // 模块四：树状折叠行（└─ 子 Agent …）；单聊路（无父轮气泡在群登记时）忽略
+  renderSubagentTreeLine(payload);
+});
 // 桥被强制关闭（SSH 断开 / runner 进程被杀）：状态条降级为错误态并清除等待 UI
 window.agentChatPro.onBridgeForceClosed?.((detail) => {
   setConnection(`连接已被强制关闭${detail?.reason === "runner-stopped" ? "（Agent 已停止）" : ""}。`, "error");
@@ -4533,6 +4846,8 @@ window.agentChatPro.getBrandConfig().then(config => {
   applyBackgroundImage();
   // v3.26.0 工作区：先恢复上次工作区（含切换器渲染），历史列表按工作区过滤后再恢复最近对话
   initWorkspaceSelector();
+  initGroupSetupUI();
+  bindEmptyStateGroupEntry();
   const conversations = await window.agentChatPro.listConversations(currentWorkspace);
   if (conversations.length) await loadConversation(conversations[0].id);
   else await createNewConversation();
@@ -5161,3 +5476,313 @@ document.querySelector("#save-auto-compact").addEventListener("click", async (ev
   } catch (error) { setStatus(error.message, true); }
   finally { button.disabled = false; button.textContent = originalText; }
 });
+
+// ── v3.26.0 建群对话框（模块一 群主视角）：Agent 池管理 + 工作组编排 ──────────────
+const GROUP_PROVIDERS = [
+  ["zhipu", "智谱 GLM"], ["deepseek", "DeepSeek"], ["kimi", "Kimi"], ["doubao", "豆包"],
+  ["openai", "OpenAI"], ["anthropic", "Anthropic"], ["gemini", "Gemini"], ["groq", "Groq"],
+  ["siliconflow", "硅基流动"], ["custom", "custom"]
+];
+
+/** team 工作区空态入口按钮（规格 UI 重构需求：默认首页给建群入口） */
+async function ensureEmptyStateGroupEntry() {
+  const empty = document.querySelector("#empty-state");
+  if (!empty) return;
+  empty.querySelector("#empty-group-entry")?.remove();
+  if (currentWorkspace !== "team") return;
+  const button = document.createElement("button");
+  button.type = "button";
+  button.id = "empty-group-entry";
+  button.className = "primary empty-group-entry";
+  button.textContent = "👥 建群开始协作";
+  button.addEventListener("click", () => openGroupSetup());
+  empty.querySelector(".empty-state > div") ? empty.querySelector(".empty-state > div").append(button) : empty.append(button);
+}
+
+function bindEmptyStateGroupEntry() {
+  ensureEmptyStateGroupEntry();
+}
+
+/** 打开建群对话框（渲染 Agent 池与工作组两个列表） */
+async function openGroupSetup() {
+  const dialog = document.querySelector("#group-setup-dialog");
+  if (!dialog) return;
+  await renderSetupPoolList();
+  await renderSetupWgList();
+  if (!dialog.dataset.started) {
+    dialog.dataset.started = "1";
+    dialog.querySelectorAll("[data-group-tab]").forEach((tab) => {
+      tab.addEventListener("click", () => {
+        const tabId = tab.dataset.groupTab;
+        document.querySelectorAll("[data-group-tab]").forEach((item) => item.classList.toggle("active", item === tab));
+        document.querySelector("#group-tab-pool").hidden = tabId !== "pool";
+        document.querySelector("#group-tab-workgroups").hidden = tabId !== "workgroups";
+      });
+    });
+    document.querySelector("#group-setup-close").addEventListener("click", () => dialog.close());
+    dialog.addEventListener("click", (event) => { if (event.target === dialog) dialog.close(); });
+    // 三个添加块
+    const saveThinkingSlider = (levels) => {
+      // 模块二（独立思考挡位滑条）：该节点自身专属挡位行——每个云端节点独立一条滑条，绝不共用
+      const index = Number(document.querySelector("#pool-cloud-thinking").value || 0);
+      const level = levels[Math.min(index, levels.length - 1)];
+      document.querySelector("#pool-cloud-thinking-label").textContent = level?.label || level?.id || "默认";
+      return level?.id || "";
+    };
+    const cloudSlider = document.querySelector("#pool-cloud-thinking");
+    cloudSlider.addEventListener("input", () => {
+      const provider = document.querySelector("#pool-cloud-provider").value;
+      const model = document.querySelector("#pool-cloud-model").value || "";
+      window.agentChatPro.getThinkingProfile({ provider, model }).then(({ profile }) => {
+        const levels = profile?.levels || [];
+        saveThinkingSlider(levels.length ? levels : [{ id: "off", label: "关" }]);
+        cloudSlider.max = String(Math.max(0, levels.length - 1));
+      }).catch(() => {});
+    });
+    document.querySelector("#pool-cloud-save").addEventListener("click", async () => {
+      const status = document.querySelector("#group-setup-status");
+      const provider = document.querySelector("#pool-cloud-provider").value;
+      const model = document.querySelector("#pool-cloud-model").value.trim();
+      try {
+        const { profile } = await window.agentChatPro.getThinkingProfile({ provider, model });
+        const levels = profile?.levels || [];
+        await window.agentChatPro.addAgentPoolCloud({
+          name: document.querySelector("#pool-cloud-name").value,
+          provider,
+          apiKey: document.querySelector("#pool-cloud-key").value,
+          model,
+          baseURL: document.querySelector("#pool-cloud-baseurl").value,
+          thinkingLevel: levels.length ? saveThinkingSlider(levels) : ""
+        });
+        status.textContent = "云端节点已入池。";
+        ["#pool-cloud-name", "#pool-cloud-key", "#pool-cloud-model", "#pool-cloud-baseurl"].forEach((sel) => { document.querySelector(sel).value = ""; });
+        await renderSetupPoolList();
+      } catch (error) {
+        status.textContent = `保存失败：${error.message || error}`;
+      }
+    });
+    bindInstanceForm("pool-ssh-save", (form) => window.agentChatPro.addAgentPoolInstance({ kind: "ssh", name: form[0].value, profileId: form[1].value, adapter: form[2].value }));
+    bindInstanceForm("pool-local-save", (form) => window.agentChatPro.addAgentPoolInstance({ kind: "local", name: form[0].value, engine: form[1].value }));
+    document.querySelector("#wg-create").addEventListener("click", createWorkgroupFromForm);
+    document.querySelector("#wg-start-chat").addEventListener("click", startWorkgroupChat);
+    renderCloudThinkingHint();
+  }
+  dialog.showModal();
+}
+
+function bindInstanceForm(saveId, submitter) {
+  document.querySelector(`#${saveId}`).addEventListener("click", async () => {
+    const block = document.querySelector(`#${saveId}`).closest(".group-add-block");
+    const fields = [...block.querySelectorAll("input[type=text], select")].filter((el) => !el.closest("details").querySelector("summary").textContent.includes("云端"));
+    const status = document.querySelector("#group-setup-status");
+    try {
+      await submitter(fields);
+      status.textContent = "实例已入池。";
+      block.querySelectorAll("input").forEach((input) => { input.value = ""; });
+      await renderSetupPoolList();
+      await renderSetupWgList();
+    } catch (error) {
+      status.textContent = `保存失败：${error.message || error}`;
+    }
+  });
+}
+
+/** 云端节点默认挡位提示（thinking-levels 按家挡位不同——模块二要求按各家范围独立注入） */
+function renderCloudThinkingHint() {
+  void 0; // 挡位表实时按 provider/model 查询（getThinkingProfile），无需预载
+}
+
+/** 建群对话框 boot 期空挂载：全部事件绑定在 openGroupSetup 内懒初始化（dialog.dataset.started） */
+function initGroupSetupUI() { void 0; }
+
+async function renderSetupPoolList() {
+  const list = document.querySelector("#group-pool-list");
+  if (!list) return;
+  const nodes = await window.agentChatPro.listAgentPool();
+  list.replaceChildren();
+  if (!nodes.length) {
+    const empty = document.createElement("p");
+    empty.className = "group-hint";
+    empty.textContent = "池为空：先在下方添加 Agent 实例（云端 / SSH / 本机任意组合）。";
+    list.append(empty);
+    return;
+  }
+  for (const node of nodes) {
+    const row = renderPoolNodeRow(node);
+    list.append(row);
+  }
+}
+
+/** 池节点行：名称 + 类型徽章 + 云端模型/思考挡位滑条（模块二·独立滑条） + 删除 */
+function renderPoolNodeRow(node) {
+  const row = document.createElement("div");
+  row.className = "pool-node-row";
+  row.dataset.nodeId = node.id;
+  const head = document.createElement("div");
+  head.className = "pool-node-head";
+  const kindLabel = node.kind === "cloud" ? "云端" : node.kind === "ssh" ? "SSH" : "本机";
+  const badge = document.createElement("span");
+  badge.className = `pool-kind-badge pool-kind-${node.kind}`;
+  badge.textContent = kindLabel;
+  const name = document.createElement("span");
+  name.className = "pool-node-name";
+  name.textContent = `@${node.name}`;
+  const key = node.kind === "cloud" ? `${node.cloud?.provider || ""} · ${node.cloud?.model || ""}${node.cloud?.keyTail ? ` · key ${node.cloud.keyTail}` : ""}`
+    : node.kind === "ssh" ? `${node.ssh?.profileId || ""} · ${node.ssh?.adapter || ""}` : node.local?.engine || "";
+  const meta = document.createElement("span");
+  meta.className = "pool-node-meta";
+  meta.textContent = key || "（未配置）";
+  const remove = document.createElement("button");
+  remove.type = "button";
+  remove.className = "pool-remove";
+  remove.textContent = "删除";
+  remove.addEventListener("click", async () => {
+    try {
+      await window.agentChatPro.removeAgentPoolNode(node.id);
+      await renderSetupPoolList();
+      await renderSetupWgList();
+    } catch (error) {
+      document.querySelector("#group-setup-status").textContent = `删除失败：${error.message || error}`;
+    }
+  });
+  head.append(badge, name, meta, remove);
+  row.append(head);
+  // 模块二：云端节点的独立思考挡位滑条（每节点独立，绝不共用滑块）
+  if (node.kind === "cloud") {
+    const sliderRow = document.createElement("div");
+    sliderRow.className = "pool-thinking-row";
+    const label = document.createElement("label");
+    label.textContent = "思考挡位（独立）";
+    const slider = document.createElement("input");
+    slider.type = "range";
+    slider.min = "0";
+    slider.step = "1";
+    slider.value = "0";
+    const show = document.createElement("span");
+    show.className = "pool-thinking-label";
+    const applyLevels = (levels) => {
+      slider.max = String(Math.max(0, levels.length - 1));
+      const index = Math.max(0, levels.findIndex((level) => level.id === node.thinkingLevel));
+      slider.value = String(index < 0 ? 0 : index);
+      show.textContent = levels[index]?.label || levels[0]?.label || "关";
+    };
+    window.agentChatPro.getThinkingProfile({ provider: node.cloud?.provider, model: node.cloud?.model || "" })
+      .then(({ profile }) => applyLevels(profile?.levels || [{ id: "off", label: "关" }]))
+      .catch(() => applyLevels([{ id: "off", label: "关" }]));
+    let savedLevels = null;
+    slider.addEventListener("input", async () => {
+      if (!savedLevels) { savedLevels = [{ id: "off", label: "关" }]; }
+      const level = savedLevels[Number(slider.value)] || { id: "off" };
+      show.textContent = level.label || level.id;
+      try { await window.agentChatPro.updateAgentPoolNode(node.id, { thinkingLevel: level.id }); } catch { /* 存档失败静默 */ }
+    });
+    window.agentChatPro.getThinkingProfile({ provider: node.cloud?.provider, model: node.cloud?.model || "" })
+      .then(({ profile }) => { if (profile?.levels) savedLevels = profile.levels; })
+      .catch(() => {});
+    sliderRow.append(label, slider, show);
+    row.append(sliderRow);
+  }
+  return row;
+}
+
+let groupSetupSelectedWorkgroupId = "";
+
+async function renderSetupWgList() {
+  const list = document.querySelector("#group-wg-list");
+  if (!list) return;
+  const [workgroups, nodes] = await Promise.all([
+    window.agentChatPro.listWorkgroups(),
+    window.agentChatPro.listAgentPool()
+  ]);
+  list.replaceChildren();
+  const checks = document.querySelector("#wg-member-checks");
+  checks.replaceChildren();
+  const nameById = new Map(nodes.map((node) => [node.id, node.name]));
+  for (const group of workgroups) {
+    const row = document.createElement("div");
+    row.className = "wg-row" + (group.id === groupSetupSelectedWorkgroupId ? " active" : "");
+    const title = document.createElement("span");
+    title.className = "wg-name";
+    title.textContent = group.name;
+    const members = document.createElement("span");
+    members.className = "wg-members";
+    members.textContent = (group.members || []).map((member) => `@${nameById.get(member.agentId) || "?"}`).join(" → ");
+    const turns = document.createElement("span");
+    turns.className = "wg-turns";
+    turns.textContent = `上限 ${group.maxTurns} 轮`;
+    const use = document.createElement("button");
+    use.type = "button";
+    use.className = "wg-use";
+    use.textContent = "选择";
+    use.addEventListener("click", () => {
+      groupSetupSelectedWorkgroupId = group.id;
+      void use;
+      renderSetupWgList();
+    });
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "pool-remove";
+    remove.textContent = "删除";
+    remove.addEventListener("click", async () => {
+      try {
+        await window.agentChatPro.deleteWorkgroup(group.id);
+        if (groupSetupSelectedWorkgroupId === group.id) groupSetupSelectedWorkgroupId = "";
+        await renderSetupWgList();
+      } catch (error) {
+        document.querySelector("#group-setup-status").textContent = `删除失败：${error.message || error}`;
+      }
+    });
+    row.append(title, members, turns, use, remove);
+    list.append(row);
+  }
+  // 成员勾选框（按勾选顺序=自主讨论接力顺序）
+  nodes.forEach((node) => {
+    const label = document.createElement("label");
+    label.className = "wg-member-check";
+    const check = document.createElement("input");
+    check.type = "checkbox";
+    check.value = node.id;
+    label.append(check, document.createTextNode(` @${node.name}（${node.kind === "cloud" ? "云端" : node.kind === "ssh" ? "SSH" : "本机"}）`));
+    checks.append(label);
+  });
+  if (!workgroups.length) {
+    const empty = document.createElement("p");
+    empty.className = "group-hint";
+    empty.textContent = "还没有工作组：勾选成员后创建一个（群主视角）。";
+    list.append(empty);
+  }
+}
+
+async function createWorkgroupFromForm() {
+  const status = document.querySelector("#group-setup-status");
+  const agentIds = [...document.querySelectorAll("#wg-member-checks input:checked")].map((check) => check.value);
+  const name = document.querySelector("#wg-name").value;
+  const maxTurns = Number(document.querySelector("#wg-max-turns").value) || 5;
+  try {
+    await window.agentChatPro.createWorkgroup({ name, agentIds, maxTurns });
+    status.textContent = "工作组已创建。";
+    document.querySelector("#wg-name").value = "";
+    document.querySelectorAll("#wg-member-checks input:checked").forEach((check) => { check.checked = false; });
+    await renderSetupWgList();
+  } catch (error) {
+    status.textContent = `创建失败：${error.message || error}`;
+  }
+}
+
+/** 「进入群聊」：选中工作组 → 新建 team 对话 → 绑定工作组 → 载入群聊布局 */
+async function startWorkgroupChat() {
+  const status = document.querySelector("#group-setup-status");
+  if (!groupSetupSelectedWorkgroupId) {
+    status.textContent = "请先在「工作组」页选择一个工作组。";
+    return;
+  }
+  try {
+    const conversation = await window.agentChatPro.createConversation("team");
+    await window.agentChatPro.setConversationWorkgroup(conversation.id, groupSetupSelectedWorkgroupId);
+    document.querySelector("#group-setup-dialog").close();
+    await loadConversation(conversation.id);
+    elements.prompt.focus();
+  } catch (error) {
+    status.textContent = `进入群聊失败：${error.message || error}`;
+  }
+}

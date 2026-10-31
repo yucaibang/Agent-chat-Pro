@@ -55,6 +55,42 @@ contextBridge.exposeInMainWorld("agentChatPro", {
   // v3.26.0：搜索带工作区过滤（第二参语义升级为 workspaceType；原 limit 调用点现走渲染层内部默认）
   searchConversations: (query, workspaceType = "") => ipcRenderer.invoke("conversations:search", query, undefined, workspaceType),
   // ── 聊天 IPC ──
+  // v3.26.0 多 AI 对话（工作）：Agent 池与工作组建档（模块一）
+  listAgentPool: () => ipcRenderer.invoke("agent-pool:list"),
+  addAgentPoolCloud: (input) => ipcRenderer.invoke("agent-pool:add-cloud", input),
+  addAgentPoolInstance: (input) => ipcRenderer.invoke("agent-pool:add-instance", input),
+  updateAgentPoolNode: (id, patch) => ipcRenderer.invoke("agent-pool:update-node", id, patch),
+  removeAgentPoolNode: (id) => ipcRenderer.invoke("agent-pool:remove-node", id),
+  listWorkgroups: () => ipcRenderer.invoke("agent-pool:workgroups:list"),
+  createWorkgroup: (input) => ipcRenderer.invoke("agent-pool:workgroup:create", input),
+  updateWorkgroup: (id, patch) => ipcRenderer.invoke("agent-pool:workgroup:update", id, patch),
+  deleteWorkgroup: (id) => ipcRenderer.invoke("agent-pool:workgroup:delete", id),
+  listAgentTargets: () => ipcRenderer.invoke("agent-pool:targets"),
+  setConversationWorkgroup: (id, workgroupId) => ipcRenderer.invoke("conversations:set-workgroup", id, workgroupId),
+  // v3.26.0 群聊指挥链路（模块三）+ Sub-Agent（模块四）
+  sendGroupMessage: (input) => {
+    auditSignal({
+      requestId: "group-send",
+      direction: "preload-sent",
+      signal: "chat-group-send",
+      disposition: "accepted",
+      textLength: String(input?.message || "").length,
+      attachmentCount: 0
+    });
+    return ipcRenderer.invoke("chat:group-send", input);
+  },
+  awaitGroupTurn: (requestId) => ipcRenderer.invoke("chat:group-await", requestId),
+  stopGroupTurns: (conversationId) => {
+    auditSignal({ requestId: `group-${conversationId}`, direction: "preload-sent", signal: "chat-group-stop", disposition: "attempt" });
+    return ipcRenderer.invoke("chat:group-stop", conversationId);
+  },
+  spawnSubAgent: (input) => ipcRenderer.invoke("chat:spawn-subagent", input),
+  onGroupDelta: (handler) => ipcRenderer.on("chat:group-delta", (_event, payload) => {
+    try { handler(payload || {}); } catch { /* 渲染层异常不炸 IPC 通道 */ }
+  }),
+  onSubagentEvent: (handler) => ipcRenderer.on("chat:subagent-event", (_event, payload) => {
+    try { handler(payload || {}); } catch { /* 同上 */ }
+  }),
   sendMessage: (input) => {
     auditSignal({
       requestId: input?.id,

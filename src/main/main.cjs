@@ -36,6 +36,10 @@ const {
   archiveDirectory,
   prepareConversationDirectory,
   renameConversation,
+  // v3.26.0 多 AI 对话（工作）：成员会话隔离与群聊绑定
+  saveAgentSession,
+  agentSessionFor,
+  setConversationWorkgroup,
   setConversationPinned,
   saveConversationSession,
   saveAssistantDraft,
@@ -63,6 +67,9 @@ const { ASK_USER_HINT, createAskUserRegistry, ASK_USER_TIMEOUT, ASK_USER_STOPPED
 // v3.24.0 ask_user 应答注册表（模块级单例；stop 请求 cancelAll 打断悬等）
 const askUserRegistry = createAskUserRegistry();
 const { collapseRepetition } = require("./repetition-guard.cjs"); // v3.15.5 修复1：复读检测折叠
+// v3.26.0 多 AI 对话（工作）：Agent 池/工作组建档（模块一）+ 群聊引擎与 Sub-Agent 包工头（模块三④）
+const poolModule = require("./agent-pool.cjs");
+const { runGroupTurn, awaitGroupTurn, stopGroupTurns, executeSubAgent, summarize: subSummarize, slimError: subSlimError } = require("./workgroup-chat.cjs");
 const {
   auditToolDetails
 } = require("./status-event-normalizer.cjs");
@@ -1045,6 +1052,10 @@ app.whenReady().then(async () => {
     }
     if (!message && !attachments.length) throw new Error("请输入消息或添加附件。");
     if (!input.conversationId) throw new Error("请先新建一个对话。");
+    // v3.26.0 群聊对话走专用路（chat:group-send）——普通单聊拒绝绑群的对话，防两套引擎互踩
+    if (getConversation(input.conversationId)?.workgroupId) {
+      throw new Error("该对话是多 AI 群聊对话，请在群聊输入框发送（或新建一对一对话）。");
+    }
     writeLog("work_status_signal", statusSignalEntry({
       requestId: id,
       direction: "main-received",
@@ -1074,8 +1085,9 @@ app.whenReady().then(async () => {
       // v3.20.0 F5：云端路 Agent plan——system prompt 幂等追加 ```plan 约定段（渲染层 extractPlanBlocks 解析）
       // v3.24.0：再拼 ask_user 选择题提问约定（工具开放后告知 AI 何时该提问）
       const systemPrompt = appendPlanConvention(modeConfig?.systemPrompt || "") + ASK_USER_HINT;
+      // v3.26.0 修复：删去旧 push——buildMessages 已含刚落库的用户消息，旧版再 push 一次=每轮双发
+      // （P12 初版遗留：请求消息序列 user×2，白耗 token 且易致 AI 回答偏题；工具轮 tool 回填不受影响）
       const cloudMessages = buildMessages(conversation, systemPrompt);
-      cloudMessages.push({ role: "user", content: message });
 
       // 工具执行（v3.14.0 云办公一期）：推理走云端 API，工具在本机工作目录内执行
       // v3.22.0 云办公二期：cloudConfig.sandboxEnabled 开启时文件/命令工具改经 SSH→NAS `docker exec sandbox`
@@ -1275,6 +1287,38 @@ app.whenReady().then(async () => {
                   throw new Error("用户已停止当前任务");
                 }
                 output = answer === ASK_USER_TIMEOUT ? "（用户长时间未应答，请基于现有信息自行决定下一步，或明确说明被搁置的原因。）" : `用户选择：${answer}`;
+              }
+            } else if (call.name === "spawn_agent") {
+              // v3.26.0 模块四：云端单聊轮的子 Agent 派生（权限白名单=Agent 池云端节点；
+              // 换脑/熔断走 ask-user 选择卡悬等；子结果精简回填 tool 消息 + subagent-result 轻注记入上下文）
+              const task = String(card.input?.task || "").trim();
+              if (!task) {
+                output = "spawn_agent 参数不完整（task 必填）。请自行完成该工作或向用户说明。";
+                card.status = "completed"; card.result = "缺 task，未派生";
+              } else {
+                const subResult = await executeSubAgent({
+                  log: writeLog,
+                  emit: (rid, payload) => sendWorkStatusSignal(event.sender, "chat:event", { id: rid, ...payload }),
+                  emitSub: (rid, payload) => sendWorkStatusSignal(event.sender, "chat:subagent-event", { parentId: rid, ...payload }),
+                  deps: { ...groupDeps(), sender: event.sender }
+                }, {
+                  conversationId: input.conversationId,
+                  parentRequestId: id,
+                  parentName: "云端助手",
+                  task,
+                  expect: String(card.input?.expect || ""),
+                  targetAgentId: String(card.input?.agent || "")
+                });
+                if (subResult.status === "done") {
+                  card.status = "completed";
+                  card.result = subSummarize(subResult.text, 400);
+                  output = `子 Agent ${subResult.agentLabel} 已完成任务，结果如下：\n${subSummarize(subResult.text, 2000)}`;
+                } else {
+                  card.status = "failed";
+                  card.result = `${subResult.agentLabel} ${subResult.error?.code || ""}`;
+                  output = `子 Agent 派生未完成（status=${subResult.status}, ${subResult.error?.code || "ERROR"}：${subResult.error?.message || ""}）。请基于现有信息继续，或向用户说明。`;
+                }
+                writeLog("cloud_spawn_agent", { requestId: id, status: subResult.status, agent: subResult.agentLabel, conversationId: input.conversationId });
               }
             } else {
             try {
@@ -1693,6 +1737,95 @@ app.whenReady().then(async () => {
     addUserMessage(request.conversationId, followUpMessage);
     writeLog("chat_follow_up_accepted", { requestId: id, conversationId: request.conversationId, textLength: followUpMessage.length });
     return { accepted: true };
+  });
+  // ── v3.26.0 多 AI 对话（工作）：Agent 池与工作组建档（模块一）──
+  ipcMain.handle("agent-pool:list", () => poolModule.listPool());
+  ipcMain.handle("agent-pool:add-cloud", (_event, input) => poolModule.addCloudNode(input || {}));
+  ipcMain.handle("agent-pool:add-instance", (_event, input) => poolModule.addInstanceNode(input || {}));
+  ipcMain.handle("agent-pool:update-node", (_event, id, patch) => poolModule.updatePoolNode(id, patch || {}));
+  ipcMain.handle("agent-pool:remove-node", (_event, id) => poolModule.removePoolNode(id));
+  ipcMain.handle("agent-pool:workgroups:list", () => poolModule.listWorkgroups());
+  ipcMain.handle("agent-pool:workgroup:create", (_event, input) => poolModule.createWorkgroup(input || {}));
+  ipcMain.handle("agent-pool:workgroup:update", (_event, id, patch) => poolModule.updateWorkgroup(id, patch || {}));
+  ipcMain.handle("agent-pool:workgroup:delete", (_event, id) => poolModule.deleteWorkgroup(id));
+  // 子 Agent 白名单目标（脱敏：不给完整密钥）
+  ipcMain.handle("agent-pool:targets", () => poolModule.whitelistedCloudTargets().map(({ apiKey, ...rest }) => rest));
+  // 建群入口：新建 team 对话后即时绑定工作组（首次群发也会兜底绑定）
+  ipcMain.handle("conversations:set-workgroup", (_event, id, workgroupId) => setConversationWorkgroup(String(id || ""), String(workgroupId || "")));
+
+  // ── v3.26.0 群聊指挥链路（模块三）+ Sub-Agent 包工头（模块四）──
+  const groupDeps = () => ({
+    sender: null, // 由 handler 填充（event.sender）
+    sendWorkStatusSignal,
+    log: writeLog,
+    getConversation,
+    getMode,
+    addAssistantMessage,
+    addUserMessage,
+    saveAssistantDraft,
+    activeRequests,
+    agentSessionFor,
+    saveAgentSession,
+    getAtomcodeToken,
+    askUserRegistry
+  });
+  ipcMain.handle("chat:group-send", async (event, input) => {
+    const conversationId = String(input?.conversationId || "");
+    const workgroupId = String(input?.workgroupId || "");
+    const message = String(input?.message || "").trim();
+    if (!conversationId) throw new Error("请先新建一个群聊对话。");
+    if (!workgroupId) throw new Error("该对话未绑定工作组，请先建群。");
+    if (!message) throw new Error("请输入消息。");
+    if (!getConversation(conversationId)) throw new Error("找不到对话，请新建后重试。");
+    writeLog("group_send_start", {
+      conversationId, workgroupId, textLength: message.length,
+      mentioned: Array.isArray(input.mentionedAgentIds) ? input.mentionedAgentIds.length : 0,
+      autoDiscuss: Boolean(input.autoDiscuss)
+    });
+    setConversationWorkgroup(conversationId, workgroupId); // 群聊对话锁定工作组（首次群发落定）
+    addUserMessage(conversationId, message);
+    const deps = { ...groupDeps(), sender: event.sender };
+    const outcome = await runGroupTurn(deps, {
+      conversationId,
+      workgroupId,
+      message,
+      mentionedAgentIds: Array.isArray(input.mentionedAgentIds) ? input.mentionedAgentIds : [],
+      autoDiscuss: Boolean(input.autoDiscuss),
+      // 红线③：maxTurns 缺省取工作组配置（默认 5），上限 10（引擎层 clamp）
+      maxTurns: Number(input.maxTurns) || 0,
+      workModeId: input.workModeId || ""
+    });
+    return { conversationId, ...outcome };
+  });
+  ipcMain.handle("chat:group-await", (_event, requestId) => awaitGroupTurn(String(requestId || "")));
+  ipcMain.handle("chat:group-stop", (event, conversationId) => {
+    const id = String(conversationId || "");
+    writeLog("work_status_signal", statusSignalEntry({ requestId: `group-${id}`, direction: "main-received", signal: "group-stop", disposition: "accepted" }));
+    // 紧急停止大红按钮：置停止旗（接力轮间断点）+ activeRequests 全员 cancel + 子 Agent 悬等收口
+    const stopped = stopGroupTurns(activeRequests, id, askUserRegistry);
+    writeLog("group_stop_requested", { conversationId: id, stopped });
+    return { stopped };
+  });
+  // 池内云端成员（Sub-Agent 派生目标，脱敏形态）
+  ipcMain.handle("chat:spawn-subagent", async (event, input) => {
+    const conversationId = String(input?.conversationId || "");
+    if (!conversationId) throw new Error("请先新建一个对话。");
+    const task = String(input?.task || "").trim();
+    if (!task) throw new Error("子任务描述不能为空。");
+    const result = await executeSubAgent({
+      log: writeLog,
+      emit: (rid, payload) => sendWorkStatusSignal(event.sender, "chat:event", { id: rid, ...payload }),
+      emitSub: (rid, payload) => sendWorkStatusSignal(event.sender, "chat:subagent-event", { parentId: rid, ...payload }),
+      deps: { ...groupDeps(), sender: event.sender }
+    }, {
+      conversationId,
+      parentRequestId: String(input?.parentRequestId || ""),
+      parentName: String(input?.parentName || "用户"),
+      task,
+      expect: String(input?.expect || ""),
+      targetAgentId: String(input?.targetAgentId || "")
+    });
+    return result;
   });
   ipcMain.handle("chat:cancel", (_event, id) => {
     writeLog("work_status_signal", statusSignalEntry({ requestId: id, direction: "main-received", signal: "chat-cancel", disposition: "accepted" }));

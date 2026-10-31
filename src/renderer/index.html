@@ -1011,5 +1011,85 @@
     </dialog>
     </div>
 
+    <!-- v3.26.0 多 AI 对话（工作）：建群对话框（Agent 池管理 / 工作组编排） -->
+    <dialog id="group-setup-dialog" class="group-setup-dialog">
+      <form class="group-setup-body" id="group-setup-form" method="dialog" novalidate>
+        <header class="dialog-header">
+          <h3>多 AI 协同 · 建群</h3>
+          <button type="button" id="group-setup-close" class="secondary">关闭</button>
+        </header>
+        <div class="group-setup-tabs">
+          <button type="button" data-group-tab="pool" class="group-tab-btn active">Agent 池</button>
+          <button type="button" data-group-tab="workgroups" class="group-tab-btn">工作组</button>
+        </div>
+        <section id="group-tab-pool" class="group-tab-pane">
+          <p class="group-hint">云端节点=独立 Key/模型/思考挡位；SSH/本机实例可对同一 NAS 连接多次注册（如 @NAS-Dev / @NAS-Test），群内互独立会话。</p>
+          <div id="group-pool-list" class="group-pool-list"></div>
+          <details id="group-add-cloud" class="group-add-block">
+            <summary>+ 添加云端节点</summary>
+            <div class="group-add-grid">
+              <input type="text" id="pool-cloud-name" placeholder="名称（如 Astra）" autocomplete="off">
+              <select id="pool-cloud-provider" class="pool-provider">
+                <option value="zhipu">智谱 GLM</option><option value="deepseek">DeepSeek</option>
+                <option value="kimi">Kimi</option><option value="doubao">豆包</option>
+                <option value="openai">OpenAI</option><option value="anthropic">Anthropic</option>
+                <option value="gemini">Gemini</option><option value="groq">Groq</option>
+                <option value="siliconflow"> SiliconFlow</option><option value="custom">custom</option>
+              </select>
+              <input type="password" id="pool-cloud-key" placeholder="API Key（独立计费，不复用主设置）" autocomplete="off">
+              <input type="text" id="pool-cloud-model" placeholder="自定义模型名（如 glm-4-flash）" autocomplete="off">
+              <input type="text" id="pool-cloud-baseurl" placeholder="自定义 baseURL（选填，走服务商默认）">
+              <div class="pool-thinking-row">
+                <label for="pool-cloud-thinking">思考挡位（该节点独立，绝不与他节点共用滑条）</label>
+                <input type="range" id="pool-cloud-thinking" min="0" max="4" step="1" value="0">
+                <span id="pool-cloud-thinking-label" class="pool-thinking-label">默认</span>
+              </div>
+              <button type="button" id="pool-cloud-save" class="primary">保存节点</button>
+            </div>
+          </details>
+          <details id="group-add-ssh" class="group-add-block">
+            <summary>+ 添加 SSH 实例</summary>
+            <div class="group-add-grid">
+              <input type="text" id="pool-ssh-name" placeholder="名称（如 NAS-Dev）" autocomplete="off">
+              <select id="pool-ssh-profile" class="pool-profile">
+                <option value="ssh-1">卡槽 1（当前 SSH 配置）</option>
+                <option value="ssh-2">卡槽 2（当前 SSH 配置）</option>
+              </select>
+              <select id="pool-ssh-adapter" class="pool-adapter">
+                <option value="claude">Claude CLI</option><option value="codex">Codex CLI</option>
+                <option value="qwen">Qwen CLI</option><option value="hermes">Hermes CLI</option>
+              </select>
+              <button type="button" id="pool-ssh-save" class="primary">保存实例</button>
+            </div>
+          </details>
+          <details id="group-add-local" class="group-add-block">
+            <summary>+ 添加本机实例</summary>
+            <div class="group-add-grid">
+              <input type="text" id="pool-local-name" placeholder="名称（如 Local-Claude）" autocomplete="off">
+              <select id="pool-local-engine" class="pool-engine">
+                <option value="claude">本机 Claude</option><option value="atomcode">AtomCode</option>
+                <option value="custom">custom CLI</option>
+              </select>
+              <button type="button" id="pool-local-save" class="primary">保存实例</button>
+            </div>
+          </details>
+        </section>
+        <section id="group-tab-workgroups" class="group-tab-pane" hidden>
+          <p class="group-hint">勾选成员（按勾选顺序=自主讨论接力顺序）；轮数上限默认 5（1~10，防无限套娃红线③）。</p>
+          <div id="group-wg-list" class="group-wg-list"></div>
+          <div class="group-wg-form">
+            <input type="text" id="wg-name" placeholder="工作组名称（如 首页评审组）" autocomplete="off">
+            <div id="wg-member-checks" class="wg-member-checks"></div>
+            <label class="wg-turns-row">轮数上限 <input type="number" id="wg-max-turns" min="1" max="10" value="5">（发言次数）</label>
+            <button type="button" id="wg-create" class="primary">创建工作组</button>
+          </div>
+        </section>
+        <footer class="group-setup-footer">
+          <span id="group-setup-status" class="group-setup-status"></span>
+          <button type="button" id="wg-start-chat" class="primary">进入群聊（选中工作组）</button>
+        </footer>
+      </form>
+    </dialog>
+
   </body>
 </html>

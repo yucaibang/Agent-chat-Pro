@@ -130,6 +130,8 @@ function clearConversationSession(id) {
     // v3.18.0 F4：卡槽会话字段一并清（sshSessionId_ssh2 等）
     if (key.startsWith("sshSessionId_")) conversation[key] = "";
   }
+  // v3.26.0 群聊：Agent 实例会话随会话重置一并清空
+  conversation.agentSessions = {};
   conversation.lastConnectionMode = "";
   conversation.updatedAt = new Date().toISOString();
   write(all);
@@ -182,12 +184,43 @@ function sshSessionField(profileId, adapter = "claude") {
   return tail && tail !== "claude" ? `${base}_${tail.replace(/[^a-zA-Z0-9_-]/g, "")}` : base;
 }
 
-function addAssistantMessage(id, text, sessionId, files = [], tools = [], requestId = "", connectionMode = "ssh", usage, durationMs, engine = "claude", profileId = "", remoteAdapter = "claude", thinking = "") {
+/** v3.26.0 群聊：成员会话按 Agent 实例隔离落档（agentSessions[agentId]=sessionId），跨轮续聊不串 */
+function saveAgentSession(id, agentId, sessionId) {
+  const key = String(agentId || "").trim();
+  const trimmed = String(sessionId || "").trim();
+  if (!key || !trimmed) return null;
+  return update(id, (conversation) => {
+    if (!conversation.agentSessions || typeof conversation.agentSessions !== "object") conversation.agentSessions = {};
+    conversation.agentSessions[key] = trimmed;
+  });
+}
+
+/** v3.26.0 群聊：读取成员会话（跨轮续聊用） */
+function agentSessionFor(conversation, agentId) {
+  const map = conversation?.agentSessions;
+  return map && typeof map === "object" ? String(map[agentId] || "") : "";
+}
+
+/** v3.26.0 群聊：绑定对话 ↔ 工作组（首次群发时落定） */
+function setConversationWorkgroup(id, workgroupId) {
+  const value = String(workgroupId || "").trim();
+  if (!value) return null;
+  return update(id, (conversation) => {
+    conversation.workgroupId = value;
+    if (!conversation.agentSessions || typeof conversation.agentSessions !== "object") conversation.agentSessions = {};
+  });
+}
+
+function addAssistantMessage(id, text, sessionId, files = [], tools = [], requestId = "", connectionMode = "ssh", usage, durationMs, engine = "claude", profileId = "", remoteAdapter = "claude", thinking = "", agentMeta = null) {
   return update(id, (conversation) => {
     const draft = requestId
       ? conversation.messages.find((message) => message.role === "assistant" && message.requestId === requestId)
       : null;
     const completed = { mid: draft?.mid || randomUUID(), role: "assistant", text, files, tools, at: draft?.at || new Date().toISOString() }; // v3.15.5 修复2：mid 删除锚点（draft 转正复用原 mid）
+    // v3.26.0 群聊：成员身份随消息落库（气泡名牌 + 群聊上下文按成员转录归因）
+    if (agentMeta && typeof agentMeta === "object") {
+      completed.agent = { id: String(agentMeta.agentId || "").slice(0, 80), name: String(agentMeta.name || "").slice(0, 40) };
+    }
     if (usage) completed.usage = usage;
     if (Number.isFinite(Number(durationMs))) completed.durationMs = Math.max(0, Math.round(Number(durationMs)));
     // v3.24.0 思考过程落库：随消息持久化（重放渲染折叠块；上限 200KB 防超长思维链灌库）
@@ -409,6 +442,9 @@ module.exports = {
   sshSessionField,
   truncateConversationMessages,
   conversationStats,
+  saveAgentSession,
+  agentSessionFor,
+  setConversationWorkgroup,
   normalizeWorkspaceType,
   workspaceTypeOf
 };
