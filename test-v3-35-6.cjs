@@ -272,6 +272,7 @@ async function runStaticTests() {
     assert.ok(rendererSrc.includes("NotAllowedError") && rendererSrc.includes("NotReadableError"), "麦克风权限/占用错误给出中文指引");
     assert.ok(mainSrc.includes('ipcMain.handle("voice:info"') && mainSrc.includes('ipcMain.handle("voice:transcribe"'), "主进程两个 IPC 在册");
     assert.ok(mainSrc.includes('require("./voice-transcribe.cjs")'), "转录模块已挂入 main");
+    assert.ok(fs.readFileSync(path.join(ROOT, "scripts", "obfuscate.cjs"), "utf8").includes('"main/voice-transcribe.cjs"'), "新模块已登记混淆/字节码名单（构建管线不漏）");
     assert.ok(preloadSrc.includes("voiceInfo: () => ipcRenderer.invoke(\"voice:info\")") && preloadSrc.includes("voiceTranscribe: (payload) => ipcRenderer.invoke(\"voice:transcribe\", payload)"), "preload 桥两座在册");
     assert.ok(stylesSrc.includes(".voice-button.recording") && stylesSrc.includes("@keyframes voice-pulse"), "录音红态脉动样式在册");
     // 行为：voice-transcribe.cjs 实调（fetchImpl 注入，不发真网）
