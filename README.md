@@ -156,6 +156,12 @@ API 密钥使用 Electron safeStorage **加密后落盘在你本机用户目录*
 </details>
 
 <details>
+<summary><b>为什么 Agent Chat Pro 后面得带个「Pro」？明明没发布过普通版？</b></summary>
+
+因为从立项第一天起它就叫这个名字，从来没有过「普通版」——Pro 不是版本分层，是产品名本身。这里没有「Pro 版多收费、普通版砍功能」的套路：三模式连接、十家服务商、多 AI 群聊、语音输入、云办公沙箱……全部功能只长在这一个安装包里，装它一个就全都在。
+</details>
+
+<details>
 <summary><b>遇到 bug / 想提需求？</b></summary>
 
 在仓库提 Issue 即可，尽量附：系统版本、连接模式（云端/SSH/本机）、复现步骤与报错原文。
