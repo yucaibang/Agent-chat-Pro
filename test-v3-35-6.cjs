@@ -248,6 +248,16 @@ async function runStaticTests() {
     assert.ok(!mainSrc.includes('cloudMessages.push({ role: "user", content: message })'), "重复 push 已删除");
     assert.ok(mainSrc.includes("每轮双发"), "修复注释在册（口径可追溯）");
   });
+  await test("5.11 云端节点「拉取模型列表」（v3.35.9 用户令：填 Key 后不该再手打模型名，与连接设置云端同款实拉）", () => {
+    assert.ok(indexHtmlSrc.includes('id="pool-cloud-fetch-models"') && indexHtmlSrc.includes("🔄 拉取"), "拉取按钮在册");
+    assert.ok(indexHtmlSrc.includes('id="pool-cloud-model-list"') && indexHtmlSrc.includes('list="pool-cloud-model-list"'), "模型框挂 datalist（拉取后点选，也保留手填）");
+    assert.ok(indexHtmlSrc.includes('id="pool-cloud-fetch-result"'), "拉取结果提示行在册");
+    assert.ok(rendererSrc.includes('window.agentChatPro.fetchCloudModels({ provider, apiKey, baseUrl })'), "复用主进程 cloud:fetch-models 实拉通道（不新建端点）");
+    assert.ok(rendererSrc.includes('请先填写该节点的 API Key 再拉取'), "节点 Key 独立计费守卫：未填 Key 直接拦（绝不兜全局云端密钥）");
+    assert.ok(rendererSrc.includes("config.pullModels === false") && rendererSrc.includes("该服务商无模型列表接口"), "豆包无列表端点隐藏按钮+文案提示");
+    assert.ok(rendererSrc.includes("applyPoolProviderFetch"), "服务商切换/初始显隐校准在册");
+    assert.ok(stylesSrc.includes(".pool-fetch-result"), "结果行样式在册");
+  });
   await test("5.10 空态建群入口布局加固（v3.35.8 线上截图 bug：窄容器下按钮被压成一字一行窄条）", () => {
     assert.ok(rendererSrc.includes("ensureEmptyStateGroupEntry"), "空态建群入口函数在册");
     assert.ok(rendererSrc.includes('row.className = "empty-group-entry-row"') && rendererSrc.includes("empty.append(row)"), "按钮行容器包裹隔离 grid 收缩（不直接当 grid item）");

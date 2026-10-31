@@ -1283,6 +1283,9 @@ body.devpanel-absent .dev-panel, body.devpanel-absent .dev-rail { display: none 
   color: var(--text-primary); padding: 7px 10px; font-size: 13px; min-width: 0;
 }
 .group-add-grid .primary { grid-column: 1 / -1; }
+/* ── v3.35.9 云端节点「拉取模型列表」（与连接设置云端同款官方 GET /models 实拉）── */
+.group-add-grid .plain-button { align-self: center; white-space: nowrap; }
+.pool-fetch-result { grid-column: 1 / -1; font-size: 11.5px; color: var(--text-muted); line-height: 1.5; }
 /* ── v3.35.7 群聊思考面板（成员堆叠节：群内多少个 AI 就按各自模型档位一个个往上叠+预计消耗倍数）── */
 .pool-node-level { font-size: 11px; padding: 1px 8px; border-radius: 999px; background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--text-secondary); }
 .think-group-rows { display: flex; flex-direction: column; gap: 12px; margin: 10px 0 4px; }

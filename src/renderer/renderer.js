@@ -5631,6 +5631,62 @@ async function openGroupSetup() {
     });
     document.querySelector("#group-setup-close").addEventListener("click", () => dialog.close());
     dialog.addEventListener("click", (event) => { if (event.target === dialog) dialog.close(); });
+    // ── v3.35.9 云端节点「🔄 拉取」：与连接设置云端同款官方 GET /models 实拉（用户令：填 Key 后不该再手打模型名）
+    const poolCloudProvider = document.querySelector("#pool-cloud-provider");
+    const poolFetchButton = document.querySelector("#pool-cloud-fetch-models");
+    const poolFetchResult = document.querySelector("#pool-cloud-fetch-result");
+    const applyPoolProviderFetch = () => {
+      const provider = poolCloudProvider.value;
+      const config = CLOUD_PROVIDERS[provider];
+      const pullable = Boolean(config) && config.pullModels !== false;
+      poolFetchButton.hidden = !pullable;
+      if (poolFetchResult) {
+        poolFetchResult.hidden = pullable;
+        poolFetchResult.textContent = pullable ? "" : "该服务商无模型列表接口，模型名手填即可。";
+      }
+      document.querySelector("#pool-cloud-model-list").innerHTML = "";
+      document.querySelector("#pool-cloud-baseurl").placeholder = provider === "custom" ? "API 地址（custom 必填，如 https://xx/v1）" : `自定义 baseURL（选填，走服务商默认）`;
+    };
+    if (poolCloudProvider) poolCloudProvider.addEventListener("change", applyPoolProviderFetch);
+    applyPoolProviderFetch(); // 初始按默认服务商校准显隐
+    poolFetchButton?.addEventListener("click", async () => {
+      if (poolFetchButton.disabled) return;
+      const provider = poolCloudProvider.value;
+      const config = CLOUD_PROVIDERS[provider];
+      if (!config || config.pullModels === false) return;
+      const apiKey = document.querySelector("#pool-cloud-key").value.trim();
+      const baseUrl = document.querySelector("#pool-cloud-baseurl").value.trim() || config.baseUrl || "";
+      // 节点 Key 独立计费（不复用主设置）——未填直接拦下，绝不让主进程兜全局云端密钥
+      if (!apiKey) {
+        poolFetchResult.hidden = false;
+        poolFetchResult.textContent = "⚠️ 请先填写该节点的 API Key 再拉取";
+        return;
+      }
+      if (!baseUrl) {
+        poolFetchResult.hidden = false;
+        poolFetchResult.textContent = "⚠️ 请先填写 API 地址再拉取";
+        return;
+      }
+      poolFetchButton.disabled = true;
+      poolFetchButton.textContent = "拉取中…";
+      poolFetchResult.hidden = false;
+      poolFetchResult.textContent = "正在请求官方模型列表…";
+      try {
+        const result = await window.agentChatPro.fetchCloudModels({ provider, apiKey, baseUrl });
+        if (!result?.ok) {
+          poolFetchResult.textContent = `⚠️ ${result?.reason || "拉取失败，请检查密钥和网络"}`;
+          return;
+        }
+        const list = document.querySelector("#pool-cloud-model-list");
+        list.innerHTML = result.models.map((m) => `<option value="${m.value}">${m.label === m.value ? "" : m.label}</option>`).join("");
+        poolFetchResult.textContent = `✅ 已拉取 ${result.count} 个该 Key 可用的模型，点模型框即可选择（也可手填）`;
+      } catch (error) {
+        poolFetchResult.textContent = `⚠️ 拉取失败：${error?.message || error}`;
+      } finally {
+        poolFetchButton.disabled = false;
+        poolFetchButton.textContent = "🔄 拉取";
+      }
+    });
     // 三个添加块
     // v3.35.7（用户令）：建群对话框不再放思考挡位滑条——思考程度统一在群聊输入栏的
     // 思考面板里按成员叠加调（每成员一节+预计消耗倍数）；池节点保存时不带挡位（留池默认）
