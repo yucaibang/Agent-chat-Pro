@@ -170,6 +170,8 @@
         <input id="file-picker" type="file" multiple hidden />
         <div id="attachment-list" class="attachment-list" hidden></div>
         <textarea id="prompt" rows="1" placeholder="给 Agent 发消息…（Enter 发送，Shift + Enter 换行）"></textarea>
+        <!-- v3.36.0「听说」：麦克风语音输入（录音→云端转录→文字插入输入框；详见 voice-transcribe.cjs） -->
+        <button id="voice" type="button" class="voice-button" title="听说：点击开始，对着麦克风说话，说完再点一次结束（Esc 可取消）">🎤 听说</button>
         <button id="attach" type="button" class="attach-button" title="添加图片或文件">＋</button>
         <div class="composer-mode-selector" id="composer-mode-selector">
           <button id="composer-mode-trigger" type="button" class="composer-mode-trigger" title="工作模式">🛡</button>

@@ -122,6 +122,9 @@ contextBridge.exposeInMainWorld("agentChatPro", {
   testProxy: (proxyConfig) => ipcRenderer.invoke("chat:test-proxy", proxyConfig),
   // v3.21.0 云端「拉取模型列表」IPC
   fetchCloudModels: (payload) => ipcRenderer.invoke("cloud:fetch-models", payload),
+  // ── v3.36.0 输入栏「听说」（语音转文字）IPC：voiceInfo=点按钮时问支持情况；voiceTranscribe=传 16kHz WAV base64 去转录 ──
+  voiceInfo: () => ipcRenderer.invoke("voice:info"),
+  voiceTranscribe: (payload) => ipcRenderer.invoke("voice:transcribe", payload),
   // ── 上下文压缩 IPC（v3.10.0）──
   compactContext: (payload) => ipcRenderer.invoke("chat:compact", payload),
   // 上下文进度条回填（v3.12.1）：切换对话时取 main 侧记录的 {tokens, limit}

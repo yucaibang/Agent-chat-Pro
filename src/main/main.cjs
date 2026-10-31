@@ -60,6 +60,8 @@ const { runN2nDoctor, runN2nDeploy } = require("./network/n2n-doctor.cjs");
 const { sendCloudChat, buildMessages, verifyCloudConnection, testProxyConnectivity, accumulateUsage, isTruncatedStopReason } = require("./cloud-chat.cjs");
 // v3.21.0 云端「拉取模型列表」：官方 GET /models 实时拉取该密钥可用的全部模型
 const { fetchProviderModels } = require("./cloud-models.cjs");
+// v3.36.0 输入栏「听说」：麦克风采好的 WAV 转发云端转录端点（复用已保存云配置，零新增配置）
+const { transcribeAudio, asrInfoFor } = require("./voice-transcribe.cjs");
 const { executeToolCall, toolDefinitions, MAX_TOOL_ROUNDS } = require("./cloud-tools.cjs");
 // v3.24.0 模型思考调节：挡位表 + 请求体注入（四字段族）；ask_user 提问约定拼进云端 system prompt
 const { resolveThinkingProfile, normalizeThinkingChoices } = require("./thinking-levels.cjs");
@@ -372,6 +374,37 @@ app.whenReady().then(async () => {
     const result = await fetchProviderModels(merged);
     if (!result.ok) writeLog("cloud_fetch_models_failed", { provider: payload.provider, reason: result.reason });
     else writeLog("cloud_fetch_models_ok", { provider: payload.provider, count: result.count });
+    return result;
+  });
+  // ── v3.36.0 输入栏「听说」（语音转文字）：点按钮先问支持情况，说完把 WAV 交给主进程转发转录端点 ──
+  ipcMain.handle("voice:info", () => {
+    try {
+      const cloudConfig = getCloudAiConfig();
+      const info = asrInfoFor(cloudConfig.provider);
+      return {
+        ok: true,
+        provider: cloudConfig.provider,
+        supported: info.supported || false,
+        maxSeconds: info.maxSeconds || 60,
+        hasKey: Boolean(String(cloudConfig.apiKey || "").trim()),
+        reason: info.reason || "",
+      };
+    } catch (error) {
+      return { ok: false, supported: false, hasKey: false, maxSeconds: 60, reason: `读取连接设置失败：${error?.message || error}` };
+    }
+  });
+  ipcMain.handle("voice:transcribe", async (_event, payload = {}) => {
+    let config;
+    try {
+      config = getCloudAiConfig();
+    } catch (error) {
+      const result = { ok: false, reason: `读取连接设置失败：${error?.message || error}` };
+      writeLog("voice_transcribe_failed", { reason: result.reason });
+      return result;
+    }
+    const result = await transcribeAudio(config, payload);
+    if (!result.ok) writeLog("voice_transcribe_failed", { provider: config.provider, reason: result.reason });
+    else writeLog("voice_transcribe_ok", { provider: config.provider, seconds: result.seconds });
     return result;
   });
   ipcMain.handle("settings:save", async (_event, input) => {

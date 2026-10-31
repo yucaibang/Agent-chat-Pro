@@ -526,6 +526,13 @@ textarea::placeholder { color: var(--text-muted); }
 .composer-mode-item .composer-mode-item-name { font-weight: 600; }
 .composer-mode-item .composer-mode-item-desc { font-size: 11px; color: var(--text-muted); }
 .attach-button { background: var(--bg-hover); color: var(--text-secondary); font-size: 21px; line-height: 1; }
+/* ── v3.36.0 输入栏「听说」语音转文字（录音→云端转录→文字插入输入框），录音态红色脉动 ── */
+.voice-button { display: inline-flex; align-items: center; justify-content: center; gap: 4px; height: 36px; padding: 0 11px; border-radius: 10px; background: var(--bg-hover); color: var(--text-secondary); font-size: 12.5px; font-weight: 600; line-height: 1; white-space: nowrap; transition: background .15s, color .15s, opacity .15s; }
+.voice-button:hover { background: var(--bg-active); color: var(--text-primary); }
+.voice-button.recording { background: #c0392b; color: #fff; animation: voice-pulse 1.2s ease-in-out infinite; }
+.voice-button.working { background: #8a6b3d; color: #fff; opacity: .85; cursor: progress; }
+.voice-button:disabled { cursor: progress; }
+@keyframes voice-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .55; } }
 .send-button { display: grid; place-items: center; width: 36px; min-width: 36px; height: 36px; border-radius: 50%; background: #f1f2ef; color: #151918; transition: background .15s ease, transform .15s ease, opacity .15s ease; }
 .send-button:hover:not(:disabled) { background: #fff; transform: translateY(-1px); }
 .send-button svg { width: 19px; height: 19px; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }

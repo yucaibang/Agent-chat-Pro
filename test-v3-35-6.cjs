@@ -258,6 +258,46 @@ async function runStaticTests() {
     assert.ok(rendererSrc.includes("applyPoolProviderFetch"), "服务商切换/初始显隐校准在册");
     assert.ok(stylesSrc.includes(".pool-fetch-result"), "结果行样式在册");
   });
+  await test("5.12 输入栏「听说」语音转文字（v3.36.0 用户令：点按钮开始麦克风语音输入，说完文字进输入框）", async () => {
+    // 静态：全链在册
+    assert.ok(indexHtmlSrc.includes('id="voice"') && indexHtmlSrc.includes("🎤 听说"), "输入栏「听说」按钮在册（attach 前一格）");
+    assert.ok(rendererSrc.includes('id="voice"') || indexHtmlSrc.includes('class="voice-button"'), "按钮类名与主逻辑配套");
+    assert.ok(rendererSrc.includes("async function startVoiceInput") && rendererSrc.includes("async function stopVoiceInput"), "录音启/停主逻辑在册");
+    assert.ok(rendererSrc.includes("getUserMedia") && rendererSrc.includes("createScriptProcessor"), "渲染层 WebAudio 采声在册（Electron 内置 SpeechRecognition 不可用，electron#46143 实锤）");
+    assert.ok(rendererSrc.includes("function voiceEncodeWav") && rendererSrc.includes("voiceResampleMerge"), "16kHz 单声道 WAV 封装+降采样在册（wav 全家服务商都认）");
+    assert.ok(rendererSrc.includes("voiceInsertText") && rendererSrc.includes("setSelectionRange"), "识别文字插到光标处并触发 input 联动高度");
+    assert.ok(rendererSrc.includes('window.agentChatPro.voiceTranscribe({ audioBase64, seconds: elapsedSeconds })'), "转录走主进程 IPC（渲染层直连跨域会被 CORS 拦）");
+    assert.ok(rendererSrc.includes('window.agentChatPro.voiceInfo()'), "点按钮先问支持情况（无 Key/不支持服务商当场提示去连接设置）");
+    assert.ok(rendererSrc.includes('event.key === "Escape" && voiceSession'), "Esc 中止丢弃录音在册");
+    assert.ok(rendererSrc.includes("NotAllowedError") && rendererSrc.includes("NotReadableError"), "麦克风权限/占用错误给出中文指引");
+    assert.ok(mainSrc.includes('ipcMain.handle("voice:info"') && mainSrc.includes('ipcMain.handle("voice:transcribe"'), "主进程两个 IPC 在册");
+    assert.ok(mainSrc.includes('require("./voice-transcribe.cjs")'), "转录模块已挂入 main");
+    assert.ok(preloadSrc.includes("voiceInfo: () => ipcRenderer.invoke(\"voice:info\")") && preloadSrc.includes("voiceTranscribe: (payload) => ipcRenderer.invoke(\"voice:transcribe\", payload)"), "preload 桥两座在册");
+    assert.ok(stylesSrc.includes(".voice-button.recording") && stylesSrc.includes("@keyframes voice-pulse"), "录音红态脉动样式在册");
+    // 行为：voice-transcribe.cjs 实调（fetchImpl 注入，不发真网）
+    const voiceTranscribe = require(path.join(ROOT, "src", "main", "voice-transcribe.cjs"));
+    for (const [provider, model] of [["zhipu", "glm-asr-2512"], ["siliconflow", "FunAudioLLM/SenseVoiceSmall"], ["openai", "whisper-1"], ["groq", "whisper-large-v3"]]) {
+      assert.ok(voiceTranscribe.asrInfoFor(provider).supported && voiceTranscribe.asrInfoFor(provider).model === model, `${provider} → ${model} 映射正确`);
+    }
+    assert.ok(!voiceTranscribe.asrInfoFor("deepseek").supported && !voiceTranscribe.asrInfoFor("doubao").supported, "无转录端点的服务商明确不支持（deepseek/豆包等）");
+    let captured;
+    const fakeFetch = async (url, options) => { captured = { url, options }; return { ok: true, text: () => JSON.stringify({ text: "开会时间定在三点" }) }; };
+    const wavB64 = Buffer.from("RIFF-fake").toString("base64");
+    const okResult = await voiceTranscribe.transcribeAudio({ provider: "zhipu", apiKey: "k-test", baseURL: "https://open.bigmodel.cn/api/paas/v4/" }, { audioBase64: wavB64, seconds: 3 }, fakeFetch);
+    assert.ok(okResult.ok && okResult.text === "开会时间定在三点", "转录成功取回 text");
+    assert.equal(captured.url, "https://open.bigmodel.cn/api/paas/v4/audio/transcriptions", "智谱端点 = baseURL+『audio/transcriptions』（尾斜杠已剥）");
+    assert.equal(captured.options.method, "POST");
+    assert.equal(captured.options.headers.Authorization, "Bearer k-test", "Bearer 认证头在册");
+    assert.equal(captured.options.body.get("model"), "glm-asr-2512", "multipart model 字段在册");
+    assert.equal(captured.options.body.get("stream"), "false", "智谱 stream=false 在册");
+    assert.equal(captured.options.body.get("file").type, "audio/wav", "录音按 audio/wav 上传");
+    const noKey = await voiceTranscribe.transcribeAudio({ provider: "openai", apiKey: "", baseURL: "https://api.openai.com/v1" }, { audioBase64: wavB64 }, fakeFetch);
+    assert.ok(!noKey.ok && noKey.noKey, "没有已保存云端 Key 直接拦下并给引导");
+    const tooLong = await voiceTranscribe.transcribeAudio({ provider: "zhipu", apiKey: "k", baseURL: "https://open.bigmodel.cn/api/paas/v4" }, { audioBase64: wavB64, seconds: 45 }, fakeFetch);
+    assert.ok(!tooLong.ok && tooLong.reason.includes("超出"), "智谱 30 秒官方时长上限主进程二次校验");
+    const denied = await voiceTranscribe.transcribeAudio({ provider: "groq", apiKey: "bad", baseURL: "https://api.groq.com/openai/v1" }, { audioBase64: wavB64 }, async () => ({ ok: false, status: 401, text: () => "{}" }));
+    assert.ok(!denied.ok && denied.reason.includes("密钥无效"), "401 中文文案（密钥无效）");
+  });
   await test("5.10 空态建群入口布局加固（v3.35.8 线上截图 bug：窄容器下按钮被压成一字一行窄条）", () => {
     assert.ok(rendererSrc.includes("ensureEmptyStateGroupEntry"), "空态建群入口函数在册");
     assert.ok(rendererSrc.includes('row.className = "empty-group-entry-row"') && rendererSrc.includes("empty.append(row)"), "按钮行容器包裹隔离 grid 收缩（不直接当 grid item）");

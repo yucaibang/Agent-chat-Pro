@@ -3510,6 +3510,206 @@ elements.composer.addEventListener("click", (event) => {
 });
 elements.prompt.addEventListener("input", adjustTextarea);
 document.querySelector("#attach").addEventListener("click", () => elements.filePicker.click());
+
+// ── v3.36.0 输入栏「听说」：麦克风语音输入（点击开始录音，说完再点一次，云端转录把文字插进输入框）──
+// Electron 内置 webkitSpeechRecognition 在 Electron 里从未真正可用（electron#46143 维护者确认依赖
+// Chrome 专属云服务），故录音走渲染层 WebAudio 采 16kHz 单声道 WAV → voice:transcribe IPC →
+// 云端转录端点（智谱/硅基流动/OpenAI/Groq，密钥用连接设置已保存的云配置，零新增配置）。
+const voiceButton = document.querySelector("#voice");
+const VOICE_DEFAULT_PLACEHOLDER = elements.prompt?.placeholder || "给 Agent 发消息…（Enter 发送，Shift + Enter 换行）";
+let voiceSession = null; // { stream, audioContext, source, processor, chunks, sampleRate, startedAt, timer, maxSeconds }
+
+function voiceIdle() {
+  if (!voiceButton) return;
+  voiceButton.classList.remove("recording", "working");
+  voiceButton.disabled = false;
+  voiceButton.textContent = "🎤 听说";
+}
+// 失败提示短暂写进输入栏 placeholder（10 秒后还原，或用户重新点「听说」前一直可见）
+let voiceTipTimer = null;
+function voiceShowTip(reason) {
+  if (!elements.prompt) return;
+  elements.prompt.placeholder = reason;
+  clearTimeout(voiceTipTimer);
+  voiceTipTimer = setTimeout(() => { elements.prompt.placeholder = VOICE_DEFAULT_PLACEHOLDER; }, 10000);
+}
+
+function voiceResampleMerge(chunks, sourceRate) {
+  const total = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
+  const merged = new Float32Array(total);
+  let offset = 0;
+  for (const chunk of chunks) { merged.set(chunk, offset); offset += chunk.length; }
+  if (sourceRate === 16000 || total === 0) return { samples: merged, rate: 16000 };
+  const outLength = Math.round((total * 16000) / sourceRate);
+  const out = new Float32Array(outLength);
+  const step = sourceRate / 16000;
+  for (let i = 0; i < outLength; i++) {
+    const pos = i * step;
+    const idx = Math.floor(pos);
+    const frac = pos - idx;
+    const a = merged[idx] || 0;
+    const b = merged[idx + 1] || a;
+    out[i] = a + (b - a) * frac;
+  }
+  return { samples: out, rate: 16000 };
+}
+
+function voiceEncodeWav(samples, sampleRate) {
+  const count = samples.length;
+  const buffer = new ArrayBuffer(44 + count * 2);
+  const view = new DataView(buffer);
+  const writeString = (offset, text) => { for (let i = 0; i < text.length; i++) view.setUint8(offset + i, text.charCodeAt(i)); };
+  writeString(0, "RIFF");
+  view.setUint32(4, 36 + count * 2, true);
+  writeString(8, "WAVE");
+  writeString(12, "fmt ");
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);   // PCM
+  view.setUint16(22, 1, true);   // 单声道
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * 2, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true);
+  writeString(36, "data");
+  view.setUint32(40, count * 2, true);
+  for (let i = 0; i < count; i++) {
+    const s = Math.max(-1, Math.min(1, samples[i]));
+    view.setInt16(44 + i * 2, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+  }
+  return new Uint8Array(buffer);
+}
+
+function voiceTeardown() {
+  if (!voiceSession) return;
+  try { clearInterval(voiceSession.timer); } catch { /* 忽略 */ }
+  try { voiceSession.processor?.disconnect(); } catch { /* 忽略 */ }
+  try { voiceSession.source?.disconnect(); } catch { /* 忽略 */ }
+  try { voiceSession.stream?.getTracks().forEach((track) => track.stop()); } catch { /* 忽略 */ }
+  try { voiceSession.audioContext?.close(); } catch { /* 忽略 */ }
+  voiceSession = null;
+}
+
+function voiceBytesToBase64(bytes) {
+  let binary = "";
+  const chunkSize = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunkSize));
+  }
+  return btoa(binary);
+}
+
+function voiceInsertText(text) {
+  const el = elements.prompt;
+  if (!el) return;
+  const start = el.selectionStart ?? el.value.length;
+  const end = el.selectionEnd ?? start;
+  const before = el.value.slice(0, start);
+  const after = el.value.slice(end);
+  const glue = before && !/\s$/.test(before) ? " " : "";
+  el.value = `${before}${glue}${text}${after}`;
+  el.dispatchEvent(new Event("input", { bubbles: true }));
+  el.focus();
+  const caret = (before + glue + text).length;
+  el.setSelectionRange(caret, caret);
+}
+
+async function startVoiceInput() {
+  if (voiceSession) return;
+  const info = await window.agentChatPro.voiceInfo().catch(() => null);
+  if (!info?.ok || !info.supported || !info.hasKey) {
+    voiceIdle();
+    voiceShowTip(info?.reason || (!info?.hasKey ? "尚未在连接设置保存云端 API Key，先去「连接设置 → 云端 AI」保存再用听说。" : "语音输入暂不支持当前云端服务商。"));
+    return;
+  }
+  if (!navigator.mediaDevices?.getUserMedia) {
+    voiceShowTip("当前环境不支持麦克风录音（mediaDevices 不可用）。");
+    return;
+  }
+  let stream;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, channelCount: 1 } });
+  } catch (error) {
+    const reasonBy = {
+      NotAllowedError: "麦克风权限被拒绝：允许本 App 使用麦克风，或检查 Windows 设置 → 隐私 → 麦克风。",
+      PermissionDeniedError: "麦克风权限被拒绝：允许本 App 使用麦克风，或检查 Windows 设置 → 隐私 → 麦克风。",
+      NotFoundError: "没有找到可用的麦克风设备。",
+      NotReadableError: "麦克风被其他程序占用，关闭占用它的应用后重试。",
+    };
+    voiceShowTip(reasonBy[error?.name] || `无法打开麦克风：${error?.message || error}`);
+    return;
+  }
+  const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+  const source = audioContext.createMediaStreamSource(stream);
+  const processor = audioContext.createScriptProcessor(4096, 1, 1);
+  const chunks = [];
+  processor.onaudioprocess = (event) => {
+    // 直接持有拷贝，onaudioprocess 的复用缓冲会被内部回收写穿
+    chunks.push(new Float32Array(event.inputBuffer.getChannelData(0)));
+  };
+  source.connect(processor);
+  processor.connect(audioContext.destination); // ScriptProcessor 不连 destination 不出回调
+  const sampleRate = audioContext.sampleRate;
+  const maxSeconds = Math.max(5, Math.min(Number(info.maxSeconds) || 60, 300));
+  voiceSession = { stream, audioContext, source, processor, chunks, sampleRate, startedAt: Date.now(), timer: 0, maxSeconds };
+  voiceButton.classList.add("recording");
+  voiceButton.textContent = "■ 停止";
+  if (elements.prompt) elements.prompt.placeholder = `正在听说…说完点「停止」结束（最长 ${maxSeconds} 秒，Esc 取消）`;
+  voiceSession.timer = setInterval(() => {
+    if (voiceSession && (Date.now() - voiceSession.startedAt) / 1000 >= voiceSession.maxSeconds) stopVoiceInput(true);
+  }, 250);
+}
+
+async function stopVoiceInput(commit) {
+  const session = voiceSession;
+  if (!session) return;
+  const elapsedSeconds = (Date.now() - session.startedAt) / 1000;
+  voiceTeardown();
+  voiceButton.classList.remove("recording");
+  if (!commit) {
+    if (elements.prompt) elements.prompt.placeholder = VOICE_DEFAULT_PLACEHOLDER;
+    voiceIdle();
+    return;
+  }
+  const { samples, rate } = voiceResampleMerge(session.chunks, session.sampleRate);
+  if (elapsedSeconds < 0.6 || samples.length < 1600) {
+    voiceIdle();
+    voiceShowTip("录音太短（不足 0.6 秒），请按住节奏说完再点「停止」。");
+    return;
+  }
+  const wavBytes = voiceEncodeWav(samples, rate);
+  const audioBase64 = voiceBytesToBase64(wavBytes);
+  voiceButton.classList.add("working");
+  voiceButton.disabled = true;
+  voiceButton.textContent = "…识别中";
+  if (elements.prompt) elements.prompt.placeholder = "正在识别语音…";
+  try {
+    const result = await window.agentChatPro.voiceTranscribe({ audioBase64, seconds: elapsedSeconds });
+    if (!result?.ok) {
+      voiceShowTip(result?.reason || "语音识别失败，请稍后再试。");
+      return;
+    }
+    voiceInsertText(String(result.text || ""));
+  } catch (error) {
+    voiceShowTip(`语音识别失败：${error?.message || error}`);
+  } finally {
+    if (elements.prompt) elements.prompt.placeholder = VOICE_DEFAULT_PLACEHOLDER;
+    voiceIdle();
+  }
+}
+
+if (voiceButton) {
+  voiceButton.addEventListener("click", () => {
+    if (voiceSession) stopVoiceInput(true);
+    else startVoiceInput();
+  });
+  window.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && voiceSession && !event.defaultPrevented) {
+      event.stopPropagation();
+      stopVoiceInput(false);
+    }
+  });
+  window.addEventListener("beforeunload", () => voiceTeardown());
+}
 // ── 输入栏模式弹出菜单 ──────────────────────────────────
 
 let composerModePopupOpen = false;
