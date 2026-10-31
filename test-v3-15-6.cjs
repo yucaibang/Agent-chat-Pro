@@ -45,7 +45,7 @@ function extractBetween(src, start, end) {
 }
 
 const loadFn = extractBetween(rendererSrc, "async function loadConversation(id) {", "\nasync function createNewConversation");
-const loadFnEnd = loadFn.slice(0, 2000); // loadConversation 前段：草稿保存与恢复逻辑
+const loadFnEnd = loadFn.slice(0, 2000); // loadConversation 前段：草稿保存与恢复逻辑（⚠ v3.26.0 工作区守卫插入本函数，函数体已超 2000 字符——切片只宜做粗定位，顺序断言改用完整函数体）
 
 async function runTests() {
   // ⭐ 核心：草稿按对话隔离
@@ -64,7 +64,8 @@ async function runTests() {
       "草稿恢复缺失");
     const restoreIdx = rendererSrc.indexOf("elements.prompt.value = composerDraft.text || \"\";");
     assert.ok(restoreIdx >= 0, "prompt.value 未从草稿恢复");
-    assert.ok(loadFn.indexOf("composerDrafts.get(conversation.id)") < loadFnEnd.indexOf("elements.messages.replaceChildren()"),
+    // v3.26.0 修订：切片改完整函数体（工作区守卫插入函数后，前 2000 字符切不到 replaceChildren）
+    assert.ok(loadFn.indexOf("composerDrafts.get(conversation.id)") < loadFn.indexOf("elements.messages.replaceChildren()"),
       "草稿恢复应在替换聊天区之前");
   });
   await test("附件随草稿恢复（浅拷贝，不再被粗暴清空丢弃）", () => {

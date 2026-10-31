@@ -873,8 +873,9 @@ app.whenReady().then(async () => {
     await shell.openExternal(target.toString());
     return true;
   });
-  ipcMain.handle("conversations:list", () => listConversations());
-  ipcMain.handle("conversations:create", () => createConversation());
+  // v3.26.0：三通道带工作区参数（历史列表/建对话/搜索按 workspaceType 物理过滤，历史记录不串台）
+  ipcMain.handle("conversations:list", (_event, workspaceType) => listConversations(String(workspaceType || "")));
+  ipcMain.handle("conversations:create", (_event, workspaceType) => createConversation(String(workspaceType || "single")));
   ipcMain.handle("conversations:get", (_event, id) => {
     const conversation = getConversation(id);
     return conversation ? { ...conversation, sessionId: sessionForMode(conversation, getSettings().connectionMode, undefined, getSettings().activeSshProfile) } : null;
@@ -889,7 +890,7 @@ app.whenReady().then(async () => {
     return result;
   });
   ipcMain.handle("conversations:delete", (_event, id) => deleteConversation(id));
-  ipcMain.handle("conversations:search", (_event, query, limit) => searchConversations(query, limit));
+  ipcMain.handle("conversations:search", (_event, query, limit, workspaceType) => searchConversations(query, limit, String(workspaceType || "")));
   ipcMain.handle("file:preview", async (_event, file) => {
     const mimeType = previewMime(file?.name);
     if (!mimeType) throw new Error("此文件类型不支持图片预览。");

@@ -57,6 +57,18 @@ let editionState = {
 const CONVERSATION_MODE_ICONS = { ssh: "🖥️", cloud: "☁️", local: "💻" };
 const CONVERSATION_MODE_LABELS = { ssh: "SSH 远程", cloud: "云端 AI", local: "本机" };
 
+// ── v3.26.0 工作区切换器（多 AI 对话（工作）· UI 重构需求）──
+// 数据强隔离：single=一对一专攻（存量对话/缺省）/ team=多个高效合作。
+// 会话列表按工作区物理过滤 + loadConversation 工作区入参校验，严禁串台。
+const WORKSPACES = [
+  { id: "single", name: "Agent Chat Pro", desc: "一对一专攻" },
+  { id: "team", name: "Agents Chat Pro", desc: "多个高效合作" }
+];
+const WORKSPACE_TEAM_NAME = "Agents Chat Pro";
+const normalizeWorkspace = (value) => (value === "team" ? "team" : "single");
+let currentWorkspace = "";
+let workspaceDropdownOpen = false;
+
 // ── Token 计数器 ──
 let conversationTokens = 0;  // 当前对话累计 token 数
 let streamingTokens = 0;    // 当前流式响应估算的 token 数
@@ -1593,7 +1605,7 @@ async function refreshConversationList() {
   const query = elements.conversationSearch.value.trim();
   if (query) {
     // 全文搜索：搜索标题和消息内容
-    const results = await window.agentChatPro.searchConversations(query);
+    const results = await window.agentChatPro.searchConversations(query, currentWorkspace);
     elements.historyCount.textContent = `${results.length} 条结果`;
     elements.conversationList.replaceChildren();
     results.forEach((conv) => {
@@ -1637,7 +1649,8 @@ async function refreshConversationList() {
       elements.conversationList.append(empty);
     }
   } else {
-    conversationCache = await window.agentChatPro.listConversations();
+    // v3.26.0：列表按当前工作区物理过滤（历史记录不串台）
+    conversationCache = await window.agentChatPro.listConversations(currentWorkspace);
     elements.historyCount.textContent = String(conversationCache.length);
     elements.conversationList.replaceChildren();
     conversationCache.forEach((conversation) => {
@@ -1703,7 +1716,7 @@ function showConversationMenu(event, conversation) {
     await window.agentChatPro.deleteConversation(conversation.id);
     popover.remove();
     if (conversation.id === conversationId) {
-      const remaining = await window.agentChatPro.listConversations();
+      const remaining = await window.agentChatPro.listConversations(currentWorkspace);
       if (remaining.length) await loadConversation(remaining[0].id);
       else await createNewConversation();
     } else await refreshConversationList();
@@ -1725,6 +1738,13 @@ async function loadConversation(id) {
   // v3.15.0 bug1：Agent 工作中允许切换对话——进行中的任务在后台继续，切回无缝衔接
   const conversation = await window.agentChatPro.getConversation(id);
   if (!conversation) return;
+  // v3.26.0 红线（规格 UI 重构需求 2）：loadConversation workspace 入参校验——
+  // 非 A/B 模式互不可见，跨工作区对话一律拒绝打开并按当前工作区刷新列表（防历史记录串台）
+  if (normalizeWorkspace(conversation.workspaceType) !== currentWorkspace) {
+    await refreshConversationList();
+    setConnection("该对话属于另一工作区，未打开", "connected");
+    return;
+  }
   // v3.15.0 功能2：切到另一模式的对话时，聊天界面模式跟着切换（同步持久化——main 侧 chat:send 读已保存设置）
   // 阉割版 Bridge：本机模式被形态门控关闭——lastMode=local 一律不跟随，保持 SSH
   const allowedLastModes = editionState.gates.localEngines === false ? ["ssh", "cloud"] : ["ssh", "cloud", "local"];
@@ -1812,7 +1832,7 @@ async function loadConversation(id) {
 
 async function createNewConversation() {
   // v3.15.0 bug1：Agent 工作中允许新建/切换对话——进行中的任务在后台继续
-  const conversation = await window.agentChatPro.createConversation();
+  const conversation = await window.agentChatPro.createConversation(currentWorkspace);
   await loadConversation(conversation.id);
   // 新对话重置 token 计数
   conversationTokens = 0;
@@ -1820,6 +1840,98 @@ async function createNewConversation() {
   updateTokenDisplay();
   elements.prompt.focus();
 }
+
+// ── v3.26.0 工作区切换器 ──────────────────────────────
+// 规格（UI 重构需求）：侧边栏顶部下拉；主标题/副标题两行；选中右侧 ✔ 未选中不显示；
+// 切换即「数据强隔离」——历史列表物理刷新过滤 + 当前对话界面清空回默认首页（状态重置）。
+function setWorkspaceDisplay() {
+  const ws = WORKSPACES.find((item) => item.id === currentWorkspace) || WORKSPACES[0];
+  const name = document.querySelector("#sidebar-brand-name");
+  const desc = document.querySelector("#workspace-desc");
+  if (desc) desc.textContent = ws.desc;
+  // 多人工作区为主标题固定产品面「Agents Chat Pro」；单人工作区跟随品牌配置（阉割版品牌名可覆盖）
+  if (name) name.textContent = currentWorkspace === "team" ? WORKSPACE_TEAM_NAME : (brandConfig?.appName || "Agent Chat Pro");
+}
+
+function renderWorkspaceList() {
+  const list = document.querySelector("#workspace-dropdown");
+  if (!list) return;
+  list.replaceChildren();
+  for (const ws of WORKSPACES) {
+    const item = document.createElement("div");
+    item.className = "workspace-item" + (ws.id === currentWorkspace ? " active" : "");
+    const icon = document.createElement("span");
+    icon.className = "workspace-item-icon";
+    icon.textContent = ws.id === "team" ? "👥" : "✦";
+    const info = document.createElement("span");
+    info.className = "workspace-item-info";
+    const name = document.createElement("span");
+    name.className = "workspace-item-name";
+    name.textContent = ws.name;
+    const desc = document.createElement("span");
+    desc.className = "workspace-item-desc";
+    desc.textContent = ws.desc;
+    info.append(name, desc);
+    const check = document.createElement("span");
+    check.className = "workspace-check";
+    check.textContent = "✔";
+    check.hidden = ws.id !== currentWorkspace; // 规格：选中显示 ✔，未选中不显示
+    item.append(icon, info, check);
+    item.addEventListener("click", () => setWorkspace(ws.id));
+    list.append(item);
+  }
+}
+
+function closeWorkspaceDropdown() {
+  workspaceDropdownOpen = false;
+  document.querySelector("#workspace-dropdown").hidden = true;
+}
+
+// 切换工作区：当前打开的对话界面清空——回到该工作区的默认首页（#empty-state）
+async function setWorkspace(workspaceId) {
+  closeWorkspaceDropdown();
+  const next = normalizeWorkspace(workspaceId);
+  if (next === currentWorkspace) return;
+  // 切走前保存当前对话草稿（与 loadConversation 同约定——切回不丢字）
+  if (conversationId) composerDrafts.set(conversationId, { text: elements.prompt.value, attachments });
+  const hadOpenConversation = Boolean(conversationId);
+  conversationId = "";
+  sessionId = "";
+  attachments = [];
+  renderAttachments();
+  resetContextBar();
+  conversationTokens = 0;
+  resetStreamingTokens();
+  updateTokenDisplay();
+  elements.prompt.value = "";
+  adjustTextarea();
+  elements.messages.replaceChildren();
+  elements.empty.hidden = false;
+  const label = `${streamingConnectionMode === "cloud" ? "云端 AI" : streamingConnectionMode === "local" ? "本机" : "SSH"}任务仍在后台处理 · 已切换工作区`;
+  setConnection(activeId && hadOpenConversation && streamingConversationId ? label : "新对话，等待发送", "connected");
+  currentWorkspace = next;
+  try { localStorage.setItem("acp-workspace", next); } catch { /* 存储不可写不阻断 */ }
+  setWorkspaceDisplay();
+  renderWorkspaceList();
+  await refreshConversationList(); // 历史列表按新工作区物理刷新
+}
+
+function initWorkspaceSelector() {
+  // 恢复上次选择（localStorage 跨启动记忆；非法/缺失值一律落回 single）
+  currentWorkspace = normalizeWorkspace(localStorage.getItem("acp-workspace") || "single");
+  setWorkspaceDisplay();
+  renderWorkspaceList();
+}
+
+document.querySelector("#workspace-trigger").addEventListener("click", (event) => {
+  event.stopPropagation();
+  workspaceDropdownOpen = !workspaceDropdownOpen;
+  document.querySelector("#workspace-dropdown").hidden = !workspaceDropdownOpen;
+});
+
+document.addEventListener("click", (event) => {
+  if (!event.target.closest(".workspace-selector")) closeWorkspaceDropdown();
+});
 
 function setConnection(text, state) {
   elements.stateText.textContent = text;
@@ -4334,9 +4446,9 @@ window.agentChatPro.onNetworkLatency((summary) => {
 function updateBrandDisplay() {
   const config = brandConfig || { appName: "Agent Chat Pro", appSubtitle: "三模式 AI 聊天客户端", appIcon: "🤖" };
 
-  // 更新侧边栏品牌名
+  // 更新侧边栏品牌名（v3.26.0 起此元素为工作区切换器主标题：多人工作区品牌名不写穿，由 setWorkspaceDisplay 定名）
   const brandName = document.querySelector("#sidebar-brand-name");
-  if (brandName) brandName.textContent = config.appName;
+  if (brandName && currentWorkspace !== "team") brandName.textContent = config.appName;
 
   // 更新标题栏
   const titleIdentity = document.querySelector("#titlebar-identity");
@@ -4419,7 +4531,9 @@ window.agentChatPro.getBrandConfig().then(config => {
   appearanceSettings.backgroundOpacity = Number(settings.backgroundOpacity) || 100;
   applyFrostedGlass();
   applyBackgroundImage();
-  const conversations = await window.agentChatPro.listConversations();
+  // v3.26.0 工作区：先恢复上次工作区（含切换器渲染），历史列表按工作区过滤后再恢复最近对话
+  initWorkspaceSelector();
+  const conversations = await window.agentChatPro.listConversations(currentWorkspace);
   if (conversations.length) await loadConversation(conversations[0].id);
   else await createNewConversation();
   // 启动必填检查（v3.13.0：非 Claude 本机引擎不依赖唤醒命令，自定义命令引擎要求命令模板）

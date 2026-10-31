@@ -88,9 +88,17 @@
 
       <div class="app-content">
     <aside class="sidebar">
-      <div class="brand">
-        <span class="spark">✦</span>
-        <span id="sidebar-brand-name">Agent Chat Pro</span>
+      <!-- v3.26.0 工作区切换器：主标题 + 副标题；选中右侧 ✔（UI 重构需求，ChatGPT 侧边栏顶部形态） -->
+      <div class="workspace-selector" id="workspace-selector">
+        <button class="workspace-trigger" id="workspace-trigger" type="button" title="切换工作区（一对一 / 多 AI 协同）">
+          <span class="spark">✦</span>
+          <span class="workspace-titles">
+            <span class="workspace-name" id="sidebar-brand-name">Agent Chat Pro</span>
+            <span class="workspace-desc" id="workspace-desc">一对一专攻</span>
+          </span>
+          <span class="workspace-arrow" aria-hidden="true">▾</span>
+        </button>
+        <div class="workspace-dropdown" id="workspace-dropdown" hidden></div>
       </div>
       <div class="mode-selector" id="mode-selector">
         <button type="button" class="mode-trigger" id="mode-trigger" title="工作模式">

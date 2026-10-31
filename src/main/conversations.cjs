@@ -9,6 +9,20 @@ const { archiveFileName, archiveMarkdown } = require("./archive.cjs");
 const { ARCHIVE_FOLDER, migrateConversationDirectory } = require("./storage.cjs");
 let recoveryNotice = "";
 
+// v3.26.0 多智能体工作区（大功能「多 AI 对话（工作）」前置）：
+// 每条对话归属工作区标记——single=一对一专攻（存量对话无字段一律视为 single，兼容迁移）；
+// team=Agents Chat Pro 多 Agent 协同工作区。历史列表/搜索按工作区物理过滤，严禁串台。
+const WORKSPACE_TYPES = ["single", "team"];
+
+function normalizeWorkspaceType(value) {
+  const id = String(value || "").trim();
+  return WORKSPACE_TYPES.includes(id) ? id : "single";
+}
+
+function workspaceTypeOf(conversation) {
+  return normalizeWorkspaceType(conversation?.workspaceType);
+}
+
 function storagePath(directory = getSettings().dataDirectory) {
   return path.join(directory || app.getPath("userData"), "conversations.json");
 }
@@ -54,9 +68,10 @@ function write(conversations) {
   }
 }
 
-function createConversation() {
+// v3.26.0：建对话即归属工作区（渲染层按当前工作区传入；缺省 single 兼容既有调用）
+function createConversation(workspaceType = "single") {
   const now = new Date().toISOString();
-  const conversation = { id: randomUUID(), title: "新对话", sessionId: "", localSessionId: "", sshSessionId: "", lastConnectionMode: "", createdAt: now, updatedAt: now, pinned: false, messages: [] };
+  const conversation = { id: randomUUID(), workspaceType: normalizeWorkspaceType(workspaceType), title: "新对话", sessionId: "", localSessionId: "", sshSessionId: "", lastConnectionMode: "", createdAt: now, updatedAt: now, pinned: false, messages: [] };
   conversation.archiveFile = archiveFileName(conversation.title, conversation.createdAt, conversation.id);
   const all = read();
   all.unshift(conversation);
@@ -65,8 +80,10 @@ function createConversation() {
   return conversation;
 }
 
-function listConversations() {
+// v3.26.0：按工作区过滤（workspaceType 空串=不过滤，保持存量调用语义不变）；无字段的存量数据视作 single
+function listConversations(workspaceType = "") {
   return read()
+    .filter((conversation) => !workspaceType || workspaceTypeOf(conversation) === normalizeWorkspaceType(workspaceType))
     .sort((a, b) => Number(Boolean(b.pinned)) - Number(Boolean(a.pinned)) || b.updatedAt.localeCompare(a.updatedAt))
     .map((conversation) => {
       const lastMessage = conversation.messages?.[conversation.messages.length - 1];
@@ -77,6 +94,7 @@ function listConversations() {
       return {
         id: conversation.id,
         title: conversation.title,
+        workspaceType: workspaceTypeOf(conversation),
         pinned: Boolean(conversation.pinned),
         updatedAt: conversation.updatedAt,
         sessionId: conversation.sessionId,
@@ -265,10 +283,13 @@ function getConversationRecoveryNotice() {
   return recoveryNotice;
 }
 
-function searchConversations(query, limit = 20) {
+// v3.26.0：搜索同受工作区物理过滤（不串台红线——搜索结果也不能串）。
+// limit 允许 null/undefined（IPC 经序列化丢失默认值时回落 20）
+function searchConversations(query, limit = 20, workspaceType = "") {
   const lowerQuery = String(query || "").toLocaleLowerCase().trim();
   if (!lowerQuery) return [];
-  const all = read();
+  const boundedLimit = Number.isFinite(Number(limit)) && Number(limit) > 0 ? Number(limit) : 20;
+  const all = read().filter((conversation) => !workspaceType || workspaceTypeOf(conversation) === normalizeWorkspaceType(workspaceType));
   const results = [];
   for (const conversation of all) {
     if (!conversation.messages) continue;
@@ -280,6 +301,7 @@ function searchConversations(query, limit = 20) {
         results.push({
           id: conversation.id,
           title: conversation.title,
+          workspaceType: workspaceTypeOf(conversation),
           updatedAt: conversation.updatedAt,
           pinned: Boolean(conversation.pinned),
           lastConnectionMode: conversation.lastConnectionMode || "",
@@ -289,7 +311,7 @@ function searchConversations(query, limit = 20) {
         break;
       }
     }
-    if (results.length >= limit) break;
+    if (results.length >= boundedLimit) break;
   }
   return results;
 }
@@ -386,5 +408,7 @@ module.exports = {
   sessionForMode,
   sshSessionField,
   truncateConversationMessages,
-  conversationStats
+  conversationStats,
+  normalizeWorkspaceType,
+  workspaceTypeOf
 };

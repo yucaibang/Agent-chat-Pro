@@ -42,8 +42,9 @@ contextBridge.exposeInMainWorld("agentChatPro", {
   // v3.19.0 F3：SSH 远程适配器在场检测（单次连接探测远端 CLI）
   detectSshAdapter: (payload) => ipcRenderer.invoke("settings:detect-ssh-adapter", payload),
   // ── 会话管理 IPC ──
-  listConversations: () => ipcRenderer.invoke("conversations:list"),
-  createConversation: () => ipcRenderer.invoke("conversations:create"),
+  // v3.26.0：带工作区参数（"" = 全部兼容语义；single/team 按工作区物理过滤）
+  listConversations: (workspaceType = "") => ipcRenderer.invoke("conversations:list", workspaceType),
+  createConversation: (workspaceType = "single") => ipcRenderer.invoke("conversations:create", workspaceType),
   getConversation: (id) => ipcRenderer.invoke("conversations:get", id),
   clearConversationSession: (id) => ipcRenderer.invoke("conversations:clear-session", id),
   renameConversation: (id, title) => ipcRenderer.invoke("conversations:rename", id, title),
@@ -51,7 +52,8 @@ contextBridge.exposeInMainWorld("agentChatPro", {
   // v3.15.5 修复2：删除单条及下方所有落库消息（右键菜单同步删除）
   truncateConversationMessages: (id, anchor) => ipcRenderer.invoke("conversations:truncate", id, anchor),
   deleteConversation: (id) => ipcRenderer.invoke("conversations:delete", id),
-  searchConversations: (query, limit) => ipcRenderer.invoke("conversations:search", query, limit),
+  // v3.26.0：搜索带工作区过滤（第二参语义升级为 workspaceType；原 limit 调用点现走渲染层内部默认）
+  searchConversations: (query, workspaceType = "") => ipcRenderer.invoke("conversations:search", query, undefined, workspaceType),
   // ── 聊天 IPC ──
   sendMessage: (input) => {
     auditSignal({
