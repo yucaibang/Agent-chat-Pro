@@ -57,7 +57,7 @@ let editionState = {
 const CONVERSATION_MODE_ICONS = { ssh: "🖥️", cloud: "☁️", local: "💻" };
 const CONVERSATION_MODE_LABELS = { ssh: "SSH 远程", cloud: "云端 AI", local: "本机" };
 
-// ── v3.26.0 工作区切换器（多 AI 对话（工作）· UI 重构需求）──
+// ── v3.35.6 工作区切换器（多 AI 对话（工作）· UI 重构需求）──
 // 数据强隔离：single=一对一专攻（存量对话/缺省）/ team=多个高效合作。
 // 会话列表按工作区物理过滤 + loadConversation 工作区入参校验，严禁串台。
 const WORKSPACES = [
@@ -823,7 +823,7 @@ function addMessage(kind, text = "", meta = {}) {
   elements.empty.hidden = true;
   const item = document.createElement("article");
   item.className = `message ${kind}`;
-  // v3.26.0 群聊：成员名牌 header（assistant 消息带 meta.agent 时渲染 @成员名 + 类型徽章；
+  // v3.35.6 群聊：成员名牌 header（assistant 消息带 meta.agent 时渲染 @成员名 + 类型徽章；
   // 模块二独立精神的界面体现——每个发言肉眼可辨归属，A 绝不冒充 B）
   if (meta.agent?.name) {
     item.classList.add("group-agent");
@@ -836,7 +836,7 @@ function addMessage(kind, text = "", meta = {}) {
     head.classList.add(`agent-kind-${meta.agent.kind || "cloud"}`);
     item.append(head);
   }
-  // v3.26.0 模块四：子 Agent 汇报=轻注记（样式弱化，可读但不当主角）
+  // v3.35.6 模块四：子 Agent 汇报=轻注记（样式弱化，可读但不当主角）
   if (meta.senderType === "subagent-result") {
     item.classList.add("subagent-note");
   }
@@ -1666,7 +1666,7 @@ async function refreshConversationList() {
       elements.conversationList.append(empty);
     }
   } else {
-    // v3.26.0：列表按当前工作区物理过滤（历史记录不串台）
+    // v3.35.6：列表按当前工作区物理过滤（历史记录不串台）
     conversationCache = await window.agentChatPro.listConversations(currentWorkspace);
     elements.historyCount.textContent = String(conversationCache.length);
     elements.conversationList.replaceChildren();
@@ -1755,7 +1755,7 @@ async function loadConversation(id) {
   // v3.15.0 bug1：Agent 工作中允许切换对话——进行中的任务在后台继续，切回无缝衔接
   const conversation = await window.agentChatPro.getConversation(id);
   if (!conversation) return;
-  // v3.26.0 红线（规格 UI 重构需求 2）：loadConversation workspace 入参校验——
+  // v3.35.6 红线（规格 UI 重构需求 2）：loadConversation workspace 入参校验——
   // 非 A/B 模式互不可见，跨工作区对话一律拒绝打开并按当前工作区刷新列表（防历史记录串台）
   if (normalizeWorkspace(conversation.workspaceType) !== currentWorkspace) {
     await refreshConversationList();
@@ -1775,7 +1775,7 @@ async function loadConversation(id) {
   }
   conversationId = conversation.id;
   sessionId = conversation.sessionId || "";
-  // v3.26.0 群聊：该对话绑定工作组 → 群聊布局（成员名牌条 + 群工具栏：自主讨论开关 / 大红停止）
+  // v3.35.6 群聊：该对话绑定工作组 → 群聊布局（成员名牌条 + 群工具栏：自主讨论开关 / 大红停止）
   applyGroupLayout(conversation);
   // v3.15.6：恢复该对话的输入框草稿（文本+附件）——不再粗暴清空丢字/丢附件，切换互不串扰
   const composerDraft = composerDrafts.get(conversation.id) || { text: "", attachments: [] };
@@ -1849,7 +1849,7 @@ async function loadConversation(id) {
   refreshConversationList();
 }
 
-// ── v3.26.0 多 AI 对话（工作）：群聊引擎（模块三）+ Sub-Agent 树气泡（模块四）──────
+// ── v3.35.6 多 AI 对话（工作）：群聊引擎（模块三）+ Sub-Agent 树气泡（模块四）──────
 // 群聊对话 = 绑定工作组的 team 对话；发送走专用 chat:group-send（单聊闸门不适用——
 // 红线①：多流渲染由此模块的串行队列收口，DOM 每 ≤24ms 合帧写一次，防 OOM）。
 
@@ -2107,7 +2107,7 @@ async function createNewConversation() {
   elements.prompt.focus();
 }
 
-// ── v3.26.0 工作区切换器 ──────────────────────────────
+// ── v3.35.6 工作区切换器 ──────────────────────────────
 // 规格（UI 重构需求）：侧边栏顶部下拉；主标题/副标题两行；选中右侧 ✔ 未选中不显示；
 // 切换即「数据强隔离」——历史列表物理刷新过滤 + 当前对话界面清空回默认首页（状态重置）。
 function setWorkspaceDisplay() {
@@ -2158,7 +2158,7 @@ async function setWorkspace(workspaceId) {
   closeWorkspaceDropdown();
   const next = normalizeWorkspace(workspaceId);
   if (next === currentWorkspace) return;
-  // v3.26.0 群聊状态重置：群布局/成员/群轮登记全部清回默认（规格 UI 需求 3）
+  // v3.35.6 群聊状态重置：群布局/成员/群轮登记全部清回默认（规格 UI 需求 3）
   groupActiveConversationId = "";
   groupActiveWorkgroupId = "";
   groupMemberNames = [];
@@ -2251,7 +2251,7 @@ function setBusy(busy) {
 }
 
 function stopActiveMessage() {
-  // v3.26.0 群聊：群对话的停止=紧急停止大红按钮同一语义（全员 stop，含子 Agent 悬等收口）
+  // v3.35.6 群聊：群对话的停止=紧急停止大红按钮同一语义（全员 stop，含子 Agent 悬等收口）
   if (groupActiveConversationId === conversationId && groupActiveConversationId && groupTurnsLive.size) {
     emergencyStopGroup();
     return;
@@ -2341,7 +2341,7 @@ async function openSettings() {
 }
 
 async function sendMessage(composerText = elements.prompt.value, opts = {}) {
-  // v3.26.0 群聊分流：绑了工作组的对话走群聊引擎（chat:group-send）——单聊闸门（activeId）不适用
+  // v3.35.6 群聊分流：绑了工作组的对话走群聊引擎（chat:group-send）——单聊闸门（activeId）不适用
   if (groupActiveConversationId === conversationId && groupActiveConversationId) {
     const result = await sendGroupTurn();
     if (result) return;
@@ -3896,7 +3896,7 @@ document.addEventListener("visibilitychange", () => {
 window.agentChatPro.onDelta(({ id, text }) => {
   const answer = messages.get(id);
   if (!answer) return;
-  // v3.26.0：群轮走专用通道（chat:group-delta → onGroupDelta；单聊 delta 见下方群轮过滤）
+  // v3.35.6：群轮走专用通道（chat:group-delta → onGroupDelta；单聊 delta 见下方群轮过滤）
   if (groupTurnsLive.has(id)) return;
   answer.querySelector(".message-content").textContent += text;
   // v3.15.1：仅当进行中任务属于当前显示的对话才刷新 token 计数与滚动（后台任务不挪用当前对话的计量）
@@ -3910,7 +3910,7 @@ window.agentChatPro.onDelta(({ id, text }) => {
 });
 window.agentChatPro.onChatEvent((event) => {
   const answer = messages.get(event.id);
-  // v3.26.0 群轮分支：群轮的 connection/lifecycle/usage 不再单聊状态条投影（多成员互踩红线①；
+  // v3.35.6 群轮分支：群轮的 connection/lifecycle/usage 不再单聊状态条投影（多成员互踩红线①；
   // thinking/round/ask-user 走下方通用分支按 messages.get(id) 挂群轮气泡）
   const GROUP_OPAQUE_EVENTS = ["upload", "connection", "lifecycle", "usage"];
   if (groupTurnsLive.has(String(event?.id || ""))) {
@@ -3991,7 +3991,7 @@ window.agentChatPro.onChatEvent((event) => {
   }
 });
 
-// ── v3.26.0 群聊事件通道 ──
+// ── v3.35.6 群聊事件通道 ──
 window.agentChatPro.onGroupDelta(({ id, text }) => {
   // 红线①：入缓冲合帧（enqueueGroupDelta 内部 ≤24ms 一次 DOM 写）
   enqueueGroupDelta(id, text);
@@ -4759,7 +4759,7 @@ window.agentChatPro.onNetworkLatency((summary) => {
 function updateBrandDisplay() {
   const config = brandConfig || { appName: "Agent Chat Pro", appSubtitle: "三模式 AI 聊天客户端", appIcon: "🤖" };
 
-  // 更新侧边栏品牌名（v3.26.0 起此元素为工作区切换器主标题：多人工作区品牌名不写穿，由 setWorkspaceDisplay 定名）
+  // 更新侧边栏品牌名（v3.35.6 起此元素为工作区切换器主标题：多人工作区品牌名不写穿，由 setWorkspaceDisplay 定名）
   const brandName = document.querySelector("#sidebar-brand-name");
   if (brandName && currentWorkspace !== "team") brandName.textContent = config.appName;
 
@@ -4844,7 +4844,7 @@ window.agentChatPro.getBrandConfig().then(config => {
   appearanceSettings.backgroundOpacity = Number(settings.backgroundOpacity) || 100;
   applyFrostedGlass();
   applyBackgroundImage();
-  // v3.26.0 工作区：先恢复上次工作区（含切换器渲染），历史列表按工作区过滤后再恢复最近对话
+  // v3.35.6 工作区：先恢复上次工作区（含切换器渲染），历史列表按工作区过滤后再恢复最近对话
   initWorkspaceSelector();
   initGroupSetupUI();
   bindEmptyStateGroupEntry();
@@ -5477,7 +5477,7 @@ document.querySelector("#save-auto-compact").addEventListener("click", async (ev
   finally { button.disabled = false; button.textContent = originalText; }
 });
 
-// ── v3.26.0 建群对话框（模块一 群主视角）：Agent 池管理 + 工作组编排 ──────────────
+// ── v3.35.6 建群对话框（模块一 群主视角）：Agent 池管理 + 工作组编排 ──────────────
 const GROUP_PROVIDERS = [
   ["zhipu", "智谱 GLM"], ["deepseek", "DeepSeek"], ["kimi", "Kimi"], ["doubao", "豆包"],
   ["openai", "OpenAI"], ["anthropic", "Anthropic"], ["gemini", "Gemini"], ["groq", "Groq"],

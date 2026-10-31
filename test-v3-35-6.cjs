@@ -1,15 +1,15 @@
 "use strict";
 /* ═══════════════════════════════════════════════════════════════════
- * test-v3-26-0.cjs — 多 AI 对话（工作）· 阶段 A：工作区切换器 + 历史物理隔离
+ * test-v3-35-6.cjs — 多 AI 对话（工作）· 阶段 A：工作区切换器 + 历史物理隔离
  *
  * 规格来源（2026-10-31 用户令「现在加个大功能：多AI对话（工作）」）：
  *   大功能整包按分支 feature/multi-agent-workgroup 分阶段实施，整包映射 v3.26/v3.27/v3.28：
- *   v3.26.0 = 工作区切换器 + 模块一（Agent 池 & 建群）+ 模块二（独立精神）+ 模块三基础（@路由/广播）
+ *   v3.35.6 = 工作区切换器 + 模块一（Agent 池 & 建群）+ 模块二（独立精神）+ 模块三基础（@路由/广播）
  *   v3.27.0 = 自主讨论 + 紧急停止 + max_turns 红线
  *   v3.28.0 = Sub-Agent 包工头体系（spawn/换脑/额度熔断）+ 错误瘦身/生命周期释放红线
  * 本文件随阶段推进追加；阶段 A 覆盖「UI 重构需求：工作区切换器」全部技术约束。
  * 阶段 B/C/D（2026-10-31 用户令「现在直接全部干完」）：模块一-四全量 + 底层红线①-⑤，
- * v3.26.0 整包口径（工作区切换器 + Agent 池建群 + 独立思考 + 群聊链路 + Sub-Agent）。
+ * v3.35.6 整包口径（工作区切换器 + Agent 池建群 + 独立思考 + 群聊链路 + Sub-Agent）。
  *
  * 阶段 A 红线（规格原文逐条对应）：
  *   ① 侧边栏顶部下拉：主标题（Agent Chat Pro / Agents Chat Pro）+ 副标题
@@ -555,7 +555,7 @@ async function runWorkgroupChatTests() {
 }
 
 (async () => {
-  console.log("test-v3-26-0 — 多 AI 对话（工作）：工作区切换器 + Agent 池/建群 + 群聊链路 + Sub-Agent（全量）");
+  console.log("test-v3-35-6 — 多 AI 对话（工作）：工作区切换器 + Agent 池/建群 + 群聊链路 + Sub-Agent（全量）");
   await runConversationTests();
   await runAgentPoolTests();
   await runWorkgroupChatTests();

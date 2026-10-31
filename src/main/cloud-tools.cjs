@@ -127,7 +127,7 @@ function toolDefinitions(allowCommand) {
       }
     },
     {
-      // v3.26.0 子 Agent 包工头（模块四）：把子任务派给 Agent 池内的云端成员执行，
+      // v3.35.6 子 Agent 包工头（模块四）：把子任务派给 Agent 池内的云端成员执行，
       // 结果经 tool 消息回填继续；白名单/熔断/换脑/层级锁死在主进程 executeSubAgent 收口
       type: "function",
       function: {

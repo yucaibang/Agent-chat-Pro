@@ -36,7 +36,7 @@ const {
   archiveDirectory,
   prepareConversationDirectory,
   renameConversation,
-  // v3.26.0 多 AI 对话（工作）：成员会话隔离与群聊绑定
+  // v3.35.6 多 AI 对话（工作）：成员会话隔离与群聊绑定
   saveAgentSession,
   agentSessionFor,
   setConversationWorkgroup,
@@ -67,7 +67,7 @@ const { ASK_USER_HINT, createAskUserRegistry, ASK_USER_TIMEOUT, ASK_USER_STOPPED
 // v3.24.0 ask_user 应答注册表（模块级单例；stop 请求 cancelAll 打断悬等）
 const askUserRegistry = createAskUserRegistry();
 const { collapseRepetition } = require("./repetition-guard.cjs"); // v3.15.5 修复1：复读检测折叠
-// v3.26.0 多 AI 对话（工作）：Agent 池/工作组建档（模块一）+ 群聊引擎与 Sub-Agent 包工头（模块三④）
+// v3.35.6 多 AI 对话（工作）：Agent 池/工作组建档（模块一）+ 群聊引擎与 Sub-Agent 包工头（模块三④）
 const poolModule = require("./agent-pool.cjs");
 const { runGroupTurn, awaitGroupTurn, stopGroupTurns, executeSubAgent, summarize: subSummarize, slimError: subSlimError } = require("./workgroup-chat.cjs");
 const {
@@ -880,7 +880,7 @@ app.whenReady().then(async () => {
     await shell.openExternal(target.toString());
     return true;
   });
-  // v3.26.0：三通道带工作区参数（历史列表/建对话/搜索按 workspaceType 物理过滤，历史记录不串台）
+  // v3.35.6：三通道带工作区参数（历史列表/建对话/搜索按 workspaceType 物理过滤，历史记录不串台）
   ipcMain.handle("conversations:list", (_event, workspaceType) => listConversations(String(workspaceType || "")));
   ipcMain.handle("conversations:create", (_event, workspaceType) => createConversation(String(workspaceType || "single")));
   ipcMain.handle("conversations:get", (_event, id) => {
@@ -1052,7 +1052,7 @@ app.whenReady().then(async () => {
     }
     if (!message && !attachments.length) throw new Error("请输入消息或添加附件。");
     if (!input.conversationId) throw new Error("请先新建一个对话。");
-    // v3.26.0 群聊对话走专用路（chat:group-send）——普通单聊拒绝绑群的对话，防两套引擎互踩
+    // v3.35.6 群聊对话走专用路（chat:group-send）——普通单聊拒绝绑群的对话，防两套引擎互踩
     if (getConversation(input.conversationId)?.workgroupId) {
       throw new Error("该对话是多 AI 群聊对话，请在群聊输入框发送（或新建一对一对话）。");
     }
@@ -1085,7 +1085,7 @@ app.whenReady().then(async () => {
       // v3.20.0 F5：云端路 Agent plan——system prompt 幂等追加 ```plan 约定段（渲染层 extractPlanBlocks 解析）
       // v3.24.0：再拼 ask_user 选择题提问约定（工具开放后告知 AI 何时该提问）
       const systemPrompt = appendPlanConvention(modeConfig?.systemPrompt || "") + ASK_USER_HINT;
-      // v3.26.0 修复：删去旧 push——buildMessages 已含刚落库的用户消息，旧版再 push 一次=每轮双发
+      // v3.35.6 修复：删去旧 push——buildMessages 已含刚落库的用户消息，旧版再 push 一次=每轮双发
       // （P12 初版遗留：请求消息序列 user×2，白耗 token 且易致 AI 回答偏题；工具轮 tool 回填不受影响）
       const cloudMessages = buildMessages(conversation, systemPrompt);
 
@@ -1289,7 +1289,7 @@ app.whenReady().then(async () => {
                 output = answer === ASK_USER_TIMEOUT ? "（用户长时间未应答，请基于现有信息自行决定下一步，或明确说明被搁置的原因。）" : `用户选择：${answer}`;
               }
             } else if (call.name === "spawn_agent") {
-              // v3.26.0 模块四：云端单聊轮的子 Agent 派生（权限白名单=Agent 池云端节点；
+              // v3.35.6 模块四：云端单聊轮的子 Agent 派生（权限白名单=Agent 池云端节点；
               // 换脑/熔断走 ask-user 选择卡悬等；子结果精简回填 tool 消息 + subagent-result 轻注记入上下文）
               const task = String(card.input?.task || "").trim();
               if (!task) {
@@ -1738,7 +1738,7 @@ app.whenReady().then(async () => {
     writeLog("chat_follow_up_accepted", { requestId: id, conversationId: request.conversationId, textLength: followUpMessage.length });
     return { accepted: true };
   });
-  // ── v3.26.0 多 AI 对话（工作）：Agent 池与工作组建档（模块一）──
+  // ── v3.35.6 多 AI 对话（工作）：Agent 池与工作组建档（模块一）──
   ipcMain.handle("agent-pool:list", () => poolModule.listPool());
   ipcMain.handle("agent-pool:add-cloud", (_event, input) => poolModule.addCloudNode(input || {}));
   ipcMain.handle("agent-pool:add-instance", (_event, input) => poolModule.addInstanceNode(input || {}));
@@ -1753,7 +1753,7 @@ app.whenReady().then(async () => {
   // 建群入口：新建 team 对话后即时绑定工作组（首次群发也会兜底绑定）
   ipcMain.handle("conversations:set-workgroup", (_event, id, workgroupId) => setConversationWorkgroup(String(id || ""), String(workgroupId || "")));
 
-  // ── v3.26.0 群聊指挥链路（模块三）+ Sub-Agent 包工头（模块四）──
+  // ── v3.35.6 群聊指挥链路（模块三）+ Sub-Agent 包工头（模块四）──
   const groupDeps = () => ({
     sender: null, // 由 handler 填充（event.sender）
     sendWorkStatusSignal,

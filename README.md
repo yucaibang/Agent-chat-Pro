@@ -4,7 +4,7 @@
 
 一个面向 Windows 桌面的 Electron 应用：把「连着云上的 AI 服务商」「SSH 到远端机器跑 Claude Code」「本机跑 Claude Code」三种工作方式装进同一个界面，并围绕它长出了一整套周边——云办公沙箱、N2N 虚拟专网体检与一键部署、设备联动、开发面板、防破解构建管线等。
 
-[![Version](https://img.shields.io/badge/version-3.26.0-blue.svg)]()
+[![Version](https://img.shields.io/badge/version-3.35.6-blue.svg)]()
 [![Platform](https://img.shields.io/badge/platform-Windows-green.svg)]()
 [![Tests](https://img.shields.io/badge/tests-34%20files%20green-brightgreen.svg)]()
 
