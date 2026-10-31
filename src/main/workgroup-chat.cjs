@@ -176,6 +176,8 @@ async function runCloudMemberTurn(ctx, agent, input, group, rosterNames) {
       if (entry) { entry.promise = promise; entry.cancel = () => { promise.cancel?.(); }; }
       result = await promise;
       if (result.cancelled) break;
+      // v3.37.0 自查修复：多轮工具循环 usage 按轮累计（对齐单聊 main.cjs runCloudWithTools 每轮 accumulateUsage 口径）——原来只在循环后收最后一轮，漏计
+      accumulateUsage(usageTotal, result.usage);
       const toolCalls = toolsInfo.enabled ? (result.toolCalls || []) : [];
       if (!toolCalls.length) break;
       const callsRaw = toolCalls.map((call, index) => {
@@ -252,7 +254,7 @@ async function runCloudMemberTurn(ctx, agent, input, group, rosterNames) {
         streamedReasoning, { agentId: agent.agentId, name: agent.name });
       return { requestId, agentId: agent.agentId, name: agent.name, kind: "cloud", cancelled: true, text: cancelledText };
     }
-    accumulateUsage(usageTotal, result.usage);
+    // usage 已在循环内每轮累计（cancelled 分支除外）；此处仅落库
     ctx.deps.addAssistantMessage(input.conversationId, finalText || "（无输出）", "", [], [], requestId, "cloud",
       usageTotal.requests ? slimUsage(usageTotal) : (result.usage || undefined), undefined, undefined, undefined, undefined,
       streamedReasoning, { agentId: agent.agentId, name: agent.name });
