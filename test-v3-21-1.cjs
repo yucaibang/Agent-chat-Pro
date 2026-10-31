@@ -79,14 +79,23 @@ async function main() {
   });
 
   console.log("\n=== D. 主进程模块加载冒烟（实跑） ===");
-  await test("D1. obf-smoke 干净版全过（59 模块，v3.25.0 起 +ask-convention）", () => {
+  await test("D1. obf-smoke 干净版全过（模块数随名单走，≥59；v3.36.0 +voice-transcribe=60）", () => {
     let out;
     try {
       out = execFileSync("node", [obfSmokePath], { encoding: "utf8", cwd: ROOT, timeout: 120000 });
     } catch (e) {
       throw new Error(`冒烟失败：${(e.stdout || "").split("\n").filter(l => l.includes("✗")).join(" | ")}`);
     }
-    assert.ok(/通过 59 · 失败 0/.test(out), `输出应为 59/0：${out.split("\n").slice(-2).join(" ")}`);
+    // 模块名单持续增长（v3.36.0 起已 60；preload.cjs 不进主进程冒烟）：改为跑通性+对账断言，不再硬编码总数
+    const matched = out.match(/冒烟:\s*(\d+)\s*模块\s*·\s*通过\s*(\d+)\s*·\s*失败\s*(\d+)/);
+    assert.ok(matched, `冒烟输出可解析：${out.split("\n").slice(-2).join(" ")}`);
+    const [total, passed, failed] = [Number(matched[1]), Number(matched[2]), Number(matched[3])];
+    assert.ok(failed === 0 && passed === total && total >= 59, `冒烟应全过且 ≥59 模块：${out.split("\n").slice(-2).join(" ")}`);
+    const obfList = fs.readFileSync(path.join(ROOT, "scripts", "obfuscate.cjs"), "utf8");
+    const registered = new Set((obfList.match(/"main\/[a-z0-9/._-]+\.cjs"/g) || []).map(s => s.slice(1, -1)));
+    const covered = new Set((out.match(/✓ (main\/[a-z0-9/._-]+\.cjs)/g) || []).map(s => s.slice(2)));
+    for (const mod of covered) assert.ok(registered.has(mod), `冒烟覆盖 ${mod} 未登记混淆名单（漏登=构建不混淆，红）`);
+    assert.ok(covered.size === registered.size - 1 && registered.has("main/preload.cjs"), `冒烟数 ${covered.size} 应=名单数 ${registered.size}−1（preload 单列不进主进程冒烟；新增主进程模块必须登记+进冒烟）`);
   });
 
   console.log("\n=== E. 历史 v3.21 功能测试 ===");

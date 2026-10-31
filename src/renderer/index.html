@@ -1041,8 +1041,9 @@
                 <option value="siliconflow"> SiliconFlow</option><option value="custom">custom</option>
               </select>
               <input type="password" id="pool-cloud-key" placeholder="API Key（独立计费，不复用主设置）" autocomplete="off">
-              <input type="text" id="pool-cloud-model" list="pool-cloud-model-list" placeholder="模型名（可手填；或点「拉取」选）" autocomplete="off">
-              <datalist id="pool-cloud-model-list"></datalist>
+              <input type="text" id="pool-cloud-model" placeholder="模型名（点「拉取」后自动弹列表直接点选；也可手填）" autocomplete="off">
+              <!-- v3.37.0 datalist 弃用（用户实锤：还得特意点输入框里的小三角才弹出选择框，别扭）→ 自绘浮层：拉取成功自动弹出，点选即填 -->
+              <div id="pool-cloud-model-popover" class="model-popover" hidden></div>
               <button type="button" id="pool-cloud-fetch-models" class="plain-button" title="从该服务商官方接口拉取当前 Key 可用的全部模型">🔄 拉取</button>
               <input type="text" id="pool-cloud-baseurl" placeholder="自定义 baseURL（选填，走服务商默认）">
               <div id="pool-cloud-fetch-result" class="pool-fetch-result" hidden></div>

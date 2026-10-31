@@ -27,6 +27,9 @@ const { runLocalClaude } = require("./local.cjs");
 const { runAtomCodeChat } = require("./daemon-chat.cjs");
 const { runCustomCli } = require("./custom-cli.cjs");
 const { sendCloudChat, accumulateUsage } = require("./cloud-chat.cjs");
+// v3.37.0 群成员「各自干活」：云端成员轮接工作工具循环（推理走成员模型，工具在本机工作目录执行）——
+// 用户实锤：群成员默认落成纯聊天（无工具无环境），「我想让他们各自干活，而他们说他们不知道我电脑是什么系统」
+const { toolDefinitions, executeToolCall, ASK_USER_HINT, ASK_USER_TIMEOUT, ASK_USER_STOPPED } = require("./cloud-tools.cjs");
 const { collapseRepetition } = require("./repetition-guard.cjs");
 const { appendPlanConvention } = require("./plan-convention.cjs");
 const pool = require("./agent-pool.cjs");
@@ -90,15 +93,18 @@ function buildGroupMessages(conversation, systemPrompt) {
   return messages;
 }
 
-/** 群成员系提示词（协作协议 + 层级锁死声明） */
-function groupSystemPrompt(groupName, rosterNames, selfName, modeSystemPrompt) {
+/** 群成员系提示词（协作协议 + 层级锁死声明 + v3.37.0 真实环境段） */
+function groupSystemPrompt(groupName, rosterNames, selfName, modeSystemPrompt, environmentText) {
   const rosterText = rosterNames.map((name) => `@${name}`).join(" · ");
   return [
     modeSystemPrompt || "",
+    environmentText || "",
+    ASK_USER_HINT,
     `——多智能体协作协议（群「${groupName}」）——`,
     `你是本群成员 @${selfName}。同级成员：${rosterText}（均由用户亲自配置驱动）。`,
     "规则：以自己的专业立场直接发言；引用他人观点用 @名称；不扮演/不代写其他成员的发言；",
     "不重复他人已给出的结论，优先贡献增量信息。",
+    "实干优先：被点名或任务落到你头上时，优先用工具直接干活（读/写文件、列目录、执行命令、网络抓取），产出直接放在话里或写进文件；不要用「我不能操作你电脑/不知道你的系统」推脱——上面已给真实环境参数。",
     "如需要把子任务外包，可输出 ```sub_agent {\"task\":\"…\",\"agent\":\"@池内成员名\",\"expect\":\"…\"}``` 代码块；",
     "限制：子 Agent 不得再派生新子 Agent（层级锁死 1 层）；每轮每成员至多 1 个 sub_agent 块。"
   ].filter(Boolean).join("\n");
@@ -110,7 +116,9 @@ async function runCloudMemberTurn(ctx, agent, input, group, rosterNames) {
   const requestId = input.requestId;
   const conversation = await ctx.deps.getConversation(input.conversationId);
   const modeConfig = input.workModeId ? await ctx.deps.getMode(input.workModeId).catch(() => null) : null;
-  const systemPrompt = groupSystemPrompt(group.name, rosterNames, agent.name, appendPlanConvention(modeConfig?.systemPrompt || ""));
+  // v3.37.0 群成员「各自干活」：工具组随 globalCloud 开关（toolsEnabled+非沙箱+有工作目录才注入），真实环境段随系统提示
+  const toolsInfo = typeof ctx.deps.groupTools === "function" ? ctx.deps.groupTools() : { enabled: false, allowCommand: false, workdir: "", environmentText: "" };
+  const systemPrompt = groupSystemPrompt(group.name, rosterNames, agent.name, appendPlanConvention(modeConfig?.systemPrompt || ""), toolsInfo.environmentText || "");
   // 红线②：群成员请求体独立构建（@名牌归因 + 协作协议系统段；每次全新数组零共享引用）
   const cloudMessages = buildGroupMessages(conversation, systemPrompt);
   const globalCloud = getCloudAiConfig();
@@ -122,7 +130,9 @@ async function runCloudMemberTurn(ctx, agent, input, group, rosterNames) {
     thinking: { provider: agent.provider, model: agent.model || "", choice: agent.thinkingLevel || "" },
     maxTokens: globalCloud.maxTokens,
     provider: agent.provider,
-    proxy: globalCloud.proxy // 代理用全局设置（成员级代理=后续增强）
+    proxy: globalCloud.proxy, // 代理用全局设置（成员级代理=后续增强）
+    // v3.37.0：工作工具随行（群成员默认能干活——用户实锤「他们默认是正常对话，我想让他们各自干活」）
+    tools: toolsInfo.enabled ? toolDefinitions(toolsInfo.allowCommand) : undefined
   };
   if (!config.apiKey) throw new Error(`成员「${agent.name}」未配置 API Key。`);
   ctx.emit(requestId, { type: "lifecycle", status: "started", agent: { id: agent.agentId, name: agent.name, kind: "cloud" } });
@@ -152,10 +162,85 @@ async function runCloudMemberTurn(ctx, agent, input, group, rosterNames) {
   };
   ctx.deps.activeRequests.set(requestId, { promise: null, cancel: null, conversationId: input.conversationId, agentId: agent.agentId });
   try {
-    const promise = sendCloudChat(config, cloudMessages, callbacks);
+    // v3.37.0 群成员工具循环（agent loop，≤10 轮）：tool_calls → 本机工作目录执行 → 结果回填 → 再请求。
+    // 形态对齐单聊 main.cjs runCloudWithTools（raw 消息回填 Anthropic/OpenAI 双形态）；ask_user 悬等同款；
+    // spawn_agent 在群轮不开放（群内子任务派生走 ```sub_agent``` 块协议——层级锁死声明见 groupSystemPrompt）。
+    // 群工具卡照常 ctx.emit(type:"tool") → 渲染层通用分支 messages.get(群 requestId)=群气泡 → 工具牌照常渲染。
     const entry = ctx.deps.activeRequests.get(requestId);
-    if (entry) { entry.promise = promise; entry.cancel = () => { promise.cancel?.(); }; }
-    const result = await promise;
+    const isAnthropicProvider = agent.provider === "anthropic";
+    let result = null;
+    let loopMessages = cloudMessages;
+    for (let round = 0; round <= 10; round += 1) {
+      if (round > 0) ctx.emit(requestId, { type: "round", round });
+      const promise = sendCloudChat(config, loopMessages, callbacks);
+      if (entry) { entry.promise = promise; entry.cancel = () => { promise.cancel?.(); }; }
+      result = await promise;
+      if (result.cancelled) break;
+      const toolCalls = toolsInfo.enabled ? (result.toolCalls || []) : [];
+      if (!toolCalls.length) break;
+      const callsRaw = toolCalls.map((call, index) => {
+        let parsedInput = {};
+        try { parsedInput = JSON.parse(call.arguments || "{}"); } catch { parsedInput = {}; }
+        return { id: call.id || `${requestId}-tool-${round}-${index}`, name: call.name || "unknown", arguments: call.arguments || "{}", input: parsedInput };
+      });
+      const assistantText = result.text || "";
+      if (isAnthropicProvider) {
+        const content = [];
+        if (assistantText) content.push({ type: "text", text: assistantText });
+        for (const call of callsRaw) content.push({ type: "tool_use", id: call.id, name: call.name, input: call.input });
+        loopMessages = [...loopMessages, { raw: true, role: "assistant", content }];
+      } else {
+        loopMessages = [...loopMessages, {
+          raw: true,
+          role: "assistant",
+          content: assistantText || null,
+          extra: { tool_calls: callsRaw.map((call) => ({ id: call.id, type: "function", function: { name: call.name, arguments: call.arguments } })) }
+        }];
+      }
+      for (const call of callsRaw) {
+        const card = { id: call.id, name: call.name, status: "running", input: call.input, result: "" };
+        ctx.emit(requestId, { type: "tool", tool: card });
+        let output;
+        if (call.name === "ask_user") {
+          const q = String(card.input?.question || "").trim();
+          const options = (Array.isArray(card.input?.options) ? card.input.options : [])
+            .map((option) => String(option || "").trim()).filter(Boolean).slice(0, 4);
+          if (!q || options.length < 2) {
+            output = "ask_user 参数不完整（question 必填且 options 至少 2 项）。请改用正文直接向群友/用户说明。";
+          } else {
+            ctx.emit(requestId, { type: "ask-user", callId: call.id, question: q, options });
+            const answer = await ctx.deps.askUserRegistry.wait(requestId, call.id, q, options);
+            if (answer === ASK_USER_STOPPED) {
+              card.status = "completed"; card.result = "用户已停止"; ctx.emit(requestId, { type: "tool", tool: card });
+              throw new Error("用户已停止当前任务");
+            }
+            output = answer === ASK_USER_TIMEOUT ? "（用户长时间未应答，请基于现有信息自行决定下一步，或明确说明被搁置的原因。）" : `用户选择：${answer}`;
+          }
+        } else if (call.name === "spawn_agent") {
+          output = "群聊里请用 ```sub_agent``` 代码块派生子任务（spawn_agent 工具只开放给单聊主 Agent）。";
+          card.status = "failed";
+          card.result = "群内子任务走 sub_agent 块";
+        } else {
+          try {
+            output = await ctx.deps.executeToolCall({ id: call.id, name: call.name, arguments: call.arguments }, { workdir: toolsInfo.workdir, allowCommand: toolsInfo.allowCommand, onLog: ctx.log });
+            card.status = "completed";
+            card.result = String(output).slice(0, 400);
+            ctx.log("group_tool_success", { requestId, tool: call.name, outputLength: String(output).length });
+          } catch (error) {
+            card.status = "failed";
+            card.result = String(error.message || error).slice(0, 400);
+            output = `工具执行失败：${error.message}`;
+            ctx.log("group_tool_failed", { requestId, tool: call.name, error: error.message });
+          }
+        }
+        ctx.emit(requestId, { type: "tool", tool: card });
+        if (isAnthropicProvider) {
+          loopMessages.push({ raw: true, role: "user", content: [{ type: "tool_result", tool_use_id: call.id, content: output }] });
+        } else {
+          loopMessages.push({ raw: true, role: "tool", content: output, extra: { tool_call_id: call.id } });
+        }
+      }
+    }
     if (draftTimer) { clearTimeout(draftTimer); draftTimer = null; }
     // 红线④+复读护栏：落库前折叠复读段落；群成员回复仍走复读检测
     const repetition = collapseRepetition(streamedText);

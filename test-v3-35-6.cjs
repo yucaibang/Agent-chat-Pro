@@ -250,12 +250,14 @@ async function runStaticTests() {
   });
   await test("5.11 云端节点「拉取模型列表」（v3.35.9 用户令：填 Key 后不该再手打模型名，与连接设置云端同款实拉）", () => {
     assert.ok(indexHtmlSrc.includes('id="pool-cloud-fetch-models"') && indexHtmlSrc.includes("🔄 拉取"), "拉取按钮在册");
-    assert.ok(indexHtmlSrc.includes('id="pool-cloud-model-list"') && indexHtmlSrc.includes('list="pool-cloud-model-list"'), "模型框挂 datalist（拉取后点选，也保留手填）");
+    assert.ok(indexHtmlSrc.includes('id="pool-cloud-model-popover"') && indexHtmlSrc.includes('class="model-popover"'), "模型列表自绘浮层挂载在册（v3.37.0 datalist 弃用）");
     assert.ok(indexHtmlSrc.includes('id="pool-cloud-fetch-result"'), "拉取结果提示行在册");
     assert.ok(rendererSrc.includes('window.agentChatPro.fetchCloudModels({ provider, apiKey, baseUrl })'), "复用主进程 cloud:fetch-models 实拉通道（不新建端点）");
     assert.ok(rendererSrc.includes('请先填写该节点的 API Key 再拉取'), "节点 Key 独立计费守卫：未填 Key 直接拦（绝不兜全局云端密钥）");
     assert.ok(rendererSrc.includes("config.pullModels === false") && rendererSrc.includes("该服务商无模型列表接口"), "豆包无列表端点隐藏按钮+文案提示");
     assert.ok(rendererSrc.includes("applyPoolProviderFetch"), "服务商切换/初始显隐校准在册");
+    assert.ok(rendererSrc.includes("poolModelOptions = result.models || [];") && rendererSrc.includes("openPoolModelPopover();") && rendererSrc.includes("列表已弹出，点一个直接填入（也可手填）"), "拉取成功自动弹自绘浮层（不用再找输入框小三角，v3.37.0 用户令⑥）");
+    assert.ok(!rendererSrc.includes('querySelector("#pool-cloud-model-list")') && !rendererSrc.includes('querySelector("#pool-cloud-model")?.list'), "建群对话框 datalist 残留引用已清（连接设置云端 datalist 不在此次范围，不受影响）");
     assert.ok(stylesSrc.includes(".pool-fetch-result"), "结果行样式在册");
   });
   await test("5.12 输入栏「听说」语音转文字（v3.36.0 用户令：点按钮开始麦克风语音输入，说完文字进输入框）", async () => {
@@ -306,6 +308,42 @@ async function runStaticTests() {
     assert.ok(stylesSrc.includes(".empty-group-entry-row { display: flex; justify-content: center"), "按钮行样式在册（flex 居中）");
     assert.ok(stylesSrc.includes("white-space: nowrap; min-width: max-content"), "按钮永不断行（防一字一行纵排）");
     assert.ok(stylesSrc.includes(".empty-state { min-width: 300px;"), "空态容器保最小宽（窄窗口不塌缩）");
+  });
+  await test("5.13 群聊体验六修（v3.37.0 用户令：成员干活+环境参数/新会话延续群/思考闪光标/思考过程可见/面板收起/模型浮层）", () => {
+    // ⑤ 工作模式接线：sendGroupTurn 传 workModeId（成员不再默认「正常对话」装不知道）
+    assert.ok(rendererSrc.includes("workModeId: currentModeId"), "群轮入参带当前工作组模式（⑤：各自干活，不再默认纯聊天）");
+    // ② 群成员工具+真实环境：main 注入工具组与环境段
+    assert.ok(mainSrc.includes("cloudEnvironmentNote"), "环境参数注入函数在册（②：不再说『不知道你电脑是什么系统』）");
+    assert.ok(mainSrc.includes("groupTools: () => {"), "groupDeps 注入群工具开关组（enable+allowCommand+workdir+environmentText）");
+    assert.ok(mainSrc.includes("executeToolCall,") && mainSrc.includes("toolDefinitions,"), "工具执行器与工具定义注入 workgroup-chat");
+    assert.ok(mainSrc.includes("能动手就动手"), "环境段「实干优先」口径在册");
+    assert.ok(workgroupSrc.includes('require("./cloud-tools.cjs")'), "群引擎接 cloud-tools（工具族+ask_user 三态常量）");
+    assert.ok(workgroupSrc.includes("function groupSystemPrompt") && workgroupSrc.includes("environmentText"), "群系统提示词并入环境段（第 5 参）");
+    assert.ok(workgroupSrc.includes("优先用工具直接干活"), "群提示词实干优先行在册");
+    const loopBody = workgroupSrc.slice(workgroupSrc.indexOf("async function runCloudMemberTurn"));
+    assert.ok(loopBody.includes("for (let round = 0; round <= 10; round += 1)"), "群成员 ≤10 轮工具循环在册");
+    assert.ok(loopBody.includes("result.toolCalls || []"), "循环吃 sendCloudChat 回传的 toolCalls");
+    assert.ok(loopBody.includes('type: "tool", tool: card'), "群工具卡进度事件投影（思考/执行过程可见，④）");
+    assert.ok(loopBody.includes('type: "ask-user", callId'), "ask_user 群轮特判在册（悬等回复）");
+    assert.ok(loopBody.includes("群聊里请用 ```sub_agent``` 代码块派生子任务"), "spawn_agent 群轮拒绝口径在册（子 Agent 只属单聊主 Agent）");
+    assert.ok(loopBody.includes("entry.promise = promise"), "取消通道逐轮改写（工具轮 cancel 不失灵）");
+    // ④ 可视状态：思考态/回复态/闪光标
+    assert.ok(rendererSrc.includes("@${turn.name} 正在思考…") || rendererSrc.includes("`@${turn.name} 正在思考…`"), "群气泡起手=『正在思考…』（不再哑态『正在处理…』）");
+    assert.ok(rendererSrc.includes("正在回复…"), "首段正文到达切『正在回复…』");
+    assert.ok(stylesSrc.includes(".message.group-streaming .message-content::after") && stylesSrc.includes("group-cursor-blink"), "群聊生成中闪光标样式在册（每个成员都有，④）");
+    assert.ok(rendererSrc.includes("groupTurnsLive.get(event.id)"), "thinking 分支同步群 note 还原思考态");
+    // ③ 新会话自动延续最近群聊（按 createdAt 排序——建档 [0] 是最老组，语义坑已修）
+    assert.ok(rendererSrc.includes("createdAt") && rendererSrc.includes("setConversationWorkgroup"), "新对话自动绑最近工作组（③：不再每次重设群聊工作站）");
+    assert.ok(rendererSrc.includes("上下文是全新开始的") || rendererSrc.includes("上下文全新"), "沿用组但上下文重置口径在册");
+    // ① 群面板默认收起（不再占对话框二分之一）
+    assert.ok(rendererSrc.includes("dataset.groupToggle") && rendererSrc.includes("▸ 点开逐成员挡位"), "群面板折叠开关在册（①：默认收起不占半屏）");
+    assert.ok(rendererSrc.includes('fillRows()'), "展开才填充成员挡位行（防面板常驻重算）");
+  });
+  await test("5.14 模型浮层样式在册（v3.37.0 自绘 popover + 场外收起）", () => {
+    assert.ok(stylesSrc.includes(".model-popover {") && stylesSrc.includes("position: fixed"), "浮层 fixed 定位样式在册");
+    assert.ok(stylesSrc.includes(".model-popover-item:hover"), "选项 hover 态在册");
+    assert.ok(rendererSrc.includes('document.addEventListener("mousedown"') && rendererSrc.includes("hidePoolModelPopover();"), "场外按下收层在册");
+    assert.ok(!indexHtmlSrc.includes('id="pool-cloud-model-list"'), "HTML 里 datalist 已删干净");
   });
 
   /* ── 第 6 组：workgroup-chat.cjs 红线静态断言 ── */

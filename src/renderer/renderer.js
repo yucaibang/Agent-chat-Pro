@@ -1959,6 +1959,11 @@ function enqueueGroupDelta(requestId, text) {
       const content = live.item.querySelector(".message-content");
       if (content) content.textContent += chunkText;
       live.text += chunkText;
+      // v3.37.0 状态可视化：首段正文到达 →「正在回复…」（思考阶段已过；note 不再长期停在「正在处理…」的哑态）
+      if (live.text && live.item.classList.contains("group-streaming")) {
+        const note = live.item.querySelector(".draft-note");
+        if (note && note.textContent !== `@${live.name} 正在回复…`) note.textContent = `@${live.name} 正在回复…`;
+      }
     }
     if (isNearBottom()) elements.messages.scrollTop = elements.messages.scrollHeight;
   };
@@ -1970,7 +1975,8 @@ function renderGroupTurnBubble(turn) {
   item.classList.add("group-streaming");
   const note = document.createElement("div");
   note.className = "draft-note";
-  note.textContent = `@${turn.name} 正在处理…`;
+  // v3.37.0 状态可视化（用户实锤「无法判断他们到底在思考还是干嘛」）：初始=思考中，收到首段 delta 后由 enqueueGroupDelta 切为回复中
+  note.textContent = `@${turn.name} 正在思考…`;
   item.prepend(note);
   item.dataset.groupTurn = turn.requestId;
   messages.set(turn.requestId, item); // 群轮也入单流 Map：通用 onChatEvent（thinking/ask-user/round）按 id 找气泡
@@ -2023,7 +2029,9 @@ async function sendGroupTurn() {
       workgroupId: groupActiveWorkgroupId,
       message: text,
       mentionedAgentIds: mentioned,
-      autoDiscuss: groupAutoDiscussOn
+      autoDiscuss: groupAutoDiscussOn,
+      // v3.37.0 群成员不再默认纯聊天：工作模式随群发（成员系统提示/工具行为与该模式语义一致）
+      workModeId: currentModeId
     });
     (result.turns || []).forEach((turn) => renderGroupTurnBubble({ ...turn, conversationId: result.conversationId || groupActiveConversationId }));
     // 悬等各轮终态（不阻塞群输入——继续轮询；多轮并行/接力逐个转正）
@@ -2099,6 +2107,18 @@ function renderSubagentTreeLine(payload) {
 async function createNewConversation() {
   // v3.15.0 bug1：Agent 工作中允许新建/切换对话——进行中的任务在后台继续
   const conversation = await window.agentChatPro.createConversation(currentWorkspace);
+  // v3.37.0 一键延续上次群聊（用户实锤「设置个群聊，新开个对话还得特地新建群聊工作站，选择确认超级麻烦」）：
+  // 多人工作区新建对话 → 自动沿用最近一次工作组（成员配置照旧，上下文全新）；要换群仍走「建群」入口
+  if (currentWorkspace === "team") {
+    try {
+      const workgroups = await window.agentChatPro.listWorkgroups();
+      // 建档顺序而非最近序——按 createdAt 取最后一次建的组（「上次群聊」语义）
+      const latest = (workgroups || []).slice().sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")))[0] || null;
+      if (latest && Array.isArray(latest.members) && latest.members.length) {
+        await window.agentChatPro.setConversationWorkgroup(conversation.id, latest.id);
+      }
+    } catch { /* 沿用失败不拦新建——回落无组对话（可与建群对话框重走） */ }
+  }
   await loadConversation(conversation.id);
   // 新对话重置 token 计数
   conversationTokens = 0;
@@ -4029,14 +4049,29 @@ async function refreshComposerModePopup() {
     meta.hidden = true;
     if (resetBtn) resetBtn.hidden = true;
     if (!groupRows) { modelEl.textContent = "群聊"; return; }
-    groupRows.hidden = false;
+    // v3.37.0 群面板默认收起（用户实锤「自主讨论那一节占了整个对话框的二分之一」）：只留一行摘要，点击才展开逐成员挡位
+    groupRows.hidden = true;
     groupRows.replaceChildren();
-    modelEl.textContent = `群聊 · ${groupRosterAgents.length} 位成员（各挡位独立）`;
+    modelEl.textContent = `群聊 · ${groupRosterAgents.length} 位成员 ▸ 点开逐成员挡位`;
+    modelEl.style.cursor = "pointer";
+    modelEl.title = "点开/收起逐成员思考挡位（每成员独立记忆）";
     if (stamp !== thinkModelStamp) return; // 面板已重建 → 作废（非群切换竞态）
-    for (const node of groupRosterAgents) {
-      const section = await buildGroupMemberThinkRow(node);
-      if (stamp !== thinkModelStamp) return;
-      groupRows.append(section);
+    const fillRows = async () => {
+      const stampLocal = ++thinkModelStamp;
+      groupRows.replaceChildren();
+      for (const node of groupRosterAgents) {
+        const section = await buildGroupMemberThinkRow(node);
+        if (stampLocal !== thinkModelStamp) return;
+        groupRows.append(section);
+      }
+    };
+    if (!modelEl.dataset.groupToggle) {
+      modelEl.dataset.groupToggle = "1";
+      modelEl.addEventListener("click", () => {
+        groupRows.hidden = !groupRows.hidden;
+        modelEl.textContent = groupRows.hidden ? `群聊 · ${groupRosterAgents.length} 位成员 ▸ 点开逐成员挡位` : "群聊 · 逐成员挡位（点此收起）";
+        if (!groupRows.hidden) fillRows();
+      });
     }
   };
 
@@ -4259,6 +4294,12 @@ window.agentChatPro.onChatEvent((event) => {
   } else if (event.type === "thinking" && answer) {
     // v3.24.0 功能C：思考过程流式折叠块（云端 reasoning 流 + SSH/local claude 扩展思考透传共用通道）
     appendThinkingDelta(answer, event.text || "");
+    // v3.37.0 群轮思考可视化：思考流到达 → 群气泡 note 保持/切回「正在思考…」（正文到达后被 enqueueGroupDelta 覆写）
+    const live = groupTurnsLive.get(event.id);
+    if (live && live.item.classList.contains("group-streaming")) {
+      const note = live.item.querySelector(".draft-note");
+      if (note && note.textContent !== `@${live.name} 正在思考…`) note.textContent = `@${live.name} 正在思考…`;
+    }
   } else if (event.type === "ask-user" && answer) {
     // v3.24.0 功能B：AI 选择题提问悬等卡（云端 ask_user 工具；点选经 IPC 回传继续工具循环）
     renderCloudAskUserCard(answer, event);
@@ -5835,6 +5876,50 @@ async function openGroupSetup() {
     const poolCloudProvider = document.querySelector("#pool-cloud-provider");
     const poolFetchButton = document.querySelector("#pool-cloud-fetch-models");
     const poolFetchResult = document.querySelector("#pool-cloud-fetch-result");
+    // ── v3.37.0（用户令⑥）：datalist 要点输入框里的小三角才展开，太别扭——弃用，改自绘浮层：
+    // 拉取成功自动弹列表直接点选；之后点模型框也有列表；点选项直接回填；点浮层外收起。
+    let poolModelOptions = [];
+    const poolModelInput = document.querySelector("#pool-cloud-model");
+    const poolModelPopover = document.querySelector("#pool-cloud-model-popover");
+    const hidePoolModelPopover = () => {
+      if (poolModelPopover) poolModelPopover.hidden = true;
+    };
+    const openPoolModelPopover = () => {
+      if (!poolModelPopover || !poolModelInput || !poolModelOptions.length) return;
+      const rect = poolModelInput.getBoundingClientRect();
+      poolModelPopover.style.left = `${Math.round(rect.left)}px`;
+      poolModelPopover.style.top = `${Math.round(rect.bottom + 4)}px`;
+      poolModelPopover.style.width = `${Math.max(240, Math.round(rect.width))}px`;
+      poolModelPopover.replaceChildren();
+      for (const model of poolModelOptions) {
+        const option = document.createElement("div");
+        option.className = "model-popover-item";
+        option.textContent = model.label === model.value ? model.value : `${model.label}（${model.value}）`;
+        option.title = option.textContent;
+        option.addEventListener("click", () => {
+          poolModelInput.value = model.value;
+          poolModelInput.dispatchEvent(new Event("input", { bubbles: true }));
+          hidePoolModelPopover();
+          poolModelInput.focus();
+        });
+        poolModelPopover.append(option);
+      }
+      poolModelPopover.hidden = false;
+    };
+    if (poolModelInput && poolModelPopover) {
+      poolModelInput.addEventListener("click", () => {
+        if (poolModelPopover.hidden && poolModelOptions.length) openPoolModelPopover();
+      });
+      poolModelInput.addEventListener("focus", () => {
+        if (poolModelPopover.hidden && poolModelOptions.length) openPoolModelPopover();
+      });
+      // 场外按下即收起（mousedown 先于 click，不会吃掉场外点击）
+      document.addEventListener("mousedown", (event) => {
+        if (poolModelPopover.hidden) return;
+        if (event.target === poolModelInput || poolModelPopover.contains(event.target)) return;
+        hidePoolModelPopover();
+      });
+    }
     const applyPoolProviderFetch = () => {
       const provider = poolCloudProvider.value;
       const config = CLOUD_PROVIDERS[provider];
@@ -5844,7 +5929,8 @@ async function openGroupSetup() {
         poolFetchResult.hidden = pullable;
         poolFetchResult.textContent = pullable ? "" : "该服务商无模型列表接口，模型名手填即可。";
       }
-      document.querySelector("#pool-cloud-model-list").innerHTML = "";
+      poolModelOptions = [];
+      hidePoolModelPopover();
       document.querySelector("#pool-cloud-baseurl").placeholder = provider === "custom" ? "API 地址（custom 必填，如 https://xx/v1）" : `自定义 baseURL（选填，走服务商默认）`;
     };
     if (poolCloudProvider) poolCloudProvider.addEventListener("change", applyPoolProviderFetch);
@@ -5877,9 +5963,10 @@ async function openGroupSetup() {
           poolFetchResult.textContent = `⚠️ ${result?.reason || "拉取失败，请检查密钥和网络"}`;
           return;
         }
-        const list = document.querySelector("#pool-cloud-model-list");
-        list.innerHTML = result.models.map((m) => `<option value="${m.value}">${m.label === m.value ? "" : m.label}</option>`).join("");
-        poolFetchResult.textContent = `✅ 已拉取 ${result.count} 个该 Key 可用的模型，点模型框即可选择（也可手填）`;
+        // v3.37.0：存进浮层数据源并自动弹出——用户不用再找输入框里的小三角
+        poolModelOptions = result.models || [];
+        openPoolModelPopover();
+        poolFetchResult.textContent = `✅ 已拉取 ${result.count} 个该 Key 可用的模型，列表已弹出，点一个直接填入（也可手填）`;
       } catch (error) {
         poolFetchResult.textContent = `⚠️ 拉取失败：${error?.message || error}`;
       } finally {
@@ -6019,6 +6106,11 @@ async function renderSetupWgList() {
   list.replaceChildren();
   const checks = document.querySelector("#wg-member-checks");
   checks.replaceChildren();
+  // v3.37.0 默认预选最近一次建的工作组（用户实锤「选择确认超级麻烦」）：打开建群对话框即可直接「开始协作」，要换组再点
+  if (!groupSetupSelectedWorkgroupId) {
+    const latest = (workgroups || []).slice().sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")))[0];
+    if (latest) groupSetupSelectedWorkgroupId = latest.id;
+  }
   const nameById = new Map(nodes.map((node) => [node.id, node.name]));
   for (const group of workgroups) {
     const row = document.createElement("div");

@@ -3,6 +3,7 @@
 const { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, shell } = require("electron");
 const fs = require("fs");
 const path = require("path");
+const os = require("os");
 const { randomUUID } = require("crypto");
 const { spawnSync } = require("child_process"); // v3.16.1 print:detect 调 reg/tasklist
 const { getConnection, getSettings, getAtomcodeToken, getSshConnection, getCloudAiConfig, sameSshTarget, saveSettings, setModelAdminPassword, switchSshProfile, trustHostFingerprint, verifyModelAdminPassword, ensureAgentBridgeToken, getAgentBridgeConversationId, setAgentBridgeConversationId, setAgentBridgeConfig } = require("./settings.cjs");
@@ -1771,6 +1772,13 @@ app.whenReady().then(async () => {
     writeLog("chat_follow_up_accepted", { requestId: id, conversationId: request.conversationId, textLength: followUpMessage.length });
     return { accepted: true };
   });
+  // ── v3.37.0 群成员「各自干活」运行环境描述（用户实锤：群成员说不知道这台电脑是什么系统）──
+  // 直接把真实系统/架构/工作目录写进群成员系统提示——不再靠 AI 猜平台。
+  const cloudEnvironmentNote = () => {
+    const platformName = process.platform === "win32" ? "Windows" : process.platform === "darwin" ? "macOS" : "Linux";
+    const workdir = validatedLocalWorkdir(getCloudAiConfig().workingDirectory) || "";
+    return `【本机运行环境（真实参数，直接可用）】操作系统：${platformName}（内核版本 ${os.release()}，架构 ${process.arch}）；你的工具（读文件/写文件/列目录${getCloudAiConfig().runCommandEnabled ? "/执行命令" : ""}/网络抓取）都是在这台 ${platformName} 机器上直接执行。工作目录：${workdir || "未配置（用户在连接设置配好云端工作目录后，文件与命令类工具才可用）"}。规则：能动手就动手，不要再说「不知道你电脑是什么系统」——以上就是真实系统参数。`;
+  };
   // ── v3.35.6 多 AI 对话（工作）：Agent 池与工作组建档（模块一）──
   ipcMain.handle("agent-pool:list", () => poolModule.listPool());
   ipcMain.handle("agent-pool:add-cloud", (_event, input) => poolModule.addCloudNode(input || {}));
@@ -1800,7 +1808,19 @@ app.whenReady().then(async () => {
     agentSessionFor,
     saveAgentSession,
     getAtomcodeToken,
-    askUserRegistry
+    askUserRegistry,
+    // ── v3.37.0 群成员「各自干活」：工具执行组注入（跟随连接设置的全局工具开关；环境信息随行）──
+    executeToolCall,
+    toolDefinitions,
+    groupTools: () => {
+      const cloudConfig = getCloudAiConfig();
+      const enabled = Boolean(cloudConfig.toolsEnabled);
+      const allowCommand = enabled && Boolean(cloudConfig.runCommandEnabled);
+      const sandboxOn = enabled && Boolean(cloudConfig.sandboxEnabled);
+      const workdir = validatedLocalWorkdir(cloudConfig.workingDirectory) || "";
+      // 沙箱模式下工作目录语义在容器内，本模块不接沙盒执行器（成员级沙盒=后续增强）——工作目录缺失/沙箱开=不注入文件/命令工具，纯聊天不炸
+      return { enabled: enabled && !sandboxOn && Boolean(workdir), allowCommand, workdir, environmentText: cloudEnvironmentNote() };
+    },
   });
   ipcMain.handle("chat:group-send", async (event, input) => {
     const conversationId = String(input?.conversationId || "");

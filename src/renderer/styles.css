@@ -533,6 +533,29 @@ textarea::placeholder { color: var(--text-muted); }
 .voice-button.working { background: #8a6b3d; color: #fff; opacity: .85; cursor: progress; }
 .voice-button:disabled { cursor: progress; }
 @keyframes voice-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .55; } }
+/* ── v3.37.0（用户令⑥）：建群对话框模型列表自绘浮层（datalist 弃用）——下拉直接点选，不再找小三角 ── */
+.model-popover {
+  position: fixed;
+  z-index: 4000;
+  max-height: 240px;
+  overflow-y: auto;
+  padding: 4px;
+  border-radius: 10px;
+  background: var(--bg-panel, #fff);
+  border: 1px solid var(--border, rgba(0,0,0,.12));
+  box-shadow: 0 10px 28px rgba(0,0,0,.16);
+  font-size: 12.5px;
+  color: var(--text-primary, #1a1a1a);
+}
+.model-popover-item {
+  padding: 6px 9px;
+  border-radius: 7px;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.model-popover-item:hover { background: var(--bg-hover, rgba(0,0,0,.06)); }
 .send-button { display: grid; place-items: center; width: 36px; min-width: 36px; height: 36px; border-radius: 50%; background: #f1f2ef; color: #151918; transition: background .15s ease, transform .15s ease, opacity .15s ease; }
 .send-button:hover:not(:disabled) { background: #fff; transform: translateY(-1px); }
 .send-button svg { width: 19px; height: 19px; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
@@ -1231,6 +1254,15 @@ body.devpanel-absent .dev-panel, body.devpanel-absent .dev-rail { display: none 
 .message.group-agent .agent-tag.agent-kind-ssh { color: #4eb96a; }
 .message.group-agent .agent-tag.agent-kind-local { color: #dba66f; }
 .message.group-streaming .message-content { opacity: .85; }
+/* ── v3.37.0（用户令⑤）：群聊成员生成中给闪光标——一眼分清「在思考/在打字」vs「卡死」── */
+.message.group-streaming .message-content::after {
+  content: "▍";
+  display: inline-block;
+  margin-left: 2px;
+  color: var(--accent, #4e8ca8);
+  animation: group-cursor-blink .9s steps(2, start) infinite;
+}
+@keyframes group-cursor-blink { to { visibility: hidden; } }
 .message.group-failed { border-left: 3px solid #dc2626; }
 /* 子 Agent 树状折叠（模块四） */
 .subagent-tree {
