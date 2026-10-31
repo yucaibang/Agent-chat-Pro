@@ -5592,7 +5592,8 @@ const GROUP_PROVIDERS = [
 async function ensureEmptyStateGroupEntry() {
   const empty = document.querySelector("#empty-state");
   if (!empty) return;
-  empty.querySelector("#empty-group-entry")?.remove();
+  // 清理旧入口：连行容器一起删（v3.35.8 起按钮包在 .empty-group-entry-row 里，单删按钮会残留空行容器越积越多）
+  empty.querySelector(".empty-group-entry-row")?.remove();
   if (currentWorkspace !== "team") return;
   const button = document.createElement("button");
   button.type = "button";
@@ -5600,7 +5601,12 @@ async function ensureEmptyStateGroupEntry() {
   button.className = "primary empty-group-entry";
   button.textContent = "👥 建群开始协作";
   button.addEventListener("click", () => openGroupSetup());
-  empty.querySelector(".empty-state > div") ? empty.querySelector(".empty-state > div").append(button) : empty.append(button);
+  // v3.35.8 实锤修复：按钮不直接当 grid item（窄容器下列收缩会把它压成一字一行窄条），
+  // 独立行容器包裹（flex 居中 + width:100%）隔离 grid 收缩，按钮自身 white-space:nowrap 永不断行
+  const row = document.createElement("div");
+  row.className = "empty-group-entry-row";
+  row.append(button);
+  empty.append(row);
 }
 
 function bindEmptyStateGroupEntry() {

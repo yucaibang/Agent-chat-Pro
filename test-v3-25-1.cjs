@@ -470,7 +470,13 @@ async function runSourceTests() {
     assert.ok(stylesSrc.includes("transform: translateX(-50%)"), "文案中心锚定（对齐刻度）");
     assert.ok(stylesSrc.includes(".think-levels { position: relative; height: 20px; margin-top: 2px; }"), "文案行定高容器（v3.25.4 拉长 20px/+2px）");
     assert.ok(stylesSrc.includes("width: 460px;"), "浮层定宽 460px（v3.25.5 用户复验「没拉宽」→ min-width 无效改定宽硬拉）");
-    assert.ok(!stylesSrc.includes("min-width: 350px;") && !stylesSrc.includes("min-width: 300px;"), "min-width 撑宽路线废弃（被顶行 max-content 穿透）");
+    // v3.35.8：扫描收窄到思考面板区段（.think-panel … .think-group-slider）——原全域字符串扫描误伤
+    // 其他组件的 min-width（如空态容器 .empty-state { min-width: 300px }，与浮层撑宽路线无关）
+    const thinkStyles = stylesSrc.slice(
+      Math.max(0, stylesSrc.indexOf(".think-panel")),
+      stylesSrc.indexOf(".think-group-slider") >= 0 ? stylesSrc.indexOf(".think-group-slider") + 120 : stylesSrc.length
+    );
+    assert.ok(!thinkStyles.includes("min-width: 350px;") && !thinkStyles.includes("min-width: 300px;"), "min-width 撑宽路线废弃（被顶行 max-content 穿透；v3.35.8 起只扫思考面板区段）");
     // v3.25.2 层序修复锚（装机实锤：白胶囊中央透出刻度点）——轨道渐变拎 ::before + z 三层序
     assert.ok(stylesSrc.includes(".think-track-wrap::before"), "::before 独立轨道渐变层在册");
     assert.ok(rendererSrc.includes("renderTrackMarks(") && rendererSrc.includes("syncMarkActive(ticksRow, levelsRow"), "渲染接线在册");

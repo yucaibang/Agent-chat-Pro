@@ -306,6 +306,11 @@ header p, .dialog-heading p { color: var(--text-tertiary); margin: 0; font-size:
 header p { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .icon-button, .close-button { color: var(--text-tertiary); border: 0; background: transparent; font-size: 21px; padding: 4px 8px; }
 .empty-state { flex: 1 1 auto; min-height: 0; margin: auto; display: grid; place-content: center; text-align: center; max-width: 450px; color: var(--text-muted); }
+/* v3.35.8 布局加固：空态容器保最小宽（窄窗口下不被 grid 列收缩压成一字一行的窄条——用户截图实锤）；
+   建群入口按钮行独立 div 包裹隔离 grid 收缩，按钮 white-space:nowrap 永不断行 */
+.empty-state { min-width: 300px; }
+.empty-group-entry-row { display: flex; justify-content: center; width: 100%; }
+.empty-group-entry { margin-top: 14px; white-space: nowrap; min-width: max-content; width: max-content; }
 .empty-state h2 { color: var(--text-primary); font-size: 22px; margin: 14px 0 8px; }
 .empty-state p { line-height: 1.6; }
 .logo-circle { width: 58px; height: 58px; margin: auto; border: 1px solid #574735; border-radius: 18px; display: grid; place-items: center; color: #e9b36f; background: #282218; font-size: 27px; }

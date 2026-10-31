@@ -248,6 +248,14 @@ async function runStaticTests() {
     assert.ok(!mainSrc.includes('cloudMessages.push({ role: "user", content: message })'), "重复 push 已删除");
     assert.ok(mainSrc.includes("每轮双发"), "修复注释在册（口径可追溯）");
   });
+  await test("5.10 空态建群入口布局加固（v3.35.8 线上截图 bug：窄容器下按钮被压成一字一行窄条）", () => {
+    assert.ok(rendererSrc.includes("ensureEmptyStateGroupEntry"), "空态建群入口函数在册");
+    assert.ok(rendererSrc.includes('row.className = "empty-group-entry-row"') && rendererSrc.includes("empty.append(row)"), "按钮行容器包裹隔离 grid 收缩（不直接当 grid item）");
+    assert.ok(rendererSrc.includes('.empty-group-entry-row")?.remove()'), "清理逻辑连行容器一起删（防切换工作区残留空行越积越多）");
+    assert.ok(stylesSrc.includes(".empty-group-entry-row { display: flex; justify-content: center"), "按钮行样式在册（flex 居中）");
+    assert.ok(stylesSrc.includes("white-space: nowrap; min-width: max-content"), "按钮永不断行（防一字一行纵排）");
+    assert.ok(stylesSrc.includes(".empty-state { min-width: 300px;"), "空态容器保最小宽（窄窗口不塌缩）");
+  });
 
   /* ── 第 6 组：workgroup-chat.cjs 红线静态断言 ── */
   await test("6.1 红线④ 错误瘦身：slimError 只传 {code,message} ≤300 字", () => {
