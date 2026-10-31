@@ -287,7 +287,7 @@ async function runNasEnvironmentTests() {
     assert.ok(networks.includes("sandbox-isolated"), "应挂隔离网络");
   });
 
-  await test("C4 NAS 沙箱内 node/python 版本可用（规格验证：node20+ 主版本域；镜像基座漂移实证 2026-10-24 = v22.23.4）", () => {
+  await test("C4 NAS 沙箱内 node/python 版本可用（规格验证：node20+ 主版本域；⚠ 历史注：旧容器曾基于 10-07 初建时的错误基座（node v22.23.4）未 recreate——2026-10-31 已 recreate 对齐至 node20.20.2 + 连带清除容器的临时联网 bridge 跨挂残留）", () => {
     const node = require("child_process").execSync("docker exec sandbox node --version", { encoding: "utf8" }).trim();
     const major = Number(String(node).replace(/^v/, "").split(".")[0]);
     assert.ok(major >= 20, `node 应 ≥ 20.x（规格 node20+ 本意），实际 ${node}`);

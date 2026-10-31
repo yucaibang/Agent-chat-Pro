@@ -4,9 +4,9 @@
 
 一个面向 Windows 桌面的 Electron 应用：把「连着云上的 AI 服务商」「SSH 到远端机器跑 Claude Code」「本机跑 Claude Code」三种工作方式装进同一个界面，并围绕它长出了一整套周边——云办公沙箱、N2N 虚拟专网体检与一键部署、设备联动、开发面板、防破解构建管线等。
 
-[![Version](https://img.shields.io/badge/version-3.25.1-blue.svg)]()
+[![Version](https://img.shields.io/badge/version-3.25.6-blue.svg)]()
 [![Platform](https://img.shields.io/badge/platform-Windows-green.svg)]()
-[![Tests](https://img.shields.io/badge/tests-33%20files%20green-brightgreen.svg)]()
+[![Tests](https://img.shields.io/badge/tests-34%20files%20green-brightgreen.svg)]()
 
 ---
 
@@ -86,7 +86,7 @@
 
 ```bash
 npm install
-for f in test-v3-*.cjs; do node "$f" || exit 1; done   # 全量回归（33 个测试文件）
+for f in test-v3-*.cjs; do node "$f" || exit 1; done   # 全量回归（34 个测试文件；另有 9 个专项 test-*.cjs/.mjs）
 npm run build:win:nsis # 构建 Windows NSIS 安装包
 node scripts/build-pipeline.cjs bridge   # Bridge Edition（阉割版产物线）
 ```
@@ -94,6 +94,72 @@ node scripts/build-pipeline.cjs bridge   # Bridge Edition（阉割版产物线�
 - Node.js 20+，electron 33.x / electron-builder 26.x（锁版）
 - 混淆体系说明：`scripts/obfuscate.cjs`（medium 名单模块混淆），`scripts/obf-smoke.cjs`（混淆后加载冒烟）
 - 测试体系：每个大版本一份 `test-v3-x-y.cjs`，含真 HTTP / 真 IPC / vm 假 DOM 冒烟 / TDZ 扫描守门
+
+---
+
+## ❓ FAQ
+
+<details>
+<summary><b>这个软件是开源的吗？</b></summary>
+
+不是。本仓库是**源码可见的专有软件**：源码仅用于审阅、学习与安全检验，未附开源许可证文档，未明确授予的权利一律保留。个人学习与自用不受限制，商用/分发需书面授权（详见文末「版权与授权」）。
+</details>
+
+<details>
+<summary><b>软件免费吗？要花钱的地方在哪？</b></summary>
+
+软件本体免费（Releases 下载安装即用）。聊天的花费取决于你的 AI 服务商：云端模式需要你自己申请 API 密钥（部分服务商提供免费模型或免费额度，其余按量计费）；SSH/本机模式跑的是你自己机器上的 Claude Code，费用由你的 AI 订阅或 API 决定。本项目不内嵌任何收费环节，也不抽成。
+</details>
+
+<details>
+<summary><b>三种模式分别需要准备什么？</b></summary>
+
+- **云端 AI**：只要一个服务商 API 密钥（任意一家即可），无需本地安装任何 CLI——填密钥→点「🔄 拉取」刷模型→开聊
+- **SSH 远程**：一台开了 SSH 的远端机器（NAS/服务器/VPS），上面装有 Claude Code；填地址账号密码（或密钥）即可
+- **本机运行**：本机装有 Claude Code（或 AtomCode 等 CLI）
+</details>
+
+<details>
+<summary><b>我的密钥和聊天记录存在哪里？会外传吗？</b></summary>
+
+API 密钥使用 Electron safeStorage **加密后落盘在你本机用户目录**，SSH 密码同样加密存储；聊天记录存在你本机本地数据库。程序自身没有上传渠道：云端模式把你点的消息发给你**自己选择的服务商 API**（受其隐私条款约束）；SSH 模式的对话只经过你自己的远端机器。渲染层 CSP 收窄为 `connect-src 'self'`，页面零外发请求。
+</details>
+
+<details>
+<summary><b>「云办公」沙箱是什么？需要什么条件？</b></summary>
+
+云端模式开启工具执行后，AI 可以读写文件、跑命令、抓网页。**本地 Docker 沙箱**把这些执行放进你 SSH 目标机（如 NAS）的一个隔离容器里：默认断网（`internal: true` 物理 isolation）、可临时联网、工作目录 POSIX 越界护栏。需要在远端机准备 Docker（`docker-compose.yml` 一键起容器，见内置镜像规格：node20 + python3 + 常用 CLI）。不开沙箱则退回一期本机执行形态。
+</details>
+
+<details>
+<summary><b>支持哪些 AI 服务商？中转站能用吗？</b></summary>
+
+内置十家：智谱 AI、DeepSeek、Kimi、豆包、OpenAI、Gemini、Anthropic、Groq、硅基流动 + 自定义。自定义兼容 OpenAI 格式的中转端点（one-api / new-api 等），手填 Base URL + 密钥 + 模型名即可。各家清单随版本更新，也可点「🔄 拉取」实时读你密钥能用的全部模型。
+</details>
+
+<details>
+<summary><b>换电脑 / 重装系统，配置和聊天记录怎么迁移？</b></summary>
+
+用户数据在 Electron 用户目录（聊天记录库 / settings.json / safeStorage 密钥库），整体拷贝用户目录即可迁移。⚠ safeStorage 与系统账户绑定，**密钥直接拷贝到另一台机器解不出**——迁移后请在设置里重新填一次 API 密钥与 SSH 凭证。
+</details>
+
+<details>
+<summary><b>N2N「体检/一键部署」是干什么的？为什么部署要管理员权限？</b></summary>
+
+用于把 Windows 机器经虚拟专网接入你的远端环境（配合 SSH 模式远程办公）：体检五项只读检测（TAP 驱动/edge 工具/路径/公网入口连通性），一键部署自动装 TAP 驱动、解压工具包、写 PATH 并起 edge。TAP 网卡与系统 PATH 写入是系统级操作，需要一次管理员授权（UAC 弹窗），部署完成无需重启即可直连。项目不带任何内建默认入口，公网入口按你自己的环境填写。
+</details>
+
+<details>
+<summary><b>启动很慢 / 被杀毒软件拦截？</b></summary>
+
+启动自检会做安装包完整性校验（ASAR 完整性 + fuse 校验），正常情况毫秒级。若被杀软误报，请将安装目录加入白名单（安装包未做商业代码签名——签名需要证书，当前为已知限制）。安装体以 Releases 说明为准。
+</details>
+
+<details>
+<summary><b>遇到 bug / 想提需求？</b></summary>
+
+在仓库提 Issue 即可，尽量附：系统版本、连接模式（云端/SSH/本机）、复现步骤与报错原文。
+</details>
 
 ---
 
