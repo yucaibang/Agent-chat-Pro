@@ -81,9 +81,11 @@ function makeWorkdir() {
 (async () => {
   console.log("\n═══ cloud-tools.cjs 工具集与安全沙盒 ═══");
 
-  await test("toolDefinitions：默认 5 工具（v3.24.0 +ask_user），allowCommand 时 6 个", () => {
-    assert.strictEqual(toolDefinitions(false).length, 5);
-    assert.strictEqual(toolDefinitions(true).length, 6);
+  await test("toolDefinitions：默认 6 工具（v3.26.0 +spawn_agent），allowCommand 时 7 个", () => {
+    assert.strictEqual(toolDefinitions(false).length, 6);
+    assert.strictEqual(toolDefinitions(true).length, 7);
+    const namesAll = toolDefinitions(false).map((t) => t.function.name);
+    assert.ok(namesAll.includes("spawn_agent"), "子 Agent 包工头工具在册（模块四）");
     const names = toolDefinitions(true).map((t) => t.function.name);
     for (const expected of ["read_file", "write_file", "list_directory", "web_fetch", "run_command", "ask_user"]) {
       assert.ok(names.includes(expected), `缺少工具 ${expected}`);
@@ -269,7 +271,7 @@ function makeWorkdir() {
 
   await test("buildAnthropicBody：tools 转 input_schema 格式", () => {
     const body = buildAnthropicBody([{ role: "user", content: "hi" }], { tools: toolDefinitions(false) });
-    assert.strictEqual(body.tools.length, 5);
+    assert.strictEqual(body.tools.length, 6); // v3.26.0 +spawn_agent
     assert.ok(body.tools[0].input_schema);
     assert.strictEqual(body.tools[0].function, undefined);
   });
@@ -293,7 +295,7 @@ function makeWorkdir() {
       assert.strictEqual(result.toolCalls[0].name, "read_file");
       assert.strictEqual(result.toolCalls[0].arguments, '{"path":"a.txt"}');
       const sent = JSON.parse(requests[0].body);
-      assert.ok(Array.isArray(sent.tools) && sent.tools.length === 5, "请求体应带 tools");
+      assert.ok(Array.isArray(sent.tools) && sent.tools.length === 6, "请求体应带 tools（v3.26.0 +spawn_agent）");
     } finally {
       server.close();
     }

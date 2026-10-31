@@ -127,6 +127,24 @@ function toolDefinitions(allowCommand) {
       }
     },
     {
+      // v3.26.0 子 Agent 包工头（模块四）：把子任务派给 Agent 池内的云端成员执行，
+      // 结果经 tool 消息回填继续；白名单/熔断/换脑/层级锁死在主进程 executeSubAgent 收口
+      type: "function",
+      function: {
+        name: "spawn_agent",
+        description: "把一个明确的子任务派给子 Agent（Sub-Agent）执行（如资料整理、总结、翻译等可独立完成的工作）。子任务描述要自包含：说明完整要做什么与期望产出形式。不要把需要读写本机文件或执行命令的工作派出去（子 Agent 只会用云端模型思考）。",
+        parameters: {
+          type: "object",
+          properties: {
+            task: { type: "string", description: "自包含的子任务描述（拿不到你的上文也能执行）" },
+            agent: { type: "string", description: "目标子 Agent：Agent 池内成员名（@开头）或成员 id；缺省由系统自动指派" },
+            expect: { type: "string", description: "期望产出形式，如「500 字内中文摘要」" }
+          },
+          required: ["task"]
+        }
+      }
+    },
+    {
       type: "function",
       function: {
         name: "read_file",

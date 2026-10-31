@@ -142,9 +142,9 @@ async function main() {
     const src = fs.readFileSync(path.join(ROOT, "src/main/main.cjs"), "utf8");
     const hits = scanTdz(src);
     const names = [...new Set(hits.map(h => h.name))].sort();
-    const WHITE = ["executeCompact", "lastKnownContext", "maybeAutoCompact", "statusCenter"].sort();
+    const WHITE = ["executeCompact", "groupDeps", "lastKnownContext", "maybeAutoCompact", "statusCenter"].sort(); // v3.26.0 +groupDeps（群聊 handler 局部依赖构造器，先声明后用合法形态）
     assert.deepStrictEqual(names, WHITE, `main.cjs 出现非白名单 TDZ 形态：${names.join(",")}`);
-    assert.strictEqual(hits.length, 7, `main.cjs 命中应为已知 7 处（statusCenter 1 + lastKnownContext 4 + maybeAutoCompact 1 + executeCompact 1），实际 ${hits.length}`);
+    assert.strictEqual(hits.length, 8, `main.cjs 命中应为已知 8 处（v3.26.0 +groupDeps 1；statusCenter 1 + lastKnownContext 4 + maybeAutoCompact 1 + executeCompact 1），实际 ${hits.length}`);
   });
 
   await test("A3. 其余模块 TDZ 白名单快照（timer/socket/stream/responseTimer/signal-chain 合法形态；其余模块 0 命中）", () => {

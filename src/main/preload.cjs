@@ -42,8 +42,9 @@ contextBridge.exposeInMainWorld("agentChatPro", {
   // v3.19.0 F3：SSH 远程适配器在场检测（单次连接探测远端 CLI）
   detectSshAdapter: (payload) => ipcRenderer.invoke("settings:detect-ssh-adapter", payload),
   // ── 会话管理 IPC ──
-  listConversations: () => ipcRenderer.invoke("conversations:list"),
-  createConversation: () => ipcRenderer.invoke("conversations:create"),
+  // v3.26.0：带工作区参数（"" = 全部兼容语义；single/team 按工作区物理过滤）
+  listConversations: (workspaceType = "") => ipcRenderer.invoke("conversations:list", workspaceType),
+  createConversation: (workspaceType = "single") => ipcRenderer.invoke("conversations:create", workspaceType),
   getConversation: (id) => ipcRenderer.invoke("conversations:get", id),
   clearConversationSession: (id) => ipcRenderer.invoke("conversations:clear-session", id),
   renameConversation: (id, title) => ipcRenderer.invoke("conversations:rename", id, title),
@@ -51,8 +52,45 @@ contextBridge.exposeInMainWorld("agentChatPro", {
   // v3.15.5 修复2：删除单条及下方所有落库消息（右键菜单同步删除）
   truncateConversationMessages: (id, anchor) => ipcRenderer.invoke("conversations:truncate", id, anchor),
   deleteConversation: (id) => ipcRenderer.invoke("conversations:delete", id),
-  searchConversations: (query, limit) => ipcRenderer.invoke("conversations:search", query, limit),
+  // v3.26.0：搜索带工作区过滤（第二参语义升级为 workspaceType；原 limit 调用点现走渲染层内部默认）
+  searchConversations: (query, workspaceType = "") => ipcRenderer.invoke("conversations:search", query, undefined, workspaceType),
   // ── 聊天 IPC ──
+  // v3.26.0 多 AI 对话（工作）：Agent 池与工作组建档（模块一）
+  listAgentPool: () => ipcRenderer.invoke("agent-pool:list"),
+  addAgentPoolCloud: (input) => ipcRenderer.invoke("agent-pool:add-cloud", input),
+  addAgentPoolInstance: (input) => ipcRenderer.invoke("agent-pool:add-instance", input),
+  updateAgentPoolNode: (id, patch) => ipcRenderer.invoke("agent-pool:update-node", id, patch),
+  removeAgentPoolNode: (id) => ipcRenderer.invoke("agent-pool:remove-node", id),
+  listWorkgroups: () => ipcRenderer.invoke("agent-pool:workgroups:list"),
+  createWorkgroup: (input) => ipcRenderer.invoke("agent-pool:workgroup:create", input),
+  updateWorkgroup: (id, patch) => ipcRenderer.invoke("agent-pool:workgroup:update", id, patch),
+  deleteWorkgroup: (id) => ipcRenderer.invoke("agent-pool:workgroup:delete", id),
+  listAgentTargets: () => ipcRenderer.invoke("agent-pool:targets"),
+  setConversationWorkgroup: (id, workgroupId) => ipcRenderer.invoke("conversations:set-workgroup", id, workgroupId),
+  // v3.26.0 群聊指挥链路（模块三）+ Sub-Agent（模块四）
+  sendGroupMessage: (input) => {
+    auditSignal({
+      requestId: "group-send",
+      direction: "preload-sent",
+      signal: "chat-group-send",
+      disposition: "accepted",
+      textLength: String(input?.message || "").length,
+      attachmentCount: 0
+    });
+    return ipcRenderer.invoke("chat:group-send", input);
+  },
+  awaitGroupTurn: (requestId) => ipcRenderer.invoke("chat:group-await", requestId),
+  stopGroupTurns: (conversationId) => {
+    auditSignal({ requestId: `group-${conversationId}`, direction: "preload-sent", signal: "chat-group-stop", disposition: "attempt" });
+    return ipcRenderer.invoke("chat:group-stop", conversationId);
+  },
+  spawnSubAgent: (input) => ipcRenderer.invoke("chat:spawn-subagent", input),
+  onGroupDelta: (handler) => ipcRenderer.on("chat:group-delta", (_event, payload) => {
+    try { handler(payload || {}); } catch { /* 渲染层异常不炸 IPC 通道 */ }
+  }),
+  onSubagentEvent: (handler) => ipcRenderer.on("chat:subagent-event", (_event, payload) => {
+    try { handler(payload || {}); } catch { /* 同上 */ }
+  }),
   sendMessage: (input) => {
     auditSignal({
       requestId: input?.id,

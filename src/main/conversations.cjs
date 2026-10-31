@@ -9,6 +9,20 @@ const { archiveFileName, archiveMarkdown } = require("./archive.cjs");
 const { ARCHIVE_FOLDER, migrateConversationDirectory } = require("./storage.cjs");
 let recoveryNotice = "";
 
+// v3.26.0 多智能体工作区（大功能「多 AI 对话（工作）」前置）：
+// 每条对话归属工作区标记——single=一对一专攻（存量对话无字段一律视为 single，兼容迁移）；
+// team=Agents Chat Pro 多 Agent 协同工作区。历史列表/搜索按工作区物理过滤，严禁串台。
+const WORKSPACE_TYPES = ["single", "team"];
+
+function normalizeWorkspaceType(value) {
+  const id = String(value || "").trim();
+  return WORKSPACE_TYPES.includes(id) ? id : "single";
+}
+
+function workspaceTypeOf(conversation) {
+  return normalizeWorkspaceType(conversation?.workspaceType);
+}
+
 function storagePath(directory = getSettings().dataDirectory) {
   return path.join(directory || app.getPath("userData"), "conversations.json");
 }
@@ -54,9 +68,10 @@ function write(conversations) {
   }
 }
 
-function createConversation() {
+// v3.26.0：建对话即归属工作区（渲染层按当前工作区传入；缺省 single 兼容既有调用）
+function createConversation(workspaceType = "single") {
   const now = new Date().toISOString();
-  const conversation = { id: randomUUID(), title: "新对话", sessionId: "", localSessionId: "", sshSessionId: "", lastConnectionMode: "", createdAt: now, updatedAt: now, pinned: false, messages: [] };
+  const conversation = { id: randomUUID(), workspaceType: normalizeWorkspaceType(workspaceType), title: "新对话", sessionId: "", localSessionId: "", sshSessionId: "", lastConnectionMode: "", createdAt: now, updatedAt: now, pinned: false, messages: [] };
   conversation.archiveFile = archiveFileName(conversation.title, conversation.createdAt, conversation.id);
   const all = read();
   all.unshift(conversation);
@@ -65,8 +80,10 @@ function createConversation() {
   return conversation;
 }
 
-function listConversations() {
+// v3.26.0：按工作区过滤（workspaceType 空串=不过滤，保持存量调用语义不变）；无字段的存量数据视作 single
+function listConversations(workspaceType = "") {
   return read()
+    .filter((conversation) => !workspaceType || workspaceTypeOf(conversation) === normalizeWorkspaceType(workspaceType))
     .sort((a, b) => Number(Boolean(b.pinned)) - Number(Boolean(a.pinned)) || b.updatedAt.localeCompare(a.updatedAt))
     .map((conversation) => {
       const lastMessage = conversation.messages?.[conversation.messages.length - 1];
@@ -77,6 +94,7 @@ function listConversations() {
       return {
         id: conversation.id,
         title: conversation.title,
+        workspaceType: workspaceTypeOf(conversation),
         pinned: Boolean(conversation.pinned),
         updatedAt: conversation.updatedAt,
         sessionId: conversation.sessionId,
@@ -112,6 +130,8 @@ function clearConversationSession(id) {
     // v3.18.0 F4：卡槽会话字段一并清（sshSessionId_ssh2 等）
     if (key.startsWith("sshSessionId_")) conversation[key] = "";
   }
+  // v3.26.0 群聊：Agent 实例会话随会话重置一并清空
+  conversation.agentSessions = {};
   conversation.lastConnectionMode = "";
   conversation.updatedAt = new Date().toISOString();
   write(all);
@@ -164,12 +184,43 @@ function sshSessionField(profileId, adapter = "claude") {
   return tail && tail !== "claude" ? `${base}_${tail.replace(/[^a-zA-Z0-9_-]/g, "")}` : base;
 }
 
-function addAssistantMessage(id, text, sessionId, files = [], tools = [], requestId = "", connectionMode = "ssh", usage, durationMs, engine = "claude", profileId = "", remoteAdapter = "claude", thinking = "") {
+/** v3.26.0 群聊：成员会话按 Agent 实例隔离落档（agentSessions[agentId]=sessionId），跨轮续聊不串 */
+function saveAgentSession(id, agentId, sessionId) {
+  const key = String(agentId || "").trim();
+  const trimmed = String(sessionId || "").trim();
+  if (!key || !trimmed) return null;
+  return update(id, (conversation) => {
+    if (!conversation.agentSessions || typeof conversation.agentSessions !== "object") conversation.agentSessions = {};
+    conversation.agentSessions[key] = trimmed;
+  });
+}
+
+/** v3.26.0 群聊：读取成员会话（跨轮续聊用） */
+function agentSessionFor(conversation, agentId) {
+  const map = conversation?.agentSessions;
+  return map && typeof map === "object" ? String(map[agentId] || "") : "";
+}
+
+/** v3.26.0 群聊：绑定对话 ↔ 工作组（首次群发时落定） */
+function setConversationWorkgroup(id, workgroupId) {
+  const value = String(workgroupId || "").trim();
+  if (!value) return null;
+  return update(id, (conversation) => {
+    conversation.workgroupId = value;
+    if (!conversation.agentSessions || typeof conversation.agentSessions !== "object") conversation.agentSessions = {};
+  });
+}
+
+function addAssistantMessage(id, text, sessionId, files = [], tools = [], requestId = "", connectionMode = "ssh", usage, durationMs, engine = "claude", profileId = "", remoteAdapter = "claude", thinking = "", agentMeta = null) {
   return update(id, (conversation) => {
     const draft = requestId
       ? conversation.messages.find((message) => message.role === "assistant" && message.requestId === requestId)
       : null;
     const completed = { mid: draft?.mid || randomUUID(), role: "assistant", text, files, tools, at: draft?.at || new Date().toISOString() }; // v3.15.5 修复2：mid 删除锚点（draft 转正复用原 mid）
+    // v3.26.0 群聊：成员身份随消息落库（气泡名牌 + 群聊上下文按成员转录归因）
+    if (agentMeta && typeof agentMeta === "object") {
+      completed.agent = { id: String(agentMeta.agentId || "").slice(0, 80), name: String(agentMeta.name || "").slice(0, 40) };
+    }
     if (usage) completed.usage = usage;
     if (Number.isFinite(Number(durationMs))) completed.durationMs = Math.max(0, Math.round(Number(durationMs)));
     // v3.24.0 思考过程落库：随消息持久化（重放渲染折叠块；上限 200KB 防超长思维链灌库）
@@ -265,10 +316,13 @@ function getConversationRecoveryNotice() {
   return recoveryNotice;
 }
 
-function searchConversations(query, limit = 20) {
+// v3.26.0：搜索同受工作区物理过滤（不串台红线——搜索结果也不能串）。
+// limit 允许 null/undefined（IPC 经序列化丢失默认值时回落 20）
+function searchConversations(query, limit = 20, workspaceType = "") {
   const lowerQuery = String(query || "").toLocaleLowerCase().trim();
   if (!lowerQuery) return [];
-  const all = read();
+  const boundedLimit = Number.isFinite(Number(limit)) && Number(limit) > 0 ? Number(limit) : 20;
+  const all = read().filter((conversation) => !workspaceType || workspaceTypeOf(conversation) === normalizeWorkspaceType(workspaceType));
   const results = [];
   for (const conversation of all) {
     if (!conversation.messages) continue;
@@ -280,6 +334,7 @@ function searchConversations(query, limit = 20) {
         results.push({
           id: conversation.id,
           title: conversation.title,
+          workspaceType: workspaceTypeOf(conversation),
           updatedAt: conversation.updatedAt,
           pinned: Boolean(conversation.pinned),
           lastConnectionMode: conversation.lastConnectionMode || "",
@@ -289,7 +344,7 @@ function searchConversations(query, limit = 20) {
         break;
       }
     }
-    if (results.length >= limit) break;
+    if (results.length >= boundedLimit) break;
   }
   return results;
 }
@@ -386,5 +441,10 @@ module.exports = {
   sessionForMode,
   sshSessionField,
   truncateConversationMessages,
-  conversationStats
+  conversationStats,
+  saveAgentSession,
+  agentSessionFor,
+  setConversationWorkgroup,
+  normalizeWorkspaceType,
+  workspaceTypeOf
 };

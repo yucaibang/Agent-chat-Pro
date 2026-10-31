@@ -87,6 +87,8 @@ const OBFUSCATE_FILES = {
     "main/custom-cli.cjs",      // 自定义命令纯文本引擎（v3.13.0）
     "main/plan-convention.cjs", // Agent plan 云端路 ```plan 约定注入（v3.20.0 F5）
     "main/ask-convention.cjs",  // AI 选择题 ```ask_user 约定注入（v3.25.0 三模式补全）
+    "main/agent-pool.cjs",      // 多 AI 对话（工作）：Agent 池与工作组建档（v3.26.0 模块一）
+    "main/workgroup-chat.cjs",  // 多 AI 对话（工作）：群聊引擎与 Sub-Agent 包工头（v3.26.0 模块三四）
     // SSH 远程 CLI 适配器（v3.19.0 F3）——五家选一，qwen/codex/hermes 走远端 CLI 直跑
     "main/adapters/ssh-cli-base.cjs",
     "main/adapters/qwen-cli.cjs",
