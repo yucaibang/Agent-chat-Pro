@@ -158,7 +158,7 @@ API 密钥使用 Electron safeStorage **加密后落盘在你本机用户目录*
 <details>
 <summary><b>为什么 Agent Chat Pro 后面得带个「Pro」？明明没发布过普通版？</b></summary>
 
-普通版不是没有过——它就是本项目的兄弟版本 **Agent Orbit（AO）**。两个软件共用同一个起点（早期轻量聊天客户端 Agent NAS Chat），从那里分成两条平行线：一条是轻量取向的普通版 AO，另一条就是本仓库这条线。本线几经更名（Claude Code Connect Chat）后定格为 Agent Chat Pro，「Pro」就这么来的——它是和普通版兄弟并列的名字，不是什么付费档位。之后两条线各自独立迭代（AO 的模块化架构、模型配置等经验也被这条线吸收），AO 没有在本仓库提供下载，所以你在这里见到的只有带 Pro 的这一个包。
+普通版不是没有过——它的兄弟版本就是 **Agent Orbit（AO）**。两个软件共用同一个起点（早期轻量聊天客户端 Agent NAS Chat），从那里分成两条平行线：AO 走轻量取向（Windows + Android 双端，把 Claude Code 变成即时通讯式体验，独立迭代至今）；本仓库这条线几经更名（Claude Code Connect Chat）后定格为 Agent Chat Pro——「Pro」就这么来的：它是和普通版兄弟并列的名字，不是付费档位。两条线独立迭代、互为参考（AO 的模块化架构、模型配置等经验也被这条线吸收）。AO 不在本仓库提供下载，所以你在这里见到的只有带 Pro 的这一个包。
 </details>
 
 <details>
