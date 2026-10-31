@@ -187,6 +187,8 @@
               <div class="think-levels" id="think-levels"></div>
               <div class="think-meta" id="think-meta"></div>
               <div class="think-egg" id="think-egg" hidden></div>
+              <!-- v3.35.7 群聊思考面板：群里多少个 AI 就按各自模型支持的档位一个一个往上叠（每成员一节独立滑条+预计消耗倍数） -->
+              <div class="think-group-rows" id="think-group-rows" hidden></div>
               <div class="think-divider" id="think-divider"></div>
               <div class="think-modes" id="think-modes"></div>
             </div>
@@ -1039,11 +1041,6 @@
               <input type="password" id="pool-cloud-key" placeholder="API Key（独立计费，不复用主设置）" autocomplete="off">
               <input type="text" id="pool-cloud-model" placeholder="自定义模型名（如 glm-4-flash）" autocomplete="off">
               <input type="text" id="pool-cloud-baseurl" placeholder="自定义 baseURL（选填，走服务商默认）">
-              <div class="pool-thinking-row">
-                <label for="pool-cloud-thinking">思考挡位（该节点独立，绝不与他节点共用滑条）</label>
-                <input type="range" id="pool-cloud-thinking" min="0" max="4" step="1" value="0">
-                <span id="pool-cloud-thinking-label" class="pool-thinking-label">默认</span>
-              </div>
               <button type="button" id="pool-cloud-save" class="primary">保存节点</button>
             </div>
           </details>

@@ -1255,10 +1255,6 @@ body.devpanel-absent .dev-panel, body.devpanel-absent .dev-rail { display: none 
   display: flex; flex-direction: column; gap: 4px;
   padding: 8px 10px; border: 1px solid var(--border-popover, #4443); border-radius: 10px;
 }
-.pool-node-row .pool-thinking-row { display: flex; align-items: center; gap: 8px; }
-.pool-thinking-row label { font-size: 12px; color: var(--text-secondary); }
-.pool-thinking-row input[type=range] { flex: 1; accent-color: var(--accent); }
-.pool-thinking-label { font-size: 12px; min-width: 4ch; color: var(--text-secondary); }
 .pool-node-head { display: flex; align-items: center; gap: 8px; }
 .pool-kind-badge { font-size: 11px; padding: 1px 8px; border-radius: 999px; }
 .pool-kind-cloud { background: color-mix(in srgb, #3b82f6 18%, transparent); }
@@ -1281,7 +1277,25 @@ body.devpanel-absent .dev-panel, body.devpanel-absent .dev-rail { display: none 
   border: 1px solid var(--border-popover, #4443); border-radius: 8px;
   color: var(--text-primary); padding: 7px 10px; font-size: 13px; min-width: 0;
 }
-.group-add-grid .primary, .group-add-grid .pool-thinking-row { grid-column: 1 / -1; }
+.group-add-grid .primary { grid-column: 1 / -1; }
+/* ── v3.35.7 群聊思考面板（成员堆叠节：群内多少个 AI 就按各自模型档位一个个往上叠+预计消耗倍数）── */
+.pool-node-level { font-size: 11px; padding: 1px 8px; border-radius: 999px; background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--text-secondary); }
+.think-group-rows { display: flex; flex-direction: column; gap: 12px; margin: 10px 0 4px; }
+.think-group-member {
+  display: flex; flex-direction: column; gap: 6px; padding: 10px 12px;
+  border: 1px solid var(--border-popover, #4443); border-radius: 12px;
+  background: color-mix(in srgb, var(--bg-main, #1a1a1a) 55%, transparent);
+}
+.think-member-head { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; }
+.think-member-name { color: var(--text-primary); }
+.think-member-kind { font-size: 10px; padding: 1px 8px; border-radius: 999px; }
+.think-group-member.agent-kind-cloud .think-member-kind { background: color-mix(in srgb, #3b82f6 18%, transparent); color: #6f9fe6; }
+.think-group-member.agent-kind-ssh .think-member-kind { background: color-mix(in srgb, #16a34a 18%, transparent); color: #4eb96a; }
+.think-group-member.agent-kind-local .think-member-kind { background: color-mix(in srgb, #d99d5c 20%, transparent); color: #dba66f; }
+.think-member-model { font-size: 11px; color: var(--text-secondary); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.think-member-note { font-size: 11px; color: var(--text-tertiary); font-style: italic; }
+.think-member-cost { font-size: 12px; color: var(--accent); font-variant-numeric: tabular-nums; }
+.think-group-slider { width: 100%; }
 .group-wg-form { display: flex; flex-direction: column; gap: 8px; border-top: 1px solid var(--border-popover, #4443); padding-top: 10px; }
 .wg-member-checks { display: flex; flex-wrap: wrap; gap: 12px; }
 .wg-member-check { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; color: var(--text-secondary); cursor: pointer; }

@@ -3748,8 +3748,112 @@ async function refreshComposerModePopup() {
     if (active && index === levels.length - 1 && active.id !== "eco") showThinkEgg();
   };
 
+  // ── v3.35.7 群聊思考面板：群里多少个 AI，就按各自模型支持的档位一节一节往上叠（每成员独立滑条+预计消耗倍数）──
+  // 独立精神延续：每成员一节独立滑条绝不共用；云端成员挡位落 agent-pool 节点 thinkingLevel（runCloudMemberTurn 注入链同源）；
+  // SSH/本机成员挡位由引擎/工作模式决定，群内不单独注入（面板只说明，不给可控滑条）。
+  const buildGroupMemberThinkRow = async (node) => {
+    const section = document.createElement("div");
+    section.className = "think-group-member agent-kind-" + (node.kind || "cloud");
+    const head = document.createElement("div");
+    head.className = "think-member-head";
+    const nameTag = document.createElement("span");
+    nameTag.className = "think-member-name";
+    nameTag.textContent = "@" + node.name;
+    const kindTag = document.createElement("span");
+    const kindLabel = node.kind === "cloud" ? "云端" : node.kind === "ssh" ? "SSH" : "本机";
+    kindTag.className = "think-member-kind";
+    kindTag.textContent = kindLabel;
+    head.append(nameTag, kindTag);
+    section.append(head);
+    if (node.kind !== "cloud") {
+      const note = document.createElement("div");
+      note.className = "think-member-note";
+      note.textContent = "挡位由实例引擎/工作模式决定，群内不单独注入";
+      section.append(note);
+      return section;
+    }
+    const model = node.cloud?.model || "";
+    const modelTag = document.createElement("div");
+    modelTag.className = "think-member-model";
+    modelTag.textContent = model || "（未设置模型）";
+    section.append(modelTag);
+    let profile = null;
+    try { profile = (await window.agentChatPro.getThinkingProfile({ provider: node.cloud?.provider, model })).profile; } catch {}
+    if (!profile || !Array.isArray(profile.levels) || !profile.levels.length) {
+      const note = document.createElement("div");
+      note.className = "think-member-note";
+      note.textContent = "该模型不支持思考调节";
+      section.append(note);
+      return section;
+    }
+    const levels = profile.levels;
+    const slider = document.createElement("input");
+    slider.type = "range";
+    slider.className = "think-slider think-group-slider";
+    slider.min = "0"; slider.max = String(levels.length - 1); slider.step = "1"; slider.value = "0";
+    const wrap = document.createElement("div"); // 轨道渐变变量的消费者（renderSliderTheme 写 slider.parentElement 的 --fill/--eco）
+    wrap.className = "think-track-wrap";
+    const ticksRow = document.createElement("div");
+    ticksRow.className = "think-ticks";
+    const labelsRow = document.createElement("div");
+    labelsRow.className = "think-levels";
+    const costRow = document.createElement("div");
+    costRow.className = "think-member-cost";
+    const applyIndex = (index) => {
+      const active = levels[index] || levels[0];
+      costRow.textContent = active?.cost != null ? `预计消耗倍数 ×${active.cost}` : "预计消耗倍数 ×1";
+      costRow.title = "估算值：该挡位相对「无思考注入」请求的 token 消耗倍率（真实计费依服务商账单）";
+    };
+    const defaultIdx = Math.max(0, levels.findIndex((level) => level.id === node.thinkingLevel));
+    slider.value = String(defaultIdx < 0 ? 0 : defaultIdx);
+    renderSliderTheme(slider, levels);
+    renderTrackMarks(ticksRow, labelsRow, levels, Number(slider.value));
+    applyIndex(Number(slider.value));
+    slider.addEventListener("input", () => { renderSliderTheme(slider, levels); syncMarkActive(ticksRow, labelsRow, Number(slider.value)); applyIndex(Number(slider.value)); });
+    slider.addEventListener("change", async () => {
+      const level = levels[Number(slider.value)] || levels[0];
+      try { await window.agentChatPro.updateAgentPoolNode(node.id, { thinkingLevel: level.id || "" }); } catch { /* 存档失败静默（挡位重读=池存档） */ }
+    });
+    wrap.append(slider, ticksRow);
+    section.append(wrap, labelsRow, costRow);
+    return section;
+  };
+  const renderGroupThinkPanel = async (stamp) => {
+    const trackWrap = document.querySelector(".think-track-wrap");
+    const resetBtn = document.querySelector("#think-reset");
+    const groupRows = document.querySelector("#think-group-rows");
+    levelsRow.replaceChildren();
+    meta.innerHTML = "";
+    if (trackWrap) trackWrap.hidden = true;
+    levelsRow.hidden = true;
+    meta.hidden = true;
+    if (resetBtn) resetBtn.hidden = true;
+    if (!groupRows) { modelEl.textContent = "群聊"; return; }
+    groupRows.hidden = false;
+    groupRows.replaceChildren();
+    modelEl.textContent = `群聊 · ${groupRosterAgents.length} 位成员（各挡位独立）`;
+    if (stamp !== thinkModelStamp) return; // 面板已重建 → 作废（非群切换竞态）
+    for (const node of groupRosterAgents) {
+      const section = await buildGroupMemberThinkRow(node);
+      if (stamp !== thinkModelStamp) return;
+      groupRows.append(section);
+    }
+  };
+
   const buildSlider = async () => {
     const stamp = ++thinkModelStamp; // v3.24.3：面板重建计数（作废旧型号异步回包）
+    // v3.35.7 群聊分支：成员堆叠面板（群工作区绑定了工作组的对话）——不叠建群设置滑条，挡位进群聊面板独立调
+    if (groupActiveConversationId && groupRosterAgents.length) {
+      await renderGroupThinkPanel(stamp);
+      return;
+    }
+    // 非群（单聊）：静态骨架复位（群模式残留在面板里的 hidden 状态还原）
+    const groupRows = document.querySelector("#think-group-rows");
+    if (groupRows) { groupRows.hidden = true; groupRows.replaceChildren(); }
+    const trackWrapEl = document.querySelector(".think-track-wrap");
+    if (trackWrapEl) trackWrapEl.hidden = false;
+    levelsRow.hidden = false;
+    meta.hidden = false;
     levelsRow.replaceChildren();
     meta.innerHTML = "";
     const resetBtnEl = document.querySelector("#think-reset");
@@ -5522,37 +5626,19 @@ async function openGroupSetup() {
     document.querySelector("#group-setup-close").addEventListener("click", () => dialog.close());
     dialog.addEventListener("click", (event) => { if (event.target === dialog) dialog.close(); });
     // 三个添加块
-    const saveThinkingSlider = (levels) => {
-      // 模块二（独立思考挡位滑条）：该节点自身专属挡位行——每个云端节点独立一条滑条，绝不共用
-      const index = Number(document.querySelector("#pool-cloud-thinking").value || 0);
-      const level = levels[Math.min(index, levels.length - 1)];
-      document.querySelector("#pool-cloud-thinking-label").textContent = level?.label || level?.id || "默认";
-      return level?.id || "";
-    };
-    const cloudSlider = document.querySelector("#pool-cloud-thinking");
-    cloudSlider.addEventListener("input", () => {
-      const provider = document.querySelector("#pool-cloud-provider").value;
-      const model = document.querySelector("#pool-cloud-model").value || "";
-      window.agentChatPro.getThinkingProfile({ provider, model }).then(({ profile }) => {
-        const levels = profile?.levels || [];
-        saveThinkingSlider(levels.length ? levels : [{ id: "off", label: "关" }]);
-        cloudSlider.max = String(Math.max(0, levels.length - 1));
-      }).catch(() => {});
-    });
+    // v3.35.7（用户令）：建群对话框不再放思考挡位滑条——思考程度统一在群聊输入栏的
+    // 思考面板里按成员叠加调（每成员一节+预计消耗倍数）；池节点保存时不带挡位（留池默认）
     document.querySelector("#pool-cloud-save").addEventListener("click", async () => {
       const status = document.querySelector("#group-setup-status");
       const provider = document.querySelector("#pool-cloud-provider").value;
       const model = document.querySelector("#pool-cloud-model").value.trim();
       try {
-        const { profile } = await window.agentChatPro.getThinkingProfile({ provider, model });
-        const levels = profile?.levels || [];
         await window.agentChatPro.addAgentPoolCloud({
           name: document.querySelector("#pool-cloud-name").value,
           provider,
           apiKey: document.querySelector("#pool-cloud-key").value,
           model,
-          baseURL: document.querySelector("#pool-cloud-baseurl").value,
-          thinkingLevel: levels.length ? saveThinkingSlider(levels) : ""
+          baseURL: document.querySelector("#pool-cloud-baseurl").value
         });
         status.textContent = "云端节点已入池。";
         ["#pool-cloud-name", "#pool-cloud-key", "#pool-cloud-model", "#pool-cloud-baseurl"].forEach((sel) => { document.querySelector(sel).value = ""; });
@@ -5647,40 +5733,14 @@ function renderPoolNodeRow(node) {
   });
   head.append(badge, name, meta, remove);
   row.append(head);
-  // 模块二：云端节点的独立思考挡位滑条（每节点独立，绝不共用滑块）
-  if (node.kind === "cloud") {
-    const sliderRow = document.createElement("div");
-    sliderRow.className = "pool-thinking-row";
-    const label = document.createElement("label");
-    label.textContent = "思考挡位（独立）";
-    const slider = document.createElement("input");
-    slider.type = "range";
-    slider.min = "0";
-    slider.step = "1";
-    slider.value = "0";
-    const show = document.createElement("span");
-    show.className = "pool-thinking-label";
-    const applyLevels = (levels) => {
-      slider.max = String(Math.max(0, levels.length - 1));
-      const index = Math.max(0, levels.findIndex((level) => level.id === node.thinkingLevel));
-      slider.value = String(index < 0 ? 0 : index);
-      show.textContent = levels[index]?.label || levels[0]?.label || "关";
-    };
-    window.agentChatPro.getThinkingProfile({ provider: node.cloud?.provider, model: node.cloud?.model || "" })
-      .then(({ profile }) => applyLevels(profile?.levels || [{ id: "off", label: "关" }]))
-      .catch(() => applyLevels([{ id: "off", label: "关" }]));
-    let savedLevels = null;
-    slider.addEventListener("input", async () => {
-      if (!savedLevels) { savedLevels = [{ id: "off", label: "关" }]; }
-      const level = savedLevels[Number(slider.value)] || { id: "off" };
-      show.textContent = level.label || level.id;
-      try { await window.agentChatPro.updateAgentPoolNode(node.id, { thinkingLevel: level.id }); } catch { /* 存档失败静默 */ }
-    });
-    window.agentChatPro.getThinkingProfile({ provider: node.cloud?.provider, model: node.cloud?.model || "" })
-      .then(({ profile }) => { if (profile?.levels) savedLevels = profile.levels; })
-      .catch(() => {});
-    sliderRow.append(label, slider, show);
-    row.append(sliderRow);
+  // v3.35.7（用户令）：建群对话框不再给节点行放思考滑条——只读小字显示当前挡位；
+  // 挡位调整统一在群聊输入栏思考面板里按成员叠加调（群聊设置里不出现思考程度）
+  if (node.kind === "cloud" && node.thinkingLevel) {
+    const levelTag = document.createElement("span");
+    levelTag.className = "pool-node-level";
+    levelTag.textContent = `思考:${node.thinkingLevel}`;
+    levelTag.title = "挡位在群聊输入栏的思考面板里调整（每成员独立）";
+    head.append(levelTag);
   }
   return row;
 }

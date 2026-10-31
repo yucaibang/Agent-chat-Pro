@@ -1,6 +1,6 @@
 {
   "name": "agent-chat-pro",
-  "version": "3.35.6",
+  "version": "3.35.7",
   "license": "UNLICENSED",
   "private": true,
   "description": "Agent Chat Pro — 三模式 AI 聊天客户端（SSH远程/云端AI/本机多引擎）",

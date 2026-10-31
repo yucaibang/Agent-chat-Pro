@@ -143,8 +143,34 @@ function normalizeProvider(provider) {
   return String(provider || "").trim().toLowerCase();
 }
 
+/**
+ * v3.35.7 群聊思考面板「预计消耗倍数」表（用户需求：群内成员档位叠在输入栏面板里、
+ * 每节下方显示预计消耗倍数）。口径：相对「无思考注入」请求的 token 总消耗倍率估算
+ * （思考 token 演进档位成本单调上升；off/on/开 关系型挡位=不注入基准 ×1）。
+ * 纯 UI 展示值，不参与注入/计费（真实计费依服务商账单）。
+ */
+const LEVEL_COST = {
+  off: 1, on: 1, none: 1, dynamic: 1, eco: 1,           // 不注入/开关类 = 基准倍数
+  minimal: 1.1,
+  low: 1.6,
+  medium: 2.5,
+  high: 4,
+  xhigh: 6,
+  ultra: 8,
+  max: 10
+};
+
+/** 挡位集出口统一盖 cost 章（群聊面板按 cost 渲染「预计消耗倍数 ×N」） */
+function withCost(levels) {
+  return (Array.isArray(levels) ? levels : []).map((l) => ({ ...l, cost: l.cost ?? LEVEL_COST[l.id] ?? 1 }));
+}
+
 /** 挡位集构造（集中定义便于单测断言「挡位随模型各异」） */
 function levelsOf(kind, extra) {
+  return withCost(levelsRaw(kind, extra));
+}
+
+function levelsRaw(kind, extra) {
   switch (kind) {
     case "anthropic":
       return [

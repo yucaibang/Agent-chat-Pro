@@ -3,10 +3,11 @@
  * test-v3-35-6.cjs — 多 AI 对话（工作）· 阶段 A：工作区切换器 + 历史物理隔离
  *
  * 规格来源（2026-10-31 用户令「现在加个大功能：多AI对话（工作）」）：
- *   大功能整包按分支 feature/multi-agent-workgroup 分阶段实施，整包映射 v3.26/v3.27/v3.28：
- *   v3.35.6 = 工作区切换器 + 模块一（Agent 池 & 建群）+ 模块二（独立精神）+ 模块三基础（@路由/广播）
- *   v3.27.0 = 自主讨论 + 紧急停止 + max_turns 红线
- *   v3.28.0 = Sub-Agent 包工头体系（spawn/换脑/额度熔断）+ 错误瘦身/生命周期释放红线
+ *   大功能整包（原分期规划 v3.26/v3.27/v3.28 已并包；2026-10-31 用户拍板重编制为 v3.35.6：
+ *   「多 AI 对话（工作）」大功能配大版本跳 v3.25.6 → v3.35.6）
+ *   v3.35.6 = 工作区切换器 + 模块一（Agent 池 & 建群）+ 模块二（独立精神）+ 模块三 + 模块四（Sub-Agent）+ 红线①-⑤
+ *   v3.35.7 = 群聊思考面板重构：建群对话框滑条移除（用户令：群聊设置不放思考程度）；
+ *             挡位统一进群聊输入栏面板（群里多少个 AI 就按各自模型档位一节一节往上叠+每节预计消耗倍数）
  * 本文件随阶段推进追加；阶段 A 覆盖「UI 重构需求：工作区切换器」全部技术约束。
  * 阶段 B/C/D（2026-10-31 用户令「现在直接全部干完」）：模块一-四全量 + 底层红线①-⑤，
  * v3.35.6 整包口径（工作区切换器 + Agent 池建群 + 独立思考 + 群聊链路 + Sub-Agent）。
@@ -225,12 +226,16 @@ async function runStaticTests() {
     assert.ok(rendererSrc.includes("appendMentionsToIds"), "@点名解析在册");
     assert.ok(rendererSrc.includes("groupActiveConversationId === conversationId"), "群对话判定在册");
   });
-  await test("5.6 建群对话框与独立思考挡位滑条（模块一+二）", () => {
+  await test("5.6 建群对话框（模块一；v3.35.7 修订：群设置不放思考滑条，挡位统一进群聊面板）", () => {
     assert.ok(indexHtmlSrc.includes('id="group-setup-dialog"'), "建群对话框在册");
-    assert.ok(indexHtmlSrc.includes('id="pool-cloud-thinking"'), "云端节点独立滑条在册");
-    assert.ok(indexHtmlSrc.includes("绝不与他节点共用滑条"), "独立滑条契约文案在册");
-    assert.ok(rendererSrc.includes("renderPoolNodeRow") && rendererSrc.includes("updateAgentPoolNode(node.id, { thinkingLevel:"), "节点挡位独立落档");
-    assert.ok(stylesSrc.includes(".group-setup-dialog") && stylesSrc.includes(".group-stop-button"), "群样式在册（主题变量化）");
+    assert.ok(!indexHtmlSrc.includes('id="pool-cloud-thinking"'), "群设置思考滑条已移除（用户令：群聊设置不该出现思考程度）");
+    assert.ok(indexHtmlSrc.includes('id="think-group-rows"') && indexHtmlSrc.includes("think-group-rows\" hidden"), "群聊思考面板成员容器在册");
+    assert.ok(rendererSrc.includes("renderGroupThinkPanel") && rendererSrc.includes("buildGroupMemberThinkRow"), "成员堆叠节渲染在册（一节一节往上叠）");
+    assert.ok(rendererSrc.includes("think-group-slider") && rendererSrc.includes("renderTrackMarks(ticksRow, labelsRow, levels"), "成员独立滑条复用刻度渲染在册");
+    assert.ok(rendererSrc.includes("预计消耗倍数 ×"), "预计消耗倍数文案在册");
+    assert.ok(!rendererSrc.includes("pool-thinking-row"), "建群池行滑条段已移除（v3.35.7 思考挡位统一进群聊输入栏面板）");
+    assert.ok(rendererSrc.includes("buildGroupMemberThinkRow") && rendererSrc.includes('updateAgentPoolNode(node.id, { thinkingLevel: level.id || "" })'), "成员挡位落池渠道在册（群面板=唯一调挡位入口）");
+    assert.ok(stylesSrc.includes(".group-setup-dialog") && stylesSrc.includes(".think-group-member"), "群样式+群思考节样式在册");
   });
   await test("5.7 群对话守卫：绑群对话拒绝普通单聊（防两套引擎互踩）", () => {
     assert.ok(mainSrc.includes("该对话是多 AI 群聊对话"), "chat:send 群守卫在册");
@@ -554,11 +559,32 @@ async function runWorkgroupChatTests() {
   });
 }
 
+async function runThinkingCostTests() {
+  // v3.35.7 档位预计消耗倍数：thinking-levels.cjs levelsOf 出口统一盖 cost 章（纯 UI 估算值，不参与注入）
+  const levels = require(path.join(ROOT, "src", "main", "thinking-levels.cjs"));
+  await test("D-1 每档位带 cost（预计消耗倍数）：off=×1/低=×1.6/中=×2.5/高=×4", () => {
+    const p = levels.resolveThinkingProfile("deepseek", "deepseek-chat");
+    assert.ok(Array.isArray(p.levels) && p.levels.length >= 3, "deepseek 档位非空");
+    for (const level of p.levels) assert.ok(typeof level.cost === "number" && level.cost >= 1, `挡位 ${level.id} 带 cost`);
+    assert.strictEqual(p.levels.find((l) => l.id === "high").cost, 4, "高挡=×4");
+  });
+  await test("D-2 档位随模型各异且 cost 表覆盖（GLM5 七挡 Max=×10；doubao 开关=×1）", () => {
+    const glm5 = levels.resolveThinkingProfile("zhipu", "glm-5-plus");
+    const maxL = glm5.levels.find((l) => l.id === "max");
+    assert.ok(glm5.levels.length >= 6, "GLM5 多挡");
+    assert.strictEqual(maxL.cost, 10, "Max=×10");
+    const doubao = levels.resolveThinkingProfile("doubao", "doubao-pro");
+    assert.ok(doubao.levels.every((l) => l.cost === 1), "开关类=基准 ×1");
+  });
+}
+
+
 (async () => {
-  console.log("test-v3-35-6 — 多 AI 对话（工作）：工作区切换器 + Agent 池/建群 + 群聊链路 + Sub-Agent（全量）");
+  console.log("test-v3-35-6 — 多 AI 对话（工作）全量 + v3.35.7 群聊思考面板（成员堆叠+预计消耗倍数）");
   await runConversationTests();
   await runAgentPoolTests();
   await runWorkgroupChatTests();
+  await runThinkingCostTests();
   await runStaticTests();
   console.log(`\n=== 结果：${passCount} 通过 / ${failCount} 失败 ===`);
   process.exit(failCount ? 1 : 0);

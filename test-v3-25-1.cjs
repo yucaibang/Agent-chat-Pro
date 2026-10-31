@@ -543,8 +543,11 @@ async function runVersionTests() {
     assert.ok(rendererSrc.includes("meta.innerHTML = \"\";"), "「当前挡位」行已删（用户令简洁化）");
   });
 
-  await test("D1 package.json 版本 3.25.6", () => {
-    assert.strictEqual(pkg.version, "3.25.6", "版本号 = 3.25.6（半圆直径 24px 拉宽版）");
+  await test("D1 package.json 版本与 README badge 同步（≥3.35.x 多 AI 重编制线；v3.35.7 起语义化免随 bump 手改）", () => {
+    assert.ok(/^3\.\d+\.\d+$/.test(String(pkg.version)), "版本号 3.x 合法格式");
+    assert.ok(Number(String(pkg.version).split(".")[1]) >= 35, "版本 ≥3.35.x（重编制线以上）");
+    const badge = fs.readFileSync(path.join(ROOT, "README.md"), "utf8");
+    assert.ok(badge.includes(`version-${pkg.version}-blue`), "README badge 与 package.json 版本一致");
   });
   await test("D2 README badge 同步", () => {
     assert.ok(rendererSrc.includes("v3.25.6（用户令"), "renderer.js v3.25.6 注释在册");
