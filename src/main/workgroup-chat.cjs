@@ -115,7 +115,10 @@ function groupSystemPrompt(groupName, rosterNames, selfName, modeSystemPrompt, e
 async function runCloudMemberTurn(ctx, agent, input, group, rosterNames) {
   const requestId = input.requestId;
   const conversation = await ctx.deps.getConversation(input.conversationId);
-  const modeConfig = input.workModeId ? await ctx.deps.getMode(input.workModeId).catch(() => null) : null;
+  // 修复：getMode 是同步函数（mode-manager 同步形态），返回对象没有 .catch——原 `.catch(() => null)` 写法
+  // 对 workModeId 非空的群发恒炸 TypeError 且炸点在 try 外→被 startCloud 兜底静默吞掉（云端成员「没响应」无迹可查的根因）。
+  // 对齐单聊 main.cjs 的双保险形态（async IIFE + try/catch），同步 throw 与异步 reject 都兜成 null。
+  const modeConfig = input.workModeId ? await (async () => { try { return await ctx.deps.getMode(input.workModeId); } catch { return null; } })() : null;
   // v3.37.0 群成员「各自干活」：工具组随 globalCloud 开关（toolsEnabled+非沙箱+有工作目录才注入），真实环境段随系统提示
   const toolsInfo = typeof ctx.deps.groupTools === "function" ? ctx.deps.groupTools() : { enabled: false, allowCommand: false, workdir: "", environmentText: "" };
   const systemPrompt = groupSystemPrompt(group.name, rosterNames, agent.name, appendPlanConvention(modeConfig?.systemPrompt || ""), toolsInfo.environmentText || "");
@@ -632,7 +635,15 @@ async function runGroupTurn(deps, input) {
     const requestId = `g-${randomUUID()}`;
     turns.push({ requestId, agentId: agent.agentId, name: agent.name, kind: "cloud" });
     const promise = runCloudMemberTurn(ctx, agent, { ...input, requestId }, group, rosterNames).catch((error) => {
-      // 引擎层兜底：轮 Promise 永不 reject（渲染层悬等只关心终态）
+      // 引擎层兜底：轮 Promise 永不 reject（渲染层悬等只关心终态）；
+      // 补漏：兜底收「try 外前置步骤炸 / 内部 catch 自身再炸」——原形态纯静默吞掉（零落库零事件，用户感知=「没响应」且无迹可查）。
+      // 补 emit + 失败落库（对齐内部 catch 形态）；副作用再包一层，保证兜底自身永不二次 reject
+      try {
+        const slim = slimError(error);
+        ctx.emit(requestId, { type: "group-agent-failed", agent: { id: agent.agentId, name: agent.name, kind: "cloud" }, error: slim });
+        ctx.deps.addAssistantMessage(input.conversationId, `（@${agent.name} 本轮失败：${slim.code} ${slim.message}）`, "", [], [], requestId, "cloud",
+          undefined, undefined, undefined, undefined, undefined, "", { agentId: agent.agentId, name: agent.name });
+      } catch { /* 落库/事件失败不反杀兜底 */ }
       return { requestId, agentId: agent.agentId, name: agent.name, kind: "cloud", failed: true, error: slimError(error), text: "" };
     });
     groupTurns.set(requestId, { promise, conversationId: input.conversationId, agentId: agent.agentId });
@@ -642,6 +653,14 @@ async function runGroupTurn(deps, input) {
     const requestId = `g-${randomUUID()}`;
     turns.push({ requestId, agentId: agent.agentId, name: agent.name, kind: agent.kind });
     const promise = runRunnerMemberTurn(ctx, agent, { ...input, requestId }, group).catch((error) => {
+      // 引擎层兜底（同云端成员兜底补漏）：emit + 失败落库（对齐内部 catch 的 kind 口径），副作用再包一层防二次 reject
+      try {
+        const slim = slimError(error);
+        ctx.emit(requestId, { type: "group-agent-failed", agent: { id: agent.agentId, name: agent.name, kind: agent.kind }, error: slim });
+        ctx.deps.addAssistantMessage(input.conversationId, `（@${agent.name} 本轮失败：${slim.code} ${slim.message}）`, "", [], [], requestId,
+          agent.kind === "local" ? "local" : "ssh", undefined, undefined, undefined, agent.kind === "ssh" ? agent.profileId : "", agent.adapter || "claude",
+          "", { agentId: agent.agentId, name: agent.name });
+      } catch { /* 落库/事件失败不反杀兜底 */ }
       return { requestId, agentId: agent.agentId, name: agent.name, kind: agent.kind, failed: true, error: slimError(error), text: "" };
     });
     groupTurns.set(requestId, { promise, conversationId: input.conversationId, agentId: agent.agentId });
