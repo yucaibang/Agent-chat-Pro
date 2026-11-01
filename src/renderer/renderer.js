@@ -2012,6 +2012,13 @@ async function sendGroupTurn() {
   const text = prompt.value.trim();
   if (!groupActiveConversationId) return false;
   if (!text) return false;
+  // v3.37.2 群发忙闸：本对话仍有群轮进行中时拦截（双群轮并发=云成员上下文互踩/SSH 卡槽互踩）
+  for (const live of groupTurnsLive.values()) {
+    if (live.conversationId === groupActiveConversationId) {
+      setConnection("群聊正在进行中，请点红色停止按钮或等本轮结束后再发", "connected");
+      return true; // 群已接管本次提交（不再落入单聊路）
+    }
+  }
   prompt.value = "";
   adjustTextarea();
   renderAttachments(); // 清空当前输入附件（群发送暂不支持附件——CLI 成员暂不接附件）

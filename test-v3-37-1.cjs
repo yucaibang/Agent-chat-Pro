@@ -120,8 +120,8 @@ async function main() {
 
   console.log("\n=== C. 版本号 ===");
 
-  await test("C1 package.json version = 3.37.1", () => {
-    assert.strictEqual(pkg.version, "3.37.1");
+  await test("C1 版本锚 ≥3.37（37 线起，语义化不随 patch 手改）", () => {
+    assert.ok(/^3\./.test(pkg.version) && Number(pkg.version.split(".")[1]) >= 37, `版本锚 ≥3.37（实际 ${pkg.version}）`);
   });
 
   // Z. 零 unhandledRejection 兜底（装置污染检测）

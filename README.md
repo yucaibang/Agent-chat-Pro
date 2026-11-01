@@ -4,9 +4,9 @@
 
 一个面向 Windows 桌面的 Electron 应用：把「连着云上的 AI 服务商」「SSH 到远端机器跑 Claude Code」「本机跑 Claude Code」三种工作方式装进同一个界面，并围绕它长出了一整套周边——云办公沙箱、N2N 虚拟专网体检与一键部署、设备联动、开发面板、防破解构建管线等。
 
-[![Version](https://img.shields.io/badge/version-3.37.1-blue.svg)]()
+[![Version](https://img.shields.io/badge/version-3.37.2-blue.svg)]()
 [![Platform](https://img.shields.io/badge/platform-Windows-green.svg)]()
-[![Tests](https://img.shields.io/badge/tests-44%20files%20green-brightgreen.svg)]()
+[![Tests](https://img.shields.io/badge/tests-46%20files%20green-brightgreen.svg)]()
 
 ---
 
@@ -86,7 +86,7 @@
 
 ```bash
 npm install
-for f in test-v3-*.cjs; do node "$f" || exit 1; done   # 全量回归（36 个测试文件；另有 9 个专项 test-*.cjs/.mjs）
+for f in test-v3-*.cjs; do node "$f" || exit 1; done   # 全量回归（37 个测试文件；另有 9 个专项 test-*.cjs/.mjs）
 npm run build:win:nsis # 构建 Windows NSIS 安装包
 node scripts/build-pipeline.cjs bridge   # Bridge Edition（阉割版产物线）
 ```

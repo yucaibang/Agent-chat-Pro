@@ -142,6 +142,7 @@ async function runCloudMemberTurn(ctx, agent, input, group, rosterNames) {
   const usageTotal = { prompt: 0, completion: 0, total: 0, requests: 0 };
   let draftTimer = null;
   const persistDraft = () => {
+    draftTimer = null; // v3.37.2 对齐单聊口径：草稿落一次后允许下一批 delta 重新排程（不修则中间草稿停在首个 1s 时点）
     try { ctx.deps.saveAssistantDraft(input.conversationId, requestId, streamedText); } catch (error) { ctx.log("group_draft_save_failed", { requestId, error: error.message }); }
   };
   const callbacks = {
@@ -171,6 +172,8 @@ async function runCloudMemberTurn(ctx, agent, input, group, rosterNames) {
     let result = null;
     let loopMessages = cloudMessages;
     for (let round = 0; round <= 10; round += 1) {
+      // v3.37.2 红线三补强：轮间断点查停止旗（紧急停止后不再开新轮；悬等中停止由 stopGroupTurns cancelAll 收口）
+      if (stoppedConversations.has(input.conversationId)) break;
       if (round > 0) ctx.emit(requestId, { type: "round", round });
       const promise = sendCloudChat(config, loopMessages, callbacks);
       if (entry) { entry.promise = promise; entry.cancel = () => { promise.cancel?.(); }; }
@@ -263,6 +266,15 @@ async function runCloudMemberTurn(ctx, agent, input, group, rosterNames) {
   } catch (error) {
     if (draftTimer) { clearTimeout(draftTimer); draftTimer = null; }
     persistDraft();
+    // v3.37.2：紧急停止经 ask_user 收口（cancelAll → answer=STOPPED → 此处 throw）——按「停止」而非「失败」收口，
+    // 不标 group-agent-failed（用户主动停，成员不背失败锅）；已流到的文本照常落库
+    if (/用户已停止/.test(String((error && error.message) || error || ""))) {
+      const cancelledText = streamedText || "已停止。";
+      ctx.deps.addAssistantMessage(input.conversationId, cancelledText, "", [], [], requestId, "cloud",
+        usageTotal.requests ? slimUsage(usageTotal) : undefined, undefined, undefined, undefined, undefined,
+        streamedReasoning, { agentId: agent.agentId, name: agent.name });
+      return { requestId, agentId: agent.agentId, name: agent.name, kind: "cloud", cancelled: true, text: cancelledText };
+    }
     const slim = slimError(error);
     ctx.emit(requestId, { type: "group-agent-failed", agent: { id: agent.agentId, name: agent.name, kind: "cloud" }, error: slim });
     ctx.deps.addAssistantMessage(input.conversationId, `（@${agent.name} 本轮失败：${slim.code} ${slim.message}）`, "", [], [], requestId, "cloud",
@@ -306,6 +318,7 @@ function runnerCallbacks(ctx, agent, input) {
   let latestSessionId = ctx.deps.agentSessionFor(getConversation(input.conversationId), agent.agentId);
   let draftTimer = null;
   const persistDraft = () => {
+    draftTimer = null; // v3.37.2 对齐单聊口径：允许下一批 delta 重新排程草稿
     try { ctx.deps.saveAssistantDraft(input.conversationId, input.requestId, streamedText); } catch { /* 忽略草稿失败 */ }
   };
   return {
@@ -596,6 +609,9 @@ function routeMembers(agents, mentionedIds = []) {
 async function runGroupTurn(deps, input) {
   const { group, agents } = pool.resolveGroupAgents(input.workgroupId);
   if (!agents.length) throw new Error("工作组没有可用成员（节点可能已被删除）。");
+  // v3.37.2：入口清停止旗——上一轮收口后按下的停止（旗无主残留）不得掐断本轮 SSH/本地成员；
+  // 进行中的轮靠忙闸（chat:group-send 活跃条目检查）根本进不来，故此清不与「进行中停止」冲突
+  stoppedConversations.delete(input.conversationId);
   const ctx = {
     deps,
     log: deps.log,
@@ -664,22 +680,28 @@ async function runGroupTurn(deps, input) {
 /** 紧急停止（大红按钮）：全员 stop——activeRequests 逐个 cancel + 置停止旗掐断接力链 */
 function stopGroupTurns(activeRequests, conversationId, askUserRegistry = null) {
   stoppedConversations.add(String(conversationId || ""));
-  // 子 Agent 换脑/熔断的选择卡悬等一并收口（用户停止=如实回填 __stopped__）
-  for (const [callId, entry] of new Map(pendingAsks).entries()) {
-    if (entry.conversationId !== conversationId) continue;
-    pendingAsks.delete(callId);
-    try { askUserRegistry?.cancelAll(entry.requestId); } catch { /* registry 缺失时跳过 */ }
-    void callId;
-  }
   let count = 0;
+  // v3.37.2：群成员工具循环里的 ask_user 悬等一并收口（对齐单聊 chat:cancel 的 cancelAll(id) 语义）——
+  // 原来只收 pendingAsks（子 Agent 换脑/熔断卡），成员正问用户时按停止 = 该轮挂到 480s 超时后还继续跑剩余轮
   for (const [requestId, turnEntry] of new Map(activeRequests).entries()) {
     if (turnEntry.conversationId !== conversationId) continue;
+    try { askUserRegistry?.cancelAll(requestId); } catch { /* registry 缺失时跳过 */ }
     try {
       if (turnEntry.operation?.cancel) turnEntry.operation.cancel();
       else if (turnEntry.cancel) turnEntry.cancel();
       else if (turnEntry.promise?.cancel) turnEntry.promise.cancel();
     } catch { /* 已结束的忽略 */ }
     count += 1;
+  }
+  // 子 Agent 换脑/熔断的选择卡悬等一并收口（用户停止=如实回填 __stopped__；先收集后删除防迭代期改 Map）
+  const staleAskIds = [];
+  for (const [callId, entry] of pendingAsks.entries()) {
+    if (entry.conversationId === conversationId) staleAskIds.push(callId);
+  }
+  for (const staleAskId of staleAskIds) {
+    const entry = pendingAsks.get(staleAskId);
+    pendingAsks.delete(staleAskId);
+    try { askUserRegistry?.cancelAll(entry.requestId); } catch { /* registry 缺失时跳过 */ }
   }
   return count;
 }

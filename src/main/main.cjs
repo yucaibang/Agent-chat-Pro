@@ -1830,6 +1830,13 @@ app.whenReady().then(async () => {
     if (!workgroupId) throw new Error("该对话未绑定工作组，请先建群。");
     if (!message) throw new Error("请输入消息。");
     if (!getConversation(conversationId)) throw new Error("找不到对话，请新建后重试。");
+    // v3.37.2 群发忙闸：该对话仍有进行中群轮时拒绝（渲染层闸兜底主闸）——
+    // 原来无闸：群发进行中再群发=双群轮并发（云成员上下文互踩、SSH 卡槽 profile 切换互踩、消息双份落库）
+    for (const entry of activeRequests.values()) {
+      if (entry && entry.conversationId === conversationId) {
+        throw new Error("群聊正在进行中（有成员仍在工作）。请点红色停止按钮结束本轮，或等本轮结束后再发。");
+      }
+    }
     writeLog("group_send_start", {
       conversationId, workgroupId, textLength: message.length,
       mentioned: Array.isArray(input.mentionedAgentIds) ? input.mentionedAgentIds.length : 0,
