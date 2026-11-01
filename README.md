@@ -6,7 +6,7 @@
 
 [![Version](https://img.shields.io/badge/version-3.37.1-blue.svg)]()
 [![Platform](https://img.shields.io/badge/platform-Windows-green.svg)]()
-[![Tests](https://img.shields.io/badge/tests-34%20files%20green-brightgreen.svg)]()
+[![Tests](https://img.shields.io/badge/tests-44%20files%20green-brightgreen.svg)]()
 
 ---
 
@@ -86,7 +86,7 @@
 
 ```bash
 npm install
-for f in test-v3-*.cjs; do node "$f" || exit 1; done   # 全量回归（34 个测试文件；另有 9 个专项 test-*.cjs/.mjs）
+for f in test-v3-*.cjs; do node "$f" || exit 1; done   # 全量回归（36 个测试文件；另有 9 个专项 test-*.cjs/.mjs）
 npm run build:win:nsis # 构建 Windows NSIS 安装包
 node scripts/build-pipeline.cjs bridge   # Bridge Edition（阉割版产物线）
 ```
