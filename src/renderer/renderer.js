@@ -26,6 +26,9 @@ const elements = {
 let sessionId = "";
 let activeId = "";
 let conversationId = "";
+// v3.41.0 任务完成系统通知：当前显示会话标题（loadConversation/refreshConversationList 单点维护），
+// 供通知标题使用；发送时另做快照防「切走后收尾标错会话名」
+let conversationTitle = "";
 let attachments = [];
 let conversationCache = [];
 let automaticTools = false;
@@ -116,6 +119,8 @@ function settingsFromForm() {
     dataDirectory: data.get("dataDirectory"),
     skipPermissions: data.get("skipPermissions") === "on",
     showSignalLights: data.get("showSignalLights") === "on",
+    // v3.41.0：任务完成系统通知开关（默认开）
+    taskCompleteNotifications: data.get("taskCompleteNotifications") === "on",
     workModeId: currentModeId,
     networkType: document.querySelector("#network-type").value,
     externalMethod: document.querySelector("#external-method").value,
@@ -157,6 +162,8 @@ function populateSettings(settings) {
   }
   elements.form.elements.namedItem("skipPermissions").checked = Boolean(settings.skipPermissions);
   elements.form.elements.namedItem("showSignalLights").checked = settings.showSignalLights !== false;
+  // v3.41.0：任务完成系统通知开关回填（默认开）
+  elements.form.elements.namedItem("taskCompleteNotifications").checked = settings.taskCompleteNotifications !== false;
   document.body.classList.toggle("signal-lights-hidden", settings.showSignalLights === false);
   elements.form.elements.namedItem("connectionMode").value = settings.connectionMode || "ssh";
   currentConnectionMode = settings.connectionMode === "local" ? "local" : settings.connectionMode === "cloud" ? "cloud" : "ssh";
@@ -1629,6 +1636,7 @@ async function refreshConversationList() {
     elements.historyCount.textContent = `${results.length} 条结果`;
     elements.conversationList.replaceChildren();
     results.forEach((conv) => {
+      if (conv.id === conversationId) conversationTitle = conv.title; // v3.41.0：当前会话改名/标题随列表刷新同步
       const row = document.createElement("div");
       row.className = "conversation-row" + (conv.id === conversationId ? " active" : "");
       const button = document.createElement("button");
@@ -1674,6 +1682,7 @@ async function refreshConversationList() {
     elements.historyCount.textContent = String(conversationCache.length);
     elements.conversationList.replaceChildren();
     conversationCache.forEach((conversation) => {
+      if (conversation.id === conversationId) conversationTitle = conversation.title; // v3.41.0：同上（改名后无需切出重进）
       const row = document.createElement("div");
       row.className = "conversation-row" + (conversation.id === conversationId ? " active" : "");
       const button = document.createElement("button");
@@ -1777,6 +1786,7 @@ async function loadConversation(id) {
     } catch {}
   }
   conversationId = conversation.id;
+  conversationTitle = conversation.title || ""; // v3.41.0：通知标题用会话名
   sessionId = conversation.sessionId || "";
   // v3.35.6 群聊：该对话绑定工作组 → 群聊布局（成员名牌条 + 群工具栏：自主讨论开关 / 大红停止）
   applyGroupLayout(conversation);
@@ -2060,11 +2070,25 @@ async function sendGroupTurn() {
     });
     (result.turns || []).forEach((turn) => renderGroupTurnBubble({ ...turn, conversationId: result.conversationId || groupActiveConversationId }));
     // 悬等各轮终态（不阻塞群输入——继续轮询；多轮并行/接力逐个转正）
-    (result.turns || []).forEach((turn) => {
+    // v3.41.0：全员收工（成功+失败全数转正）后上报一次群聊系统通知（失败计数带进文案），逐轮转正行为保持原样
+    const groupNotifyConversationId = result.conversationId || groupActiveConversationId;
+    const groupNotifyTitle = conversationTitle;
+    const groupTurnResults = (result.turns || []).map((turn) =>
       window.agentChatPro.awaitGroupTurn(turn.requestId)
-        .then((turnResult) => finalizeGroupTurn(turn.requestId, turnResult))
-        .catch(() => finalizeGroupTurn(turn.requestId, { text: "（该轮无返回）", failed: true }));
-    });
+        .then((turnResult) => { finalizeGroupTurn(turn.requestId, turnResult); return turnResult; })
+        .catch(() => { finalizeGroupTurn(turn.requestId, { text: "（该轮无返回）", failed: true }); return { failed: true, text: "" }; })
+    );
+    Promise.all(groupTurnResults).then((settled) => {
+      reportTaskNotify({
+        kind: "group",
+        id: groupNotifyConversationId,
+        title: groupNotifyTitle,
+        force: groupNotifyConversationId !== conversationId,
+        summary: "",
+        totalMembers: settled.length,
+        failedCount: settled.filter((item) => item && item.failed).length
+      });
+    }).catch(() => {}); // 通知兜底失败不影响群聊主链路
     setConnection("群聊已结束本轮，等待下一次发言", "connected");
     return true;
   } catch (error) {
@@ -2216,6 +2240,7 @@ async function setWorkspace(workspaceId) {
   if (conversationId) composerDrafts.set(conversationId, { text: elements.prompt.value, attachments });
   const hadOpenConversation = Boolean(conversationId);
   conversationId = "";
+  conversationTitle = ""; // v3.41.0：回首页即无当前会话——清标题防通知标错会话名
   sessionId = "";
   attachments = [];
   renderAttachments();
@@ -2412,6 +2437,20 @@ function connectionFailureBrief(error) {
   return `发生了什么：${message}\n可能原因：${reason}\n建议操作：${action}`;
 }
 
+/** v3.41.0 任务完成系统通知：渲染层上报 → 主进程结合设置开关/窗口焦点统一判定弹与不弹；
+ *  点击通知回跳会话并聚焦输入框（对话继续说）。上报失败静默——通知不打断主聊天链路。 */
+async function reportTaskNotify(input = {}) {
+  try {
+    await window.agentChatPro.notifyTaskComplete({
+      kind: input.kind || "done",
+      conversationId: input.id || "",
+      conversationTitle: input.title || "",
+      summary: String(input.summary || "").slice(0, 400),
+      force: Boolean(input.force)
+    });
+  } catch { /* 通知失败不影响聊天主链路 */ }
+}
+
 async function sendMessage(composerText = elements.prompt.value, opts = {}) {
   // v3.35.6 群聊分流：绑了工作组的对话走群聊引擎（chat:group-send）——单聊闸门（activeId）不适用
   if (groupActiveConversationId === conversationId && groupActiveConversationId) {
@@ -2438,6 +2477,9 @@ async function sendMessage(composerText = elements.prompt.value, opts = {}) {
   // v3.15.0 bug1：记录进行中任务归属（对话+模式）——切走后后台继续，完成回调防串话
   streamingConversationId = conversationId;
   streamingConnectionMode = currentConnectionMode;
+  // v3.41.0：发出时快照会话身份——切走后收尾按「发起会话」上报通知（标题不再随当前显示会话漂移）
+  const turnConversationId = streamingConversationId;
+  const turnTitle = conversationTitle;
   // 桥回合的附件恒为空——全局 attachments 是用户输入框草稿，桥回合不得顺手把它带进对话
   const turnAttachments = viaBridge ? [] : attachments;
   const userItem = addMessage("user", message, { senderType: viaBridge ? "cloud-ai" : "" });
@@ -2503,6 +2545,15 @@ async function sendMessage(composerText = elements.prompt.value, opts = {}) {
     renderReturnedFiles(answer, result.files || []);
     reportBridgeResult("done", { reply: result.text || "" });
     answer.classList.remove("generating");
+    // v3.41.0：任务完成系统通知——用户切走（发起会话≠当前显示会话）或失焦时主进程弹系统提醒；
+    // 正盯着本对话看时不打扰（窗口聚焦状态由主进程判定）
+    reportTaskNotify({
+      kind: "done",
+      id: turnConversationId,
+      title: turnTitle,
+      force: turnConversationId !== conversationId,
+      summary: result.text || content.textContent
+    });
     // 合并流式 token 到对话累计（v3.15.0：切走后完成时不再累进当前对话的计数，切回时按消息重算）
     if (streamingConversationId === conversationId) addConversationTokens(streamingTokens + confirmedTokens);
     resetStreamingTokens();
@@ -2538,6 +2589,14 @@ async function sendMessage(composerText = elements.prompt.value, opts = {}) {
     // v3.40.0（ChatGPT UX 方案）：错误三段式（发生了什么/可能原因/建议操作），替代原先裸 error 单行
     answer.querySelector(".message-content").textContent = failureLabel + "：\n" + connectionFailureBrief(error);
     reportBridgeResult("failed", { error: error.message });
+    // v3.41.0：失败同样系统通知——贴长任务单切走后 AI 中途出事，不能等回来才发现（v3.24.9「莫名停止无提示」同病根）
+    reportTaskNotify({
+      kind: "error",
+      id: turnConversationId,
+      title: turnTitle,
+      force: turnConversationId !== conversationId,
+      summary: String(error?.message || error || "")
+    });
     setConnection("连接失败", "error");
     // 失败时也合并已估算的 token
     addConversationTokens(streamingTokens + confirmedTokens);
@@ -4509,6 +4568,14 @@ window.agentChatPro.onChatEvent((event) => {
   } else if (event.type === "ask-user" && answer) {
     // v3.24.0 功能B：AI 选择题提问悬等卡（云端 ask_user 工具；点选经 IPC 回传继续工具循环）
     renderCloudAskUserCard(answer, event);
+    // v3.41.0：AI 提问悬等同样系统通知——用户切走时不能让轮在 480s 超时里白等一个选择
+    reportTaskNotify({
+      kind: "ask",
+      id: streamingConversationId,
+      title: (conversationCache.find((item) => item.id === streamingConversationId) || {}).title || conversationTitle,
+      force: streamingConversationId !== conversationId,
+      summary: event.question || event.text || ""
+    });
   } else if (event.type === "usage") {
     // v3.15.1：后台任务的 usage 不挪用当前对话的 token 计量（切回该对话时按消息重算兜底）
     if (streamingConversationId !== conversationId) return;
@@ -4712,6 +4779,17 @@ window.agentChatPro.onWindowFocus(() => {
   const prompt = document.getElementById("prompt");
   if (prompt && !window.getSelection().toString()) prompt.focus();
 });
+
+// ── v3.41.0 任务完成系统通知：点击通知回跳——切回对应会话＋输入框聚焦，直接打字续聊 ──
+if (window.agentChatPro.onTaskNotificationActivated) {
+  window.agentChatPro.onTaskNotificationActivated(async (data) => {
+    const targetId = String((data && data.conversationId) || "");
+    if (targetId && targetId !== conversationId) {
+      try { await loadConversation(targetId); } catch { /* 回跳失败不炸（会话可能已被删除） */ }
+    }
+    requestAnimationFrame(() => focusPrompt());
+  });
+}
 
 // ── 模式选择器 ──────────────────────────────────
 

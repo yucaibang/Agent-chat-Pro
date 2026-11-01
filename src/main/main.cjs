@@ -1,6 +1,6 @@
 "use strict";
 
-const { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, shell } = require("electron");
+const { app, BrowserWindow, Notification, dialog, ipcMain, Menu, nativeTheme, shell } = require("electron");
 const fs = require("fs");
 const path = require("path");
 const os = require("os");
@@ -16,6 +16,8 @@ const { runCodexCli } = require("./adapters/codex-cli.cjs");
 const { runHermesCli } = require("./adapters/hermes-cli.cjs");
 const { runCustomCli, verifyCustomCliConnection } = require("./custom-cli.cjs");
 const { appendPlanConvention } = require("./plan-convention.cjs"); // v3.20.0 F5：云端路 ```plan 约定注入
+// v3.41.0 任务完成系统推送通知：决策矩阵与通知文案纯函数（弹与不弹在主进程统一判定）
+const { decideTaskNotification, notificationTitleBody, sanitizeTaskNotifyPayload } = require("./task-notify.cjs");
 const { contextTokensFromUsage } = require("./protocol.cjs");
 const { scanSystemCaches, cleanSystemCaches } = require("./cache-cleaner.cjs");
 const { getDeviceControlStatus, installDeviceControl, preferredAddress, uninstallDeviceControl } = require("./device-control.cjs");
@@ -98,6 +100,8 @@ function activeSshProfileOf(config) {
 }
 
 let window;
+// v3.41.0 任务完成系统通知：最近一次失焦时刻——失焦 8s 宽限内完成的回复不弹（用户可能切走一眼就回来）
+let lastWindowBlurAt = 0;
 let agentBridgeInstance = null; // Agent HTTP 桥（阉割版 Bridge Edition 专属；主版恒 null）
 const brandManager = new CloudBrandManager();
 const integrityGuard = new IntegrityGuard();
@@ -284,6 +288,11 @@ function createWindow() {
     if (window.isDestroyed()) return;
     window.webContents.focus();
     window.webContents.send("window:focus");
+  });
+  // v3.41.0 任务完成系统通知：失焦时刻追踪——刚失焦（8s 宽限）完成的回复不弹，用户可能切走一眼就回来
+  window.on("blur", () => {
+    if (window.isDestroyed()) return;
+    lastWindowBlurAt = Date.now();
   });
   window.webContents.on("did-finish-load", publishState);
   window.webContents.on("render-process-gone", (_event, details) => writeLog("renderer_process_gone", details));
@@ -1997,6 +2006,46 @@ app.whenReady().then(async () => {
     return true;
   });
   ipcMain.handle("window:action", (_event, action) => handleWindowAction(action));
+
+  // ── v3.41.0 任务完成系统推送通知 ──
+  // 触发点在渲染层（单聊完成/失败、AI 提问悬等、群聊全员收工）;弹与不弹在这里统一判定——
+  // 设置开关、窗口焦点/最小化/可见、失焦宽限（8s 内刚切走不弹）全在本进程，渲染层只管上报事件。
+  ipcMain.handle("notify:task-complete", (_event, input) => {
+    const payload = sanitizeTaskNotifyPayload(input);
+    const win = window && !window.isDestroyed() ? window : null;
+    try {
+      const windowState = {
+        notificationAllowed: getSettings().taskCompleteNotifications !== false,
+        focused: Boolean(win && win.isFocused()),
+        minimized: Boolean(win && win.isMinimized()),
+        visible: Boolean(win && win.isVisible()),
+        lastBlurAt: lastWindowBlurAt,
+        now: Date.now()
+      };
+      const decision = decideTaskNotification({ payload, windowState, now: Date.now() });
+      if (!decision.show) {
+        writeLog("task_notify_skipped", { reason: decision.reason, kind: payload.kind, conversationId: payload.conversationId });
+        return { shown: false, reason: decision.reason };
+      }
+      const notification = new Notification({ title: decision.title, body: decision.body });
+      notification.on("click", () => {
+        try {
+          if (!window || window.isDestroyed()) return;
+          if (window.isMinimized()) window.restore();
+          window.show();
+          window.focus();
+          // 点击回跳：渲染层切回对应会话并把输入框聚焦到可打字状态（「跟 AI 说点什么」的桌面等价交互）
+          window.webContents.send("notify:activated", { conversationId: payload.conversationId });
+        } catch {}
+      });
+      notification.show();
+      writeLog("task_notify_shown", { kind: payload.kind, conversationId: payload.conversationId });
+      return { shown: true };
+    } catch (error) {
+      writeLog("task_notify_error", { message: String(error?.message || error || "") });
+      return { shown: false, reason: "error" };
+    }
+  });
 
   // ── 产品形态门控（渲染层经 app:edition 获取同一份编译期对象：隐藏设备联动/本机模式/彩蛋等） ──
   // v3.37.1 悬账修复：EDITION 整包含函数 editionFor → 结构化克隆拒（「An object could not be cloned」）

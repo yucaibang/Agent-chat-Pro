@@ -207,6 +207,10 @@ contextBridge.exposeInMainWorld("agentChatPro", {
   recordWorkStatusToolLifecycle: (entry) => ipcRenderer.send("status:tool-lifecycle", entry),
   // ── 窗口控制 IPC ──
   windowAction: (action) => ipcRenderer.invoke("window:action", action),
+  // ── v3.41.0 任务完成系统通知：渲染层上报（单聊完成/失败、AI 提问悬等、群聊收工），主进程统一判定弹与不弹 ──
+  notifyTaskComplete: (payload) => ipcRenderer.invoke("notify:task-complete", payload),
+  // 点击系统通知 → 主进程广播回跳（渲染层切回对应会话+输入框聚焦）
+  onTaskNotificationActivated: (handler) => ipcRenderer.on("notify:activated", (_event, data) => handler(data)),
   isWindowMaximized: () => ipcRenderer.invoke("window:is-maximized"),
   restoreNativeDialogFocus: () => ipcRenderer.invoke("window:restore-native-dialog-focus"),
   // ── 主题偏好 ──

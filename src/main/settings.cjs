@@ -478,6 +478,8 @@ function getSettings() {
     workingDirectory: slot.workingDirectory || "",
     skipPermissions: Boolean(slot.skipPermissions),
     statusSignalCapture: raw.statusSignalCapture === undefined ? !app.isPackaged : Boolean(raw.statusSignalCapture),
+    // v3.41.0 任务完成系统通知（默认开；undefined=首装老配置兼容视为开启）
+    taskCompleteNotifications: raw.taskCompleteNotifications === undefined ? true : Boolean(raw.taskCompleteNotifications),
     userAvatar: normalizeUserAvatar(raw.userAvatar),
     hostFingerprint: slot.hostFingerprint || "",
     dataDirectory: raw.dataDirectory || defaultDataDirectory,
@@ -727,6 +729,10 @@ function saveSettings(input) {
     workModeId: input.workModeId || previous.workModeId || "regular",
     // 信号灯带
     showSignalLights: input.showSignalLights !== undefined ? Boolean(input.showSignalLights) : previous.showSignalLights !== false,
+    // v3.41.0 任务完成系统通知：默认开（undefined 视为 true，与 getSettings 归一口径一致）
+    taskCompleteNotifications: input.taskCompleteNotifications !== undefined
+      ? Boolean(input.taskCompleteNotifications)
+      : (previous.taskCompleteNotifications === undefined ? true : Boolean(previous.taskCompleteNotifications)),
     // 品牌验证服务器（留空则禁用）
     brandServerUrl: input.brandServerUrl !== undefined ? input.brandServerUrl : previous.brandServerUrl || "",
     // 上下文压缩（v3.10.0）
