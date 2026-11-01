@@ -171,7 +171,11 @@ async function main() {
     }
     assert.ok(settingsSrc.includes("agentBridgePort: normalizeAgentBridgePort(raw.agentBridgePort)"), "getSettings 出参");
     assert.ok(settingsSrc.includes("agentBridgeTokenEncrypted: previous.agentBridgeTokenEncrypted || \"\""), "saveSettings 白名单透传加密 Token");
-    assert.ok(settingsSrc.includes("module.exports = { getConnection, getSettings, getAtomcodeToken, getSshConnection, getCloudAiConfig, modelAdminPasswordState, normalizeSshProfileId, normalizeSshProfileName, sameSshTarget, saveSettings, setModelAdminPassword, switchSshProfile, trustHostFingerprint, verifyModelAdminPassword, ensureAgentBridgeToken"), "exports 更新");
+    // v3.40.0：exports 清单新增 clearModelAdminPassword（重置兜底）——整串匹配会随每次加导出翻红，改逐项存在断言
+    const exportsLine = settingsSrc.slice(settingsSrc.indexOf("module.exports ="));
+    for (const name of ["getConnection", "getSettings", "getAtomcodeToken", "getSshConnection", "getCloudAiConfig", "modelAdminPasswordState", "normalizeSshProfileId", "saveSettings", "setModelAdminPassword", "switchSshProfile", "trustHostFingerprint", "verifyModelAdminPassword", "ensureAgentBridgeToken", "getAgentBridgeConversationId", "setAgentBridgeConversationId", "setAgentBridgeConfig", "normalizeAgentBridgePort", "clearModelAdminPassword"]) {
+      assert.ok(new RegExp(`\\b${name}\\b`).test(exportsLine), `exports 含 ${name}`);
+    }
   });
 
   await test("C7. renderer.js：终态四路回报 + 桥回合 + 队列渲染 + 门控", () => {

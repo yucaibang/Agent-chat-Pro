@@ -174,8 +174,10 @@ async function main() {
 
   console.log("\n=== C. 版本号 ===");
 
-  await test("C1 package.json version = 3.37.2", () => {
-    assert.strictEqual(pkg.version, "3.37.2");
+  await test("C1 package.json version ≥ 3.37.2（写死版本断言会在下一次 bump 翻红全仓回归，恢复历届宽松惯例）", () => {
+    assert.ok(/^\d+\.\d+\.\d+$/.test(pkg.version), `version 形如 x.y.z（当前 ${pkg.version}）`);
+    const toNumber = (v) => v.split(".").reduce((acc, part) => acc * 1000 + Number(part), 0);
+    assert.ok(toNumber(pkg.version) >= toNumber("3.37.2"), `不低于 3.37.2（当前 ${pkg.version}）`);
   });
 
   console.log(`\n═══ v3.37.2 守门：${passed} 通过 / ${failed} 失败 ═══`);

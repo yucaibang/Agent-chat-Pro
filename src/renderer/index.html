@@ -169,7 +169,11 @@
       <form id="composer" class="composer">
         <input id="file-picker" type="file" multiple hidden />
         <div id="attachment-list" class="attachment-list" hidden></div>
-        <textarea id="prompt" rows="1" placeholder="给 Agent 发消息…（Enter 发送，Shift + Enter 换行）"></textarea>
+        <div class="prompt-wrap">
+          <!-- v3.40.0：关键词橙标镜像层（textarea 文字透明，镜像层渲染实体文字+橙色指令词；几何参数与 textarea 逐项一致） -->
+          <div id="prompt-mirror" class="prompt-mirror" hidden aria-hidden="true"></div>
+          <textarea id="prompt" rows="1" placeholder="给 Agent 发消息…（Enter 发送，Shift + Enter 换行）"></textarea>
+        </div>
         <!-- v3.36.0「听说」：麦克风语音输入（录音→云端转录→文字插入输入框；详见 voice-transcribe.cjs） -->
         <button id="voice" type="button" class="voice-button" title="听说：点击开始，对着麦克风说话，说完再点一次结束（Esc 可取消）">🎤 听说</button>
         <button id="attach" type="button" class="attach-button" title="添加图片或文件">＋</button>
@@ -575,6 +579,11 @@
                   <button type="button" id="refresh-model" class="secondary">读取当前模型</button>
                   <button type="button" id="goto-cloud-settings" class="secondary" hidden>去连接页配置</button>
                 </div>
+                <!-- v3.40.0：管理员密码管理入口（更换需校验当前密码；重置=忘记密码兜底，双确认） -->
+                <div class="device-control-actions" id="model-password-actions" hidden>
+                  <button type="button" id="model-password-change" class="secondary">更换管理员密码</button>
+                  <button type="button" id="model-password-reset" class="secondary danger-button" title="忘记密码时使用：清除本机密码，下次写模型配置重新设置（模型配置数据不受影响）">重置管理员密码</button>
+                </div>
                 <p id="model-info" class="hint">五项统一更改会修改五个环境变量模型项；不会改 Ollama 地址、认证、权限、hooks 或其他型号映射。</p>
               </div>
               <div id="model-editor" hidden>
@@ -617,11 +626,12 @@
                 <p class="hint">当前连接方式不使用 Claude 模型配置；状态卡显示对应引擎/服务商的信息。</p>
               </div>
             </div>
-            <!-- 模型管理员密码对话框：missing/invalid → 初始化（双输入）；ready → 写操作确认（单输入） -->
+            <!-- 模型管理员密码对话框（v3.40.0 三态）：missing/invalid → 初始化（设置+确认）；ready → 写操作确认（单输入，预校验通过即入会话缓存）；change → 更换（当前密码+新密码+确认） -->
             <dialog id="model-password-dialog">
               <form id="model-password-form" autocomplete="off">
                 <div class="dialog-heading"><div><h2 id="model-password-title">输入模型管理员密码</h2><p id="model-password-hint">写模型配置前需要校验管理员密码，避免误触。</p></div></div>
                 <label id="model-admin-password-wrap">管理员密码<input id="model-admin-password" type="password" autocomplete="new-password" /></label>
+                <label id="model-admin-new-wrap" hidden>新密码<input id="model-admin-new" type="password" autocomplete="new-password" /></label>
                 <label id="model-admin-confirmation-wrap" hidden>再次输入<input id="model-admin-confirmation" type="password" autocomplete="new-password" /></label>
                 <p id="model-password-status" class="field-hint"></p>
                 <div class="device-control-actions">
@@ -838,9 +848,53 @@
             </dl>
             <p class="about-desc">SSH 远程支持内网直连与外网穿透双模式；云端 AI 无需本地 CLI 即可聊天；本机模式使用本机 Claude Code。内置上下文压缩、系统缓存清理、防破解保护体系。</p>
             <p class="about-history">项目沿革：Agent NAS Chat v0.1.11 → Claude Code Connect Chat v0.1.11 → Agent Chat Pro</p>
+            <!-- v3.40.0：向导重开入口（老用户误点跳过可回来；force 打开无视 done 标记） -->
+            <div class="device-control-actions" style="margin-top:8px">
+              <button type="button" class="secondary" id="about-reopen-onboarding">📖 重新运行新手向导</button>
+            </div>
           </section>
         </div>
       </div>
+    </dialog>
+
+    <!-- ── v3.40.0 新手向导（三段分流：老用户/专业人士直达全功能，普通用户进三步引导） ── -->
+    <dialog id="onboarding-dialog">
+      <div class="dialog-heading"><div><h2>欢迎使用 Agent Chat Pro</h2><p>先花 30 秒告诉我们您的使用方式</p></div></div>
+
+      <section id="onboarding-step-welcome" class="onboarding-step">
+        <p class="onboarding-question">请问您是——</p>
+        <div class="device-control-actions onboarding-choices">
+          <button type="button" class="primary" data-onboarding-choice="new">🆕 新用户（第一次使用）</button>
+          <button type="button" class="secondary" data-onboarding-choice="old">🔄 老用户（从旧版本升级过来）</button>
+        </div>
+      </section>
+
+      <section id="onboarding-step-experience" class="onboarding-step" hidden>
+        <p class="onboarding-question">您的使用习惯更接近——</p>
+        <div class="device-control-actions onboarding-choices">
+          <button type="button" class="primary" data-onboarding-choice="pro">🛠 专业用户（知道怎么配置，直接开干）</button>
+          <button type="button" class="secondary" data-onboarding-choice="normal">🙂 普通用户（希望有引导）</button>
+        </div>
+      </section>
+
+      <section id="onboarding-step-guide" class="onboarding-step" hidden>
+        <p class="onboarding-question">您准备主要使用哪种 AI？</p>
+        <div class="device-control-actions onboarding-choices">
+          <button type="button" class="secondary" data-onboarding-mode="cloud">☁️ 云端 AI（填个密钥就能聊）</button>
+          <button type="button" class="secondary" data-onboarding-mode="local">💻 本机 AI（本机装过 Claude Code / AtomCode 等 CLI）</button>
+          <button type="button" class="secondary" data-onboarding-mode="ssh">🖥 SSH 远程（连 NAS / 服务器上的 Claude Code）</button>
+        </div>
+      </section>
+
+      <section id="onboarding-step-config" class="onboarding-step" hidden>
+        <p id="onboarding-mode-detail" class="onboarding-detail"></p>
+        <div class="device-control-actions onboarding-choices">
+          <button type="button" class="primary" id="onboarding-open-settings">现在去配置连接</button>
+          <button type="button" class="secondary" data-onboarding-choice="done">稍后再说，先到处看看</button>
+        </div>
+      </section>
+
+      <p class="field-hint" style="margin-top:12px"><button type="button" class="secondary" id="onboarding-skip">跳过向导</button><span style="margin-left:8px;color:var(--text-muted)">之后可在 设置 → 关于 重新打开</span></p>
     </dialog>
 
     <!-- ── 外观设置弹窗 ── -->

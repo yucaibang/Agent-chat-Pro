@@ -1352,3 +1352,24 @@ body.devpanel-absent .dev-panel, body.devpanel-absent .dev-rail { display: none 
 /* team 空态入口 */
 .empty-group-entry { margin-top: 14px; }
 .composer.group-mode textarea::placeholder { color: color-mix(in srgb, var(--accent) 55%, transparent); }
+/* ── v3.40.0：群聊输入镜像层（指令关键词橙标）+ @ 成员浮层 ─────────────────────
+   镜像层原理：textarea 文字透明（caret 照常可见），镜像 div 渲染同一文本的实体色+橙色指令词；
+   几何参数（padding/字号行高/wrap）必须与 textarea 定义（L512）逐项一致才能逐字对齐 */
+.composer .prompt-wrap { position: relative; display: flex; min-width: 0; grid-column: 1; }
+.composer .prompt-wrap textarea { width: 100%; }
+.composer .prompt-wrap textarea.mirror-on { color: transparent; caret-color: var(--text-primary); }
+.composer.busy .prompt-wrap textarea.mirror-on { caret-color: var(--text-tertiary); }
+.prompt-mirror { position: absolute; top: 0; left: 0; width: 100%; min-height: 100%; margin: 0; padding: 8px 0; line-height: 1.5; white-space: pre-wrap; word-break: break-word; overflow: hidden; pointer-events: none; color: var(--text-primary); }
+.composer.busy .prompt-mirror { color: var(--text-tertiary); }
+.prompt-mirror .autodiscuss-token { color: #ff9b2f; font-weight: 600; }
+/* @ 成员浮层（群聊）：输入 @ 触发弹出，上下键导航 + Enter/Tab 选中，Esc 关闭，点选同样生效 */
+#at-popover { position: absolute; left: 0; bottom: calc(100% + 6px); min-width: 180px; max-width: 300px; max-height: 190px; overflow-y: auto; border: 1px solid var(--border-popover); border-radius: 10px; background: var(--bg-mode-dropdown); box-shadow: var(--shadow-dropdown); z-index: 70; padding: 6px; display: flex; flex-direction: column; gap: 2px; }
+#at-popover .at-item { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border: 0; border-radius: 7px; background: transparent; color: var(--text-secondary); font: inherit; font-size: 13px; text-align: left; cursor: pointer; }
+#at-popover .at-item:hover { background: var(--bg-active); }
+#at-popover .at-item.active { background: var(--bg-mode-item-active); color: #9eeaaa; }
+#at-popover .at-hint { padding: 4px 8px 2px; font-size: 11px; color: var(--text-muted); }
+/* ── v3.40.0：新手向导（三段分流） ── */
+#onboarding-dialog { width: min(520px, 92vw); }
+.onboarding-question { margin: 10px 0 12px; font-weight: 600; color: var(--text-primary); }
+.onboarding-choices { flex-direction: column; align-items: stretch; }
+.onboarding-detail { margin: 4px 0 10px; color: var(--text-secondary); font-size: 13px; line-height: 1.6; }

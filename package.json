@@ -1,6 +1,6 @@
 {
   "name": "agent-chat-pro",
-  "version": "3.37.2",
+  "version": "3.40.0",
   "license": "UNLICENSED",
   "private": true,
   "description": "Agent Chat Pro — 三模式 AI 聊天客户端（SSH远程/云端AI/本机多引擎）",
@@ -8,14 +8,13 @@
   "main": "src/main/main.cjs",
   "scripts": {
     "start": "electron .",
+    "test": "node scripts/run-all-tests.cjs",
     "obfuscate": "node scripts/obfuscate.cjs obfuscate",
     "obfuscate:restore": "node scripts/obfuscate.cjs restore",
     "obfuscate:check": "node scripts/obfuscate.cjs check",
     "build:win:nsis": "node scripts/build-pipeline.cjs nsis",
     "build:win:portable": "node scripts/build-pipeline.cjs portable",
     "build:win:bridge": "node scripts/build-pipeline.cjs bridge",
-    "build:mac": "electron-builder --mac",
-    "build:linux": "electron-builder --linux",
     "verify:fuses": "node scripts/set-fuses.cjs",
     "verify:build": "node scripts/build-pipeline.cjs verify"
   },
@@ -89,16 +88,6 @@
       "language": 2052,
       "unicode": true,
       "license": "build/license_zh.txt"
-    },
-    "mac": {
-      "icon": "build/icon.icns",
-      "category": "public.app-category.productivity",
-      "target": "dmg"
-    },
-    "linux": {
-      "icon": "build/icon.png",
-      "target": "AppImage",
-      "category": "Network"
     }
   }
 }

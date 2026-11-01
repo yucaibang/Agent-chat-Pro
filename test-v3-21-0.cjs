@@ -514,14 +514,16 @@ async function runSmokeTests(rendererSrc) {
     assert_.ok(archived && String(archived.textContent).includes("已存档"), "追加已存档 option");
   });
 
-  await test("F3. 在清单内模型照常恢复：切回 zhipu + 存档 glm-4.7-flash → 选中不追加", () => {
+  await test("F3. 在清单内模型照常恢复：切回 zhipu + 存档 glm-4.7-flash → 选中恢复且不追加「已存档」", () => {
     const assert_ = require("assert");
     getFake("#cloud-provider").value = "zhipu";
     const before = getFake("#cloud-model");
-    const countBefore = before.children.length;
     sandbox.applyCloudProviderChange("glm-4.7-flash");
     assert_.strictEqual(before.value, "glm-4.7-flash");
-    assert_.strictEqual(before.children.length, countBefore, "清单内命中不追加");
+    // v3.40.0：select 重建从 innerHTML 字符串赋值改为 replaceChildren+createElement——
+    // fakechildren 会真实重建（旧伪行为：innerHTML 不触 fake.children，length 恒不变）。
+    // 断言语义改本义：清单内命中 = 不出现带「已存档」标注的追加 option。
+    assert_.ok(!before.children.some((c) => String(c.textContent).includes("已存档")), "清单内命中不追加已存档 option");
   });
 
   await test("F4. custom：模型 label 显隐切换 + custom fields 显示 + 拉取按钮可见", () => {

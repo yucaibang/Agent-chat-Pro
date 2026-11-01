@@ -4,7 +4,7 @@
 
 一个面向 Windows 桌面的 Electron 应用：把「连着云上的 AI 服务商」「SSH 到远端机器跑 Claude Code」「本机跑 Claude Code」三种工作方式装进同一个界面，并围绕它长出了一整套周边——云办公沙箱、N2N 虚拟专网体检与一键部署、设备联动、开发面板、防破解构建管线等。
 
-[![Version](https://img.shields.io/badge/version-3.37.2-blue.svg)]()
+[![Version](https://img.shields.io/badge/version-3.40.0-blue.svg)]()
 [![Platform](https://img.shields.io/badge/platform-Windows-green.svg)]()
 [![Tests](https://img.shields.io/badge/tests-46%20files%20green-brightgreen.svg)]()
 
@@ -86,12 +86,12 @@
 
 ```bash
 npm install
-for f in test-v3-*.cjs; do node "$f" || exit 1; done   # 全量回归（37 个测试文件；另有 9 个专项 test-*.cjs/.mjs）
+npm test               # 全量回归（统一测试入口：全部 test-v3-*.cjs 版本级测试 + 8 个专项 test-*.cjs，串行跑完汇总）
 npm run build:win:nsis # 构建 Windows NSIS 安装包
 node scripts/build-pipeline.cjs bridge   # Bridge Edition（阉割版产物线）
 ```
 
-- Node.js 20+，electron 33.x / electron-builder 26.x（锁版）
+- Node.js 20+，electron 35.x / electron-builder 26.x（锁版）
 - 混淆体系说明：`scripts/obfuscate.cjs`（medium 名单模块混淆），`scripts/obf-smoke.cjs`（混淆后加载冒烟）
 - 测试体系：每个大版本一份 `test-v3-x-y.cjs`，含真 HTTP / 真 IPC / vm 假 DOM 冒烟 / TDZ 扫描守门
 
@@ -175,7 +175,7 @@ API 密钥使用 Electron safeStorage **加密后落盘在你本机用户目录*
 |---|---|---|
 | [Electron](https://www.electronjs.org/) | 桌面壳 | MIT License |
 | [n2n](https://github.com/ntop/n2n) | 虚拟专网 | GPL/Apache 双许可（ntop 项目） |
-| n2n Windows x64 静态编译 r1255 | edge/supernode Windows 构建 | 社区编译（by heiye） |
+| n2n Windows x64 静态编译 r1255 | edge/supernode Windows 构建 | 社区编译（by heiye），依 n2n 上游许可条款随包分发；商用/再分发前请自行核验上游许可与编号 |
 | [tap-windows 9.21.2](https://github.com/OpenVPN/tap-windows) | TAP 虚拟网卡驱动 | OpenVPN 项目（随安装包附带） |
 | [electron-builder](https://www.electron.build/) | 打包 | MIT License |
 | 服务商 API | 智谱/DeepSeek/Anthropic/OpenAI/… | 各服务条款 |

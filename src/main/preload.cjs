@@ -33,6 +33,10 @@ contextBridge.exposeInMainWorld("agentChatPro", {
   // ── 模型管理 IPC ──
   getModelStatus: () => ipcRenderer.invoke("model:status"),
   initializeModelAdminPassword: (input) => ipcRenderer.invoke("model:initialize-password", input),
+  // v3.40.0：预校验 / 更换 / 重置（忘记密码兜底；语义见 model:verify-password 等 handler）
+  verifyModelAdminPassword: (input) => ipcRenderer.invoke("model:verify-password", input),
+  changeModelAdminPassword: (input) => ipcRenderer.invoke("model:change-password", input),
+  resetModelAdminPassword: () => ipcRenderer.invoke("model:reset-password"),
   updateModel: (model) => ipcRenderer.invoke("model:update", model),
   // v3.18.0 F2：五项单独修改 + 自动压缩阈值（管理员密码与确认语义对齐 model:update）
   updateModelEntry: (input) => ipcRenderer.invoke("model:update-entry", input),

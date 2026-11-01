@@ -6,7 +6,7 @@ const path = require("path");
 const os = require("os");
 const { randomUUID } = require("crypto");
 const { spawnSync } = require("child_process"); // v3.16.1 print:detect 调 reg/tasklist
-const { getConnection, getSettings, getAtomcodeToken, getSshConnection, getCloudAiConfig, sameSshTarget, saveSettings, setModelAdminPassword, switchSshProfile, trustHostFingerprint, verifyModelAdminPassword, ensureAgentBridgeToken, getAgentBridgeConversationId, setAgentBridgeConversationId, setAgentBridgeConfig } = require("./settings.cjs");
+const { clearModelAdminPassword, getConnection, getSettings, getAtomcodeToken, getSshConnection, getCloudAiConfig, sameSshTarget, saveSettings, setModelAdminPassword, switchSshProfile, trustHostFingerprint, verifyModelAdminPassword, ensureAgentBridgeToken, getAgentBridgeConversationId, setAgentBridgeConversationId, setAgentBridgeConfig } = require("./settings.cjs");
 const { connect, connectWithRetry, downloadRemoteFile, ensureDeviceControlKey, exec, finalizeDeviceControl, getAgentSdkBridgeStatus, getClaudeModelStatus, installAgentSdkBridge, markDeviceControlDisabled, readDeviceControlIpTrack, readRemoteFile, runClaude, uninstallAgentSdkBridge, updateClaudeAutoCompactWindow, updateClaudeModel, updateClaudeModelEntry, verifyConnection } = require("./ssh.cjs");
 const { copyLocalFile, getLocalClaudeModelStatus, readLocalFile, runLocalClaude, updateLocalAutoCompactWindow, updateLocalClaudeModel, updateLocalClaudeModelEntry, validatedWorkingDirectory: validatedLocalWorkdir, verifyLocalConnection } = require("./local.cjs");
 const { runAtomCodeChat, verifyAtomCodeConnection } = require("./daemon-chat.cjs");
@@ -513,12 +513,49 @@ app.whenReady().then(async () => {
   });
   ipcMain.handle("model:initialize-password", (_event, input) => {
     const state = getSettings().modelAdminPasswordState;
-    if (state === "ready") throw new Error("模型管理员密码已初始化；如需更换请联系管理员。");
+    if (state === "ready") throw new Error("模型管理员密码已设置。如需更换，请在模型页使用「更换管理员密码」。");
     if (state === "unavailable") throw new Error("Windows 系统加密不可用，无法安全保存模型管理员密码。");
     const password = String(input?.password || "");
     if (password !== String(input?.confirmation || "")) throw new Error("两次输入的管理员密码不一致。");
     setModelAdminPassword(password);
     writeLog("model_admin_password_initialized");
+    return getSettings();
+  });
+  // v3.40.0：管理员密码体验三补充——预校验（渲染层弹窗内即时反馈）/ 更换（旧密+新密+确认）/ 重置（忘记密码兜底）
+  ipcMain.handle("model:verify-password", (_event, input) => {
+    try {
+      return { ok: verifyModelAdminPassword(String(input?.password || "")) };
+    } catch (error) {
+      return { ok: false, reason: error.message };
+    }
+  });
+  ipcMain.handle("model:change-password", (_event, input) => {
+    const currentPassword = String(input?.currentPassword || "");
+    const password = String(input?.password || "");
+    if (password !== String(input?.confirmation || "")) throw new Error("两次输入的新密码不一致。");
+    if (password.length < 6 || password.length > 200 || /[\0\r\n]/.test(password)) throw new Error("新密码需为 6–200 个字符，且不能包含换行。");
+    let currentOk;
+    try { currentOk = verifyModelAdminPassword(currentPassword); }
+    catch (error) { throw new Error(String(error?.message || "当前管理员密码校验失败。")); }
+    if (!currentOk) throw new Error("当前管理员密码不正确。");
+    setModelAdminPassword(password);
+    writeLog("model_admin_password_changed");
+    return getSettings();
+  });
+  ipcMain.handle("model:reset-password", async () => {
+    if (getSettings().modelAdminPasswordState === "missing") return getSettings();
+    const answer = await dialog.showMessageBox(window, {
+      type: "warning",
+      title: "重置模型管理员密码",
+      message: "确认重置模型管理员密码？",
+      detail: "仅清除本机加密保存的管理员密码（模型配置、聊天记录等数据不受影响）。下次写模型配置时会要求设置一个新密码。此操作会写入操作日志。",
+      buttons: ["取消", "重置密码"],
+      defaultId: 0,
+      cancelId: 0
+    });
+    if (answer.response !== 1) return { cancelled: true };
+    clearModelAdminPassword();
+    writeLog("model_admin_password_reset");
     return getSettings();
   });
   ipcMain.handle("model:update", async (_event, input) => {

@@ -793,8 +793,9 @@ function renderContextBar() {
   // 窗口未知时用累计 token 显示，进度条隐藏
   const limit = contextLimit || 0;
   track.hidden = !limit;
+  let percent = 0;
   if (limit) {
-    const percent = Math.min(100, (contextTokens / limit) * 100);
+    percent = Math.min(100, (contextTokens / limit) * 100);
     fill.style.width = `${percent.toFixed(1)}%`;
     fill.classList.toggle("warn", percent >= 70 && percent < 90);
     fill.classList.toggle("danger", percent >= 90);
@@ -809,6 +810,8 @@ function renderContextBar() {
   const parts = [];
   if (contextTokens) parts.push(`上下文 ${formatCompactNumber(contextTokens)}${limit ? ` / ${formatCompactNumber(limit)}` : ""}`);
   if (!contextTokens && total) parts.push(`累计 ${formatCompactNumber(total)}`);
+  // v3.40.0（ChatGPT UX 方案）：≥85% 主动预警——90% 起危险色已是强信号，此处在其之前给出下一步（自动压缩/新开对话）
+  if (percent >= 85 && percent < 90) parts.push("上下文接近上限——建议开启自动压缩或新开对话");
   detailEl.textContent = parts.join(" · ");
 }
 
@@ -1782,6 +1785,7 @@ async function loadConversation(id) {
   attachments = [...(composerDraft.attachments || [])];
   elements.prompt.value = composerDraft.text || "";
   adjustTextarea();
+  onPromptInputChanged(); // v3.40.0：草稿回填不触发 input 事件——镜像层/浮层按新草稿刷新
   resetContextBar(); // 切换对话时重置上下文进度条（新对话还没有 usage 数据）
   // 回填 main 侧记录的该对话上下文状态（v3.12.1：切回旧对话进度条不再归零）
   try {
@@ -1871,7 +1875,7 @@ async function applyGroupLayout(conversation) {
   composer?.classList?.toggle("group-mode", isGroup);
   document.getElementById("group-toolbar")?.remove();
   document.getElementById("group-roster")?.remove();
-  if (!isGroup) { groupMemberNames = []; groupRosterAgents = []; return; }
+  if (!isGroup) { groupMemberNames = []; groupRosterAgents = []; onPromptInputChanged(); return; } // v3.40.0：转单聊即关镜像层
   // 成员名解析（工作组配置 → 池节点名）
   try {
     const workgroups = await window.agentChatPro.listWorkgroups();
@@ -1903,7 +1907,7 @@ async function applyGroupLayout(conversation) {
     });
     const autodiscuss = document.createElement("label");
     autodiscuss.className = "group-autodiscuss";
-    autodiscuss.title = "自主讨论（Auto-Discuss）：全员按工作组顺序自动接力，最多 " + (groupRosterAgents.length ? "按工作组轮数上限" : "maxTurns") + " 发言";
+    autodiscuss.title = "自主讨论（Auto-Discuss）：全员按工作组顺序自动接力，最多 " + (groupRosterAgents.length ? "按工作组轮数上限" : "maxTurns") + " 发言。也可在输入中直接写「自主讨论/自主聊天/自主对话」关键词触发（字面词按指令消费，不进成员消息）";
     const discussCheck = document.createElement("input");
     discussCheck.type = "checkbox";
     discussCheck.id = "group-autodiscuss-toggle";
@@ -1936,6 +1940,7 @@ async function applyGroupLayout(conversation) {
       rosterBar.append(tag);
     });
     elements.messages.parentElement?.prepend(rosterBar) || elements.messages.prepend(rosterBar);
+    onPromptInputChanged(); // v3.40.0：群布局就位后按当前草稿刷新镜像层，并关掉可能残留的 @ 浮层
   }
 }
 
@@ -2009,8 +2014,19 @@ async function finalizeGroupTurn(requestId, turnResult) {
 /** 群发送（主入口）：@ 路由解析 → sendGroupMessage → 轮气泡建挂 → 每轮 awaitGroupTurn 悬等转正 */
 async function sendGroupTurn() {
   const prompt = elements.prompt;
-  const text = prompt.value.trim();
+  let text = prompt.value.trim();
   if (!groupActiveConversationId) return false;
+  // v3.40.0：指令关键词（自主讨论/自主聊天/自主对话）——输入即触发，不再必须点「自主讨论」开关；
+  // 关键词=本次强制开启（勾选开关仍可用，二者叠加取或）；发送时从成员消息文本中剥离（指令已消费）
+  const keywordHit = AUTODISCUSS_HAS_RE.test(text);
+  if (keywordHit) {
+    text = text.replace(AUTODISCUSS_STRIP_RE, "").replace(/\s{2,}/g, " ").trim();
+    if (!text) {
+      setConnection("已识别自主讨论指令，但内容为空——请补一段要讨论的话题再发", "connected");
+      return true; // 群已接管本次提交（指令被识别，不留单聊路）
+    }
+  }
+  const effectiveAutoDiscuss = keywordHit || groupAutoDiscussOn;
   if (!text) return false;
   // v3.37.2 群发忙闸：本对话仍有群轮进行中时拦截（双群轮并发=云成员上下文互踩/SSH 卡槽互踩）
   for (const live of groupTurnsLive.values()) {
@@ -2021,6 +2037,8 @@ async function sendGroupTurn() {
   }
   prompt.value = "";
   adjustTextarea();
+  renderPromptMirror();
+  closeAtPopover();
   renderAttachments(); // 清空当前输入附件（群发送暂不支持附件——CLI 成员暂不接附件）
   attachments = [];
   const message = addMessage("user", text);
@@ -2029,14 +2047,14 @@ async function sendGroupTurn() {
   updateTokenDisplay();
   const mentioned = appendMentionsToIds(text);
   if (!mentioned.length && groupMemberNames.length) { /* 非成员提及/无提及=广播（主进程兜底） */ }
-  setConnection(`${groupAutoDiscussOn ? "自主讨论接力中" : "群聊进行中"}`, "connected");
+  setConnection(`${effectiveAutoDiscuss ? "自主讨论接力中" : "群聊进行中"}`, "connected");
   try {
     const result = await window.agentChatPro.sendGroupMessage({
       conversationId: groupActiveConversationId,
       workgroupId: groupActiveWorkgroupId,
       message: text,
       mentionedAgentIds: mentioned,
-      autoDiscuss: groupAutoDiscussOn,
+      autoDiscuss: effectiveAutoDiscuss,
       // v3.37.0 群成员不再默认纯聊天：工作模式随群发（成员系统提示/工具行为与该模式语义一致）
       workModeId: currentModeId
     });
@@ -2193,6 +2211,7 @@ async function setWorkspace(workspaceId) {
   elements.composer?.classList?.remove("group-mode");
   document.getElementById("group-toolbar")?.remove();
   document.getElementById("group-roster")?.remove();
+  onPromptInputChanged(); // v3.40.0：退群布局即收镜像层与 @ 浮层
   // 切走前保存当前对话草稿（与 loadConversation 同约定——切回不丢字）
   if (conversationId) composerDrafts.set(conversationId, { text: elements.prompt.value, attachments });
   const hadOpenConversation = Boolean(conversationId);
@@ -2206,6 +2225,7 @@ async function setWorkspace(workspaceId) {
   updateTokenDisplay();
   elements.prompt.value = "";
   adjustTextarea();
+  onPromptInputChanged();
   elements.messages.replaceChildren();
   elements.empty.hidden = false;
   const label = `${streamingConnectionMode === "cloud" ? "云端 AI" : streamingConnectionMode === "local" ? "本机" : "SSH"}任务仍在后台处理 · 已切换工作区`;
@@ -2255,6 +2275,7 @@ async function retryFromMessage(assistantItem) {
   if (!userText) return;
   elements.prompt.value = userText;
   adjustTextarea();
+  onPromptInputChanged();
   sendMessage();
 }
 
@@ -2367,6 +2388,30 @@ async function openSettings() {
   elements.dialog.showModal();
 }
 
+// v3.40.0（ChatGPT UX 方案）：聊天失败三段式——发生了什么 / 可能原因 / 建议操作。
+// 原始 error.message 保留在「发生了什么」段（不丢排查信息）；原因由关键词判定出可读结论，不展开堆栈。
+function connectionFailureBrief(error) {
+  const message = String((error && error.message) || error || "");
+  let reason = "执行过程中抛出异常";
+  let action = streamingConnectionMode === "cloud"
+    ? "检查服务商密钥与模型名；或到设置 → 诊断查看详细网络错误"
+    : "检查连接配置；或到设置 → 诊断查看详细错误";
+  if (/ENOTFOUND|EAI_AGAIN|getaddrinfo/i.test(message)) {
+    reason = "主机地址无法解析（地址拼写或 DNS 问题）";
+    action = "到连接设置核对主机地址拼写，确认本机网络可达";
+  } else if (/ECONNREFUSED/i.test(message)) {
+    reason = "目标端口拒绝连接（端口未开放或远端服务未启动）";
+    action = "确认地址端口与远端 SSH/AI 服务已在运行，防火墙未拦截该端口";
+  } else if (/ETIMEDOUT|ECONNRESET|ESOCKETTIMEDOUT|timed?\s?out/i.test(message)) {
+    reason = "连接超时或中途断开（网络抖动、防火墙或代理问题）";
+    action = "重试一次；若经外网隧道访问，确认隧道存活，或检查代理设置";
+  } else if (/认证|auth|password|密码|denied|permission/i.test(message)) {
+    reason = "认证未通过（用户名、密码或密钥不正确 / 权限不足）";
+    action = "重新填写用户名与密码（或密钥），确认账号具备远程访问权限";
+  }
+  return `发生了什么：${message}\n可能原因：${reason}\n建议操作：${action}`;
+}
+
 async function sendMessage(composerText = elements.prompt.value, opts = {}) {
   // v3.35.6 群聊分流：绑了工作组的对话走群聊引擎（chat:group-send）——单聊闸门（activeId）不适用
   if (groupActiveConversationId === conversationId && groupActiveConversationId) {
@@ -2399,7 +2444,7 @@ async function sendMessage(composerText = elements.prompt.value, opts = {}) {
   renderSentAttachments(userItem, turnAttachments);
   const answer = addMessage("assistant generating");
   messages.set(activeId, answer);
-  if (!viaBridge) { elements.prompt.value = ""; adjustTextarea(); } // 桥回合不清用户输入框草稿
+  if (!viaBridge) { elements.prompt.value = ""; adjustTextarea(); onPromptInputChanged(); } // 桥回合不清用户输入框草稿
   setBusy(true);
   setConnection(currentConnectionMode === "cloud" ? "正在连接云端 AI…" : currentConnectionMode === "local" ? `正在启动本机 ${localEngineLabel()}…` : "正在连接 NAS…", "");
   // 重置流式 token 计数，估算用户消息 token
@@ -2490,7 +2535,8 @@ async function sendMessage(composerText = elements.prompt.value, opts = {}) {
       streamingConnectionMode === "cloud" ? "连接或云端 AI 执行失败"
       : streamingConnectionMode === "local" ? `连接或本机 ${localEngineName} 执行失败`
       : "连接或 NAS Agent 执行失败";
-    answer.querySelector(".message-content").textContent = failureLabel + "：\n" + error.message;
+    // v3.40.0（ChatGPT UX 方案）：错误三段式（发生了什么/可能原因/建议操作），替代原先裸 error 单行
+    answer.querySelector(".message-content").textContent = failureLabel + "：\n" + connectionFailureBrief(error);
     reportBridgeResult("failed", { error: error.message });
     setConnection("连接失败", "error");
     // 失败时也合并已估算的 token
@@ -3175,7 +3221,13 @@ function applyCloudProviderChange(savedModel) {
   const config = CLOUD_PROVIDERS[provider];
   if (!config) return;
   // 更新模型下拉
-  modelSelect.innerHTML = config.models.map((m) => `<option value="${m.value}">${m.label}</option>`).join("");
+  // v3.40.0（atomcode 审计#4）：模型名/值一律 DOM API 渲染——模型名是不可信外部数据（custom 中转站可返回任意值），模板串入 innerHTML 存在 HTML/事件属性注入面
+  modelSelect.replaceChildren(...config.models.map((entry) => {
+    const option = document.createElement("option");
+    option.value = String(entry.value ?? "");
+    option.textContent = String(entry.label ?? entry.value ?? "");
+    return option;
+  }));
   // 已存档模型保底：清单里有就选中；没有（例如服务商刚退役该款）就追加一条标注存档的 option 选中，保存时不漂移
   if (savedModel) {
     if (config.models.some((m) => m.value === savedModel)) {
@@ -3233,14 +3285,28 @@ document.querySelector("#cloud-fetch-models")?.addEventListener("click", async (
       return;
     }
     // custom：填 datalist（手填框照用）；其它：全量替换下拉并保持当前选中
+    // v3.40.0（atomcode 审计#4）：模型清单来自服务商 API 返回（custom 中转站=任意第三方 URL），
+    // 属不可信外部输入——一律 DOM API 渲染，杜绝 <img onerror> 之类事件属性注入（CSP 只是兜底不是消毒）
     if (provider === "custom") {
       const datalist = document.querySelector("#cloud-custom-model-list");
-      if (datalist) datalist.innerHTML = result.models.map((m) => `<option value="${m.value}">${m.label === m.value ? "" : m.label}</option>`).join("");
+      if (datalist) {
+        datalist.replaceChildren(...result.models.map((m) => {
+          const option = document.createElement("option");
+          option.value = String(m.value ?? "");
+          option.textContent = String(m.label === m.value ? "" : (m.label ?? m.value ?? ""));
+          return option;
+        }));
+      }
       resultEl.textContent = `✅ 已拉取 ${result.count} 个模型，点模型输入框可从列表选择`;
     } else {
       const modelSelect = document.querySelector("#cloud-model");
       const current = modelSelect?.value || "";
-      modelSelect.innerHTML = result.models.map((m) => `<option value="${m.value}">${m.label}</option>`).join("");
+      modelSelect.replaceChildren(...result.models.map((m) => {
+        const option = document.createElement("option");
+        option.value = String(m.value ?? "");
+        option.textContent = String(m.label ?? m.value ?? "");
+        return option;
+      }));
       if (current && result.models.some((m) => m.value === current)) modelSelect.value = current;
       resultEl.textContent = `✅ 已拉取 ${result.count} 个该密钥可用的模型`;
     }
@@ -3535,7 +3601,130 @@ elements.composer.addEventListener("submit", (event) => {
 elements.composer.addEventListener("click", (event) => {
   if (event.target === elements.composer) focusPrompt(true);
 });
-elements.prompt.addEventListener("input", adjustTextarea);
+// ── v3.40.0：输入栏镜像层（指令关键词橙标）+ @ 成员浮层（群聊）─────────────────
+// 镜像层：textarea 文字透明，镜像 div 渲染同一文本（转义+橙色指令词 span）——textarea 不支持局部着色的成熟绕法
+const AUTODISCUSS_PATTERN = "自主讨论|自主聊天|自主对话";
+const AUTODISCUSS_HAS_RE = new RegExp(AUTODISCUSS_PATTERN); // test 用（无 g 标志无 lastIndex 状态坑）
+const AUTODISCUSS_STRIP_RE = new RegExp(AUTODISCUSS_PATTERN, "g"); // replace 用（g 标志；与 HAS_RE 分开正是为了避开 /g 的 lastIndex 状态坑）
+const atPopoverState = { open: false, items: [], index: 0, atStart: -1, query: "" };
+let atPopoverEl = null;
+
+function escapeHTMLForMirror(text) {
+  return String(text).replace(/[&<>"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]));
+}
+
+/** 群聊布局时以镜像层渲染输入文本；单聊/空值=关闭镜像（textarea 直显，placeholder 正常可见） */
+function renderPromptMirror() {
+  const prompt = elements.prompt;
+  const mirror = document.querySelector("#prompt-mirror");
+  if (!prompt || !mirror) return;
+  const isGroupMode = Boolean(document.querySelector("#group-toolbar"));
+  const text = prompt.value;
+  if (!isGroupMode || !text) {
+    mirror.hidden = true;
+    mirror.textContent = "";
+    prompt.classList.remove("mirror-on");
+    return;
+  }
+  mirror.hidden = false;
+  prompt.classList.add("mirror-on");
+  const safe = escapeHTMLForMirror(text).replace(new RegExp(AUTODISCUSS_PATTERN, "g"), '<span class="autodiscuss-token">$1</span>');
+  mirror.innerHTML = `${safe}\n`; // 尾随空行让镜像内容高度 ≥ textarea 滚动总高（末行不裁切）
+  mirror.scrollTop = prompt.scrollTop;
+  mirror.scrollLeft = prompt.scrollLeft;
+}
+
+function closeAtPopover() {
+  atPopoverState.open = false;
+  atPopoverState.items = [];
+  atPopoverState.atStart = -1;
+  if (atPopoverEl) { atPopoverEl.remove(); atPopoverEl = null; }
+}
+
+/** 光标前 @词检测：@ 需在行头/空白之后，词内不含空白/@；命中返回 { start, query } */
+function detectAtContext(el) {
+  const pos = el.selectionStart ?? el.value.length;
+  const before = el.value.slice(0, pos);
+  const at = before.lastIndexOf("@");
+  if (at < 0) return null;
+  // @ 前置边界：行头/空白/中文字符之后都可触发（「帮我@小助手」这类中文连打是主场景）；
+  // 仅当 @ 紧贴在英数字/符号词内（如邮箱前缀）才视为普通文本不弹层
+  if (at > 0 && !/\s/.test(before[at - 1]) && !/[一-龥　-〿＀-￯]/.test(before[at - 1])) return null;
+  const query = before.slice(at + 1);
+  if (/[\s@]/.test(query)) return null;
+  return { start: at, query };
+}
+
+function paintAtActive() {
+  if (!atPopoverEl) return;
+  Array.from(atPopoverEl.children).forEach((node) => {
+    if (node.dataset && node.dataset.atIndex) node.classList.toggle("active", node.dataset.atIndex === String(atPopoverState.index));
+  });
+}
+
+/** @ 浮层渲染（仅群聊）：群成员按已输入片段过滤；无匹配即关闭 */
+function renderAtPopover() {
+  const prompt = elements.prompt;
+  if (!document.querySelector("#group-toolbar") || !groupRosterAgents.length) { closeAtPopover(); return; }
+  const ctx = detectAtContext(prompt);
+  if (!ctx) { closeAtPopover(); return; }
+  const roster = groupRosterAgents.filter((agent) => !ctx.query || String(agent.name || "").toLowerCase().includes(ctx.query.toLowerCase()));
+  if (!roster.length) { closeAtPopover(); return; }
+  const wrap = prompt.closest(".prompt-wrap");
+  if (!wrap) return;
+  if (!atPopoverEl) {
+    atPopoverEl = document.createElement("div");
+    atPopoverEl.id = "at-popover";
+    const hint = document.createElement("div");
+    hint.className = "at-hint";
+    hint.textContent = "↑↓ 选择成员 · Enter/Tab 确认 · Esc 关闭";
+    atPopoverEl.appendChild(hint);
+    wrap.appendChild(atPopoverEl);
+  }
+  atPopoverState.open = true;
+  atPopoverState.atStart = ctx.start;
+  atPopoverState.items = roster;
+  if (ctx.query !== atPopoverState.query) atPopoverState.index = 0;
+  atPopoverState.query = ctx.query;
+  if (atPopoverState.index >= roster.length) atPopoverState.index = 0;
+  atPopoverEl.querySelectorAll(".at-item").forEach((node) => node.remove());
+  roster.forEach((agent, i) => {
+    const item = document.createElement("button");
+    item.type = "button";
+    item.className = "at-item" + (i === atPopoverState.index ? " active" : "");
+    item.dataset.atIndex = String(i);
+    item.textContent = `@${agent.name}`;
+    item.addEventListener("mousedown", (event) => { event.preventDefault(); atPopoverState.index = i; acceptAt(agent); });
+    atPopoverEl.appendChild(item);
+  });
+}
+
+/** 浮层确认：替换 @片段 → @名字+空格，光标回位并刷新镜像层 */
+function acceptAt(agent) {
+  const prompt = elements.prompt;
+  const start = atPopoverState.atStart;
+  closeAtPopover();
+  if (start < 0 || !agent) return;
+  const pos = prompt.selectionStart ?? prompt.value.length;
+  prompt.value = `${prompt.value.slice(0, start)}@${agent.name} ${prompt.value.slice(pos)}`;
+  const caret = start + String(agent.name || "").length + 2;
+  prompt.focus();
+  try { prompt.setSelectionRange(caret, caret); } catch { /* 光标不可设则忽略 */ }
+  renderPromptMirror();
+}
+
+function onPromptInputChanged() {
+  renderPromptMirror();
+  renderAtPopover();
+}
+
+elements.prompt.addEventListener("input", () => { adjustTextarea(); onPromptInputChanged(); });
+elements.prompt.addEventListener("scroll", () => {
+  const mirror = document.querySelector("#prompt-mirror");
+  if (!mirror || mirror.hidden) return;
+  mirror.scrollTop = elements.prompt.scrollTop;
+  mirror.scrollLeft = elements.prompt.scrollLeft;
+});
 document.querySelector("#attach").addEventListener("click", () => elements.filePicker.click());
 
 // ── v3.36.0 输入栏「听说」：麦克风语音输入（点击开始录音，说完再点一次，云端转录把文字插进输入框）──
@@ -4226,6 +4415,16 @@ elements.filePicker.addEventListener("change", () => { addFiles(elements.filePic
 elements.composer.addEventListener("dragover", (event) => event.preventDefault());
 elements.composer.addEventListener("drop", (event) => { event.preventDefault(); addFiles(event.dataTransfer.files); });
 elements.prompt.addEventListener("keydown", (event) => {
+  // v3.40.0：@ 成员浮层打开时接管四键——↑↓ 导航 / Enter、Tab 选中（不误触发送）/ Esc 关闭
+  if (atPopoverState.open && ["ArrowDown", "ArrowUp", "Enter", "Tab", "Escape"].includes(event.key)) {
+    event.preventDefault();
+    if (event.key === "ArrowDown") atPopoverState.index = (atPopoverState.index + 1) % atPopoverState.items.length;
+    else if (event.key === "ArrowUp") atPopoverState.index = (atPopoverState.index - 1 + atPopoverState.items.length) % atPopoverState.items.length;
+    else if (event.key === "Enter" || event.key === "Tab") { acceptAt(atPopoverState.items[atPopoverState.index] || null); return; }
+    else closeAtPopover();
+    paintAtActive();
+    return;
+  }
   if (event.key === "Enter" && !event.shiftKey) {
     // v3.15.6：Enter 与点击发送按钮语义一致——本对话任务进行中不动作（停止走按钮/Esc），
     // 任务属于其他对话时进入 sendMessage 拿到明确提示（不再静默无反应）
@@ -5210,7 +5409,69 @@ window.agentChatPro.getBrandConfig().then(config => {
     || (settings.connectionMode === "local" && settings.localEngine === "custom" && !settings.customCliCommand)) {
     openSettings();
   }
+  // v3.40.0：首次启动=新手向导（三段分流）；必填检查若已打开设置中心则不叠弹（下次启动再引导）
+  setTimeout(() => {
+    if (!document.querySelector("#settings-dialog")?.open) openOnboarding();
+  }, 1400);
 })();
+
+// ── v3.40.0：新手向导（三段分流）──────────────────────────────────────
+// 三段：①新/老用户（老用户直达全功能）②专业/普通（专业人士直达全功能）③普通用户三步引导（选 AI 类型→是否现在配置）
+const ONBOARDING_KEY = "acp-onboarding-v1";
+
+function openOnboarding(force = false) {
+  const dialog = document.querySelector("#onboarding-dialog");
+  if (!dialog) return;
+  if (!force && localStorage.getItem(ONBOARDING_KEY)) return; // 已完成过=静默（force 从设置→关于进入）
+  showOnboardingStep("welcome");
+  if (!dialog.open) dialog.showModal();
+}
+
+function showOnboardingStep(step) {
+  ["welcome", "experience", "guide", "config"].forEach((name) => {
+    const section = document.querySelector(`#onboarding-step-${name}`);
+    if (section) section.hidden = name !== step;
+  });
+}
+
+function finishOnboarding() {
+  try { localStorage.setItem(ONBOARDING_KEY, "done"); } catch { /* 存储不可用时忽略（下次启动会再引导） */ }
+  document.querySelector("#onboarding-dialog")?.close();
+}
+
+document.querySelectorAll("[data-onboarding-choice]").forEach((button) => {
+  button.addEventListener("click", () => {
+    const choice = button.dataset.onboardingChoice;
+    if (choice === "new") showOnboardingStep("experience");      // 新用户 → 进入第二段（专业/普通分流）
+    else if (choice === "old") finishOnboarding();               // 老用户 → 直接跳过全部引导
+    else if (choice === "pro") finishOnboarding();               // 专业人士 → 直接跳过全部引导
+    else if (choice === "normal") showOnboardingStep("guide");   // 普通用户 → 进入三步引导
+    else finishOnboarding();                                     // 「稍后再说」等 → 完成本次引导
+  });
+});
+
+const ONBOARDING_MODE_DETAILS = {
+  cloud: "☁️ 云端 AI：只需一个服务商 API 密钥（部分服务商有免费模型/额度）。连接页选服务商、保存密钥即可开聊。",
+  local: "💻 本机 AI：需要本机装有 Claude Code / AtomCode 等 CLI；连接页选「本机」模式并选择引擎。",
+  ssh: "🖥 SSH 远程：需要一台开了 SSH 的机器（NAS / 服务器）上面装着 Claude Code；连接页填地址、账号、密码（或密钥）。"
+};
+
+document.querySelectorAll("[data-onboarding-mode]").forEach((button) => {
+  button.addEventListener("click", () => {
+    const mode = button.dataset.onboardingMode;
+    const detail = document.querySelector("#onboarding-mode-detail");
+    if (detail) detail.textContent = ONBOARDING_MODE_DETAILS[mode] || "";
+    showOnboardingStep("config");
+  });
+});
+
+document.querySelector("#onboarding-open-settings")?.addEventListener("click", () => {
+  finishOnboarding();
+  openSettings();
+  switchSettingsTab("connection");
+});
+document.querySelector("#onboarding-skip")?.addEventListener("click", () => finishOnboarding());
+document.querySelector("#about-reopen-onboarding")?.addEventListener("click", () => openOnboarding(true));
 
 // ── 右键菜单 ──────────────────────────────────────────
 
@@ -5236,6 +5497,7 @@ function showMessageContextMenu(event, item, kind) {
     const editItem = createContextMenuItem("✎", "编辑消息", () => {
       elements.prompt.value = item.querySelector(".message-content").textContent;
       adjustTextarea();
+      onPromptInputChanged();
       elements.prompt.focus();
       closeContextMenu();
     });
@@ -5245,6 +5507,7 @@ function showMessageContextMenu(event, item, kind) {
       const text = item.querySelector(".message-content").textContent;
       elements.prompt.value = `> ${text.split("\n").join("\n> ")}\n\n` + elements.prompt.value;
       adjustTextarea();
+      onPromptInputChanged();
       elements.prompt.focus();
       closeContextMenu();
     });
@@ -5685,6 +5948,7 @@ async function refreshModelsPage() {
   renderModelStatusCard(null, target);
   document.querySelector("#auto-compact-current").textContent = "正在读取…";
   if (target === "cloud" || target === "local-engine") {
+    document.querySelector("#model-password-actions").hidden = true;
     try {
       // 云端/引擎卡数据源：设置里的服务商与模型（云端）/引擎名（本机）
       const settings = await window.agentChatPro.loadSettings();
@@ -5701,30 +5965,55 @@ async function refreshModelsPage() {
     if (target !== modelTargetMode) return; // 用户已切走，丢弃过期结果
     modelStatusCache = status;
     renderClaudeEditor(status);
+    // v3.40.0：管理员密码管理入口——已初始化（ready）才显示更换/重置
+    try {
+      const settings = await window.agentChatPro.loadSettings();
+      document.querySelector("#model-password-actions").hidden = settings.modelAdminPasswordState !== "ready";
+    } catch { document.querySelector("#model-password-actions").hidden = true; }
   } catch (error) {
     setModelBadge("读取失败");
     title.textContent = "模型配置读取失败";
     detail.textContent = error.message;
     document.querySelector("#model-entry-list").replaceChildren();
+    document.querySelector("#model-password-actions").hidden = true;
   }
 }
 
-// ── 模型管理员密码对话框（missing/invalid → 初始化；ready → 写操作确认；AO 语义承接，ACP 无老 UI 回归风险） ──
+// ── 模型管理员密码对话框（v3.40.0 三态：missing/invalid → 初始化；ready → 写操作确认；change → 更换） ──
 let modelPasswordResolver = null;
+// v3.40.0：管理员密码会话缓存——同一会话内校验通过一次后，写模型操作不再重复弹窗
+// （仅内存不落盘；更换密码/重置后立即失效，主进程判「密码不正确」时也会失效回退）
+let modelPasswordSession = "";
+let modelPasswordSessionValid = false;
+
+/** v3.40.0：主进程判密码类错误 → 会话缓存立即失效（下次写操作重新校验） */
+function invalidateModelPasswordSession(error) {
+  if (/管理员密码/.test(String((error && error.message) || error || ""))) modelPasswordSessionValid = false;
+}
 
 function openModelPasswordDialog(mode) {
   const dialog = document.querySelector("#model-password-dialog");
   const title = document.querySelector("#model-password-title");
   const hint = document.querySelector("#model-password-hint");
+  const pwdWrap = document.querySelector("#model-admin-password-wrap");
+  const newWrap = document.querySelector("#model-admin-new-wrap");
   const confirmWrap = document.querySelector("#model-admin-confirmation-wrap");
   const status_ = document.querySelector("#model-password-status");
-  title.textContent = mode === "initialize" ? "初始化模型管理员密码" : "输入模型管理员密码";
+  title.textContent = mode === "initialize" ? "初始化模型管理员密码" : mode === "change" ? "更换管理员密码" : "输入模型管理员密码";
   hint.textContent = mode === "initialize"
-    ? "首次写模型配置前需要设置一个管理员密码（至少 6 位）。此后所有模型写操作都要校验它，避免误触。"
-    : "写模型配置前需要校验管理员密码。";
-  confirmWrap.hidden = mode !== "initialize";
+    ? "首次写模型配置前需要设置一个管理员密码（至少 6 位）。此后所有模型写操作都要校验它，避免误触。密码保存在本机加密存储；忘记可在模型页重置。"
+    : mode === "change"
+    ? "先输入当前管理员密码校验身份，再设置新密码（至少 6 位）。更换成功后本会话内的写操作不再重复询问。"
+    : "写模型配置前需要校验管理员密码；同一会话内校验通过后不再重复询问。";
+  newWrap.hidden = mode !== "change";
+  confirmWrap.hidden = mode === "confirm";
+  const pwdLabel = pwdWrap.firstChild;
+  if (pwdLabel && pwdLabel.nodeType === 3) {
+    pwdLabel.textContent = mode === "change" ? "当前管理员密码" : mode === "initialize" ? "设置管理员密码" : "管理员密码";
+  }
   status_.textContent = "";
   document.querySelector("#model-admin-password").value = "";
+  document.querySelector("#model-admin-new").value = "";
   document.querySelector("#model-admin-confirmation").value = "";
   dialog.showModal();
   document.querySelector("#model-admin-password").focus();
@@ -5742,29 +6031,93 @@ document.querySelector("#model-password-form").addEventListener("submit", (event
   event.preventDefault();
   if (!modelPasswordResolver) return;
   const password = document.querySelector("#model-admin-password").value;
-  const initializeMode = !document.querySelector("#model-admin-confirmation-wrap").hidden;
+  const newWrap = document.querySelector("#model-admin-new-wrap");
+  const changeMode = !newWrap.hidden; // 更换模式：当前密码 + 新密码 + 确认（三输入）
+  const initializeMode = changeMode ? false : !document.querySelector("#model-admin-confirmation-wrap").hidden;
+  if (changeMode) {
+    const newPassword = document.querySelector("#model-admin-new").value;
+    const confirmation = document.querySelector("#model-admin-confirmation").value;
+    if (newPassword.length < 6) { document.querySelector("#model-password-status").textContent = "新密码需至少 6 位。"; return; }
+    if (newPassword !== confirmation) { document.querySelector("#model-password-status").textContent = "两次输入的新密码不一致。"; return; }
+    if (newPassword === password) { document.querySelector("#model-password-status").textContent = "新密码与当前密码相同，无需更换。"; return; }
+    window.agentChatPro.changeModelAdminPassword({ currentPassword: password, password: newPassword, confirmation })
+      .then(() => {
+        modelPasswordSession = newPassword;
+        modelPasswordSessionValid = true;
+        finishModelPassword(newPassword);
+      })
+      .catch((error) => { document.querySelector("#model-password-status").textContent = error.message; });
+    return;
+  }
   if (initializeMode) {
     const confirmation = document.querySelector("#model-admin-confirmation").value;
     if (password.length < 6) { document.querySelector("#model-password-status").textContent = "密码需至少 6 位。"; return; }
     if (password !== confirmation) { document.querySelector("#model-password-status").textContent = "两次输入不一致。"; return; }
     window.agentChatPro.initializeModelAdminPassword({ password, confirmation })
-      .then(() => finishModelPassword(password))
+      .then(() => {
+        modelPasswordSession = password;
+        modelPasswordSessionValid = true;
+        finishModelPassword(password);
+      })
       .catch((error) => { document.querySelector("#model-password-status").textContent = error.message; });
     return;
   }
   if (!password) { document.querySelector("#model-password-status").textContent = "请输入管理员密码。"; return; }
-  finishModelPassword(password);
+  // v3.40.0：confirm 模式先预校验——通过即入会话缓存（后续写操作免重输）；不通过在对话框内报错重输
+  window.agentChatPro.verifyModelAdminPassword({ password })
+    .then((result) => {
+      if (result?.ok) {
+        modelPasswordSession = password;
+        modelPasswordSessionValid = true;
+        finishModelPassword(password);
+      } else {
+        document.querySelector("#model-password-status").textContent = result?.reason || "管理员密码不正确，请重试。";
+      }
+    })
+    .catch((error) => { document.querySelector("#model-password-status").textContent = error.message; });
 });
 document.querySelector("#model-password-cancel").addEventListener("click", () => finishModelPassword(null));
 
-async function requestModelAdminPassword() {
+// v3.40.0：管理员密码管理入口——更换（change 三态对话框）/ 重置（双击确认 + 主进程二次确认，忘记密码兜底）
+document.querySelector("#model-password-change").addEventListener("click", () => requestModelAdminPassword("change"));
+document.querySelector("#model-password-reset").addEventListener("click", async (event) => {
+  const button = event.currentTarget;
+  if (button.dataset.armed !== "1") {
+    button.dataset.armed = "1";
+    button.textContent = "危险操作，请再点一次确认";
+    setTimeout(() => {
+      if (button.isConnected && button.dataset.armed === "1") {
+        button.dataset.armed = "";
+        button.textContent = "重置管理员密码";
+      }
+    }, 5000);
+    return;
+  }
+  button.dataset.armed = "";
+  button.textContent = "重置管理员密码";
+  try {
+    const result = await window.agentChatPro.resetModelAdminPassword();
+    if (result && !result.cancelled) {
+      modelPasswordSession = "";
+      modelPasswordSessionValid = false;
+      modelStatusCache = null;
+      setConnection("管理员密码已重置；下次写模型配置时会引导设置新密码（模型配置数据不受影响）。", "connected");
+      refreshModelsPage();
+    }
+  } catch (error) { setStatus(error.message, true); }
+});
+
+async function requestModelAdminPassword(mode = "confirm") {
   const dialog = document.querySelector("#model-password-dialog");
   if (dialog.open) return null;
+  // v3.40.0：会话内已校验通过 → 直接用存档密码（不落盘）；换密/重置/主进程判错即失效
+  if (mode === "confirm" && modelPasswordSessionValid && modelPasswordSession) return modelPasswordSession;
   const settings = await window.agentChatPro.loadSettings();
   const state = settings.modelAdminPasswordState;
   if (state === "unavailable") { setConnection("Windows 系统加密不可用，无法写模型配置。", "error"); return null; }
-  const mode = state === "missing" || state === "invalid" ? "initialize" : "confirm";
-  return openModelPasswordDialog(mode);
+  if (mode === "change" && state === "missing") { setConnection("尚未设置管理员密码；下次写模型配置时会引导设置。", "connected"); return null; }
+  const effectiveMode = state === "missing" || state === "invalid" ? "initialize" : mode;
+  return openModelPasswordDialog(effectiveMode);
 }
 
 // ── 模型页写操作三入口（统一改为 / 单项保存 / 自动压缩阈值）+ 读取 ──
@@ -5785,7 +6138,7 @@ document.querySelector("#save-model").addEventListener("click", async (event) =>
     if (result.cancelled) return;
     if (modelTargetMode === "ssh" || modelTargetMode === "local") { modelStatusCache = result; renderClaudeEditor(result); }
     setConnection(`五项已统一更改为 ${result.model}；下一条消息将使用新配置。`, "connected");
-  } catch (error) { setStatus(error.message, true); }
+  } catch (error) { invalidateModelPasswordSession(error); setStatus(error.message, true); }
   finally { button.disabled = false; button.textContent = originalText; }
 });
 
@@ -5806,7 +6159,7 @@ document.querySelector("#model-entry-list").addEventListener("click", async (eve
     modelStatusCache = result;
     renderClaudeEditor(result);
     setConnection(`${result.entry?.label || entryId}已更改为 ${result.entry?.model || model}；其余五项未改，下一条消息将使用新配置。`, "connected");
-  } catch (error) { setStatus(error.message, true); }
+  } catch (error) { invalidateModelPasswordSession(error); setStatus(error.message, true); }
   finally { button.disabled = false; button.textContent = originalText; }
 });
 
@@ -5825,7 +6178,7 @@ document.querySelector("#save-auto-compact").addEventListener("click", async (ev
     renderClaudeEditor(result);
     const label = result.autoCompactWindow?.mode === "auto" ? "Claude 官方自动值" : formatAutoCompactTokens(result.autoCompactWindow.tokens);
     setConnection(`自动压缩阈值已改为 ${label}；五项模型未改，下一条消息将使用新阈值。`, "connected");
-  } catch (error) { setStatus(error.message, true); }
+  } catch (error) { invalidateModelPasswordSession(error); setStatus(error.message, true); }
   finally { button.disabled = false; button.textContent = originalText; }
 });
 

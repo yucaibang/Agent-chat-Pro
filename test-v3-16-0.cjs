@@ -120,7 +120,8 @@ async function runSettingsTests() {
     const src = fs.readFileSync(SETTINGS_PATH, "utf8");
     assert.ok(/SETTINGS_SCHEMA_VERSION = \d+/.test(src), "版本常量应存在（v3.18.0 起值为 2）");
     assert.ok(src.includes("return migrateSchema(current);"), "正常分支接迁移");
-    assert.ok(src.includes("return migrateSchema(JSON.parse(fs.readFileSync(legacySettingsPath(), \"utf8\")));"), "legacy 分支接迁移");
+    // v3.40.0 起 legacy 分支先读入局部变量并剥离历史密码（delete legacy.modelAdminPassword）再接迁移——断言随形改义不变
+    assert.ok(src.includes("return migrateSchema(legacy);"), "legacy 分支接迁移");
     assert.ok(src.includes("schemaVersion: SETTINGS_SCHEMA_VERSION"), "writeRaw 统一打标");
     assert.ok(src.includes("copyFileSync(source, backup)"), "迁移前整文件备份");
   });

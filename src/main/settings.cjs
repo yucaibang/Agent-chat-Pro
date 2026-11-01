@@ -240,17 +240,19 @@ function migrateSchema(raw) {
 function readRaw() {
   try {
     const current = JSON.parse(fs.readFileSync(settingsPath(), "utf8"));
-    // 品牌更名迁移：从旧配置文件继承模型密码
-    if (!current.modelAdminPassword) {
-      try {
-        const legacy = JSON.parse(fs.readFileSync(legacySettingsPath(), "utf8"));
-        if (legacy.modelAdminPassword) current.modelAdminPassword = legacy.modelAdminPassword;
-      } catch { /* 旧配置文件损坏不影响当前配置 */ }
-    }
+    // v3.40.0 安全修复：模型管理员密码绝不从旧品牌目录（claude-nas-chat）继承——
+    // 发布版用户必须自己初始化（首次写模型配置时设置自己的密码），不得带着历史/他人密码。
+    // （原定向继承块整个删除：modelAdminPassword 是 v3.18.0 才引入的字段，legacy 目录里不可能有合法值；
+    //   有值=手工迁移/数据混入的脏数据，继承它只会把别人的密码锁进当前机器）
     return migrateSchema(current);
   } catch (error) {
     if (error.code === "ENOENT") {
-      try { return migrateSchema(JSON.parse(fs.readFileSync(legacySettingsPath(), "utf8"))); }
+      try {
+        const legacy = JSON.parse(fs.readFileSync(legacySettingsPath(), "utf8"));
+        // v3.40.0：旧品牌目录整包迁移同样剥离模型管理员密码（连接配置等普通数据随包迁移不受限）
+        delete legacy.modelAdminPassword;
+        return migrateSchema(legacy);
+      }
       catch { return {}; }
     }
     const source = settingsPath();
@@ -861,4 +863,11 @@ function verifyModelAdminPassword(value) {
   return expected.length === actual.length && crypto.timingSafeEqual(expected, actual);
 }
 
-module.exports = { getConnection, getSettings, getAtomcodeToken, getSshConnection, getCloudAiConfig, modelAdminPasswordState, normalizeSshProfileId, normalizeSshProfileName, sameSshTarget, saveSettings, setModelAdminPassword, switchSshProfile, trustHostFingerprint, verifyModelAdminPassword, ensureAgentBridgeToken, getAgentBridgeConversationId, setAgentBridgeConversationId, setAgentBridgeConfig, normalizeAgentBridgePort };
+/** v3.40.0：重置管理员密码——清除本机加密存储的密码字段（下次写模型配置回到初始化流程） */
+function clearModelAdminPassword() {
+  const raw = readRaw();
+  delete raw.modelAdminPassword;
+  writeRaw(raw);
+}
+
+module.exports = { clearModelAdminPassword, getConnection, getSettings, getAtomcodeToken, getSshConnection, getCloudAiConfig, modelAdminPasswordState, normalizeSshProfileId, normalizeSshProfileName, sameSshTarget, saveSettings, setModelAdminPassword, switchSshProfile, trustHostFingerprint, verifyModelAdminPassword, ensureAgentBridgeToken, getAgentBridgeConversationId, setAgentBridgeConversationId, setAgentBridgeConfig, normalizeAgentBridgePort };
