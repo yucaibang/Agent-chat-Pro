@@ -1955,7 +1955,13 @@ app.whenReady().then(async () => {
   ipcMain.handle("window:action", (_event, action) => handleWindowAction(action));
 
   // ── 产品形态门控（渲染层经 app:edition 获取同一份编译期对象：隐藏设备联动/本机模式/彩蛋等） ──
-  ipcMain.handle("app:edition", () => EDITION);
+  // v3.37.1 悬账修复：EDITION 整包含函数 editionFor → 结构化克隆拒（「An object could not be cloned」）
+  // 只回三字段纯数据（gates 浅拷防上游共享引用）；消费者只有 edition/productName/gates 三个键。
+  ipcMain.handle("app:edition", () => ({
+    edition: EDITION.edition,
+    productName: EDITION.productName,
+    gates: { ...EDITION.gates }
+  }));
 
   // ── Agent HTTP 桥（阉割版 Bridge Edition 专属，agentBridge:* 命名空间——既有 bridge:* 是 Agent SDK 桥安装机制，不可混用） ──
   // 云端AI 走 curl → 桥（127.0.0.1 + Token + 人工放行队列）→ 放行后推 agentBridge:turn-start 给渲染层

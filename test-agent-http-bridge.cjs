@@ -133,7 +133,9 @@ async function main() {
   await test("C1. main.cjs：edition 装载 + app:edition IPC + bridge 形态分支", () => {
     assert.ok(mainSrc.includes('require("./edition.cjs")'), "edition.cjs 引入");
     assert.ok(mainSrc.includes('const IS_BRIDGE = EDITION.edition === "bridge"'), "IS_BRIDGE");
-    assert.ok(mainSrc.includes('ipcMain.handle("app:edition", () => EDITION)'), "app:edition handler");
+    // v3.37.1：handler 改回三字段纯数据（EDITION 整包含 editionFor 函数 → 结构化克隆拒，锚点随修复演进）
+    assert.ok(mainSrc.includes('ipcMain.handle("app:edition"'), "app:edition handler");
+    assert.ok(!/ipcMain\.handle\("app:edition", \(\) => EDITION\)/.test(mainSrc), "app:edition 不得裸返 EDITION 整包（克隆拒悬账）");
     assert.ok(mainSrc.includes('IS_BRIDGE ? "com.jiang.agentChatProBridge" : "com.jiang.agentChatPro"'), "appId 双形态");
     assert.ok(mainSrc.includes("EDITION.gates.agentBridge"), "桥注册有形态门");
   });
