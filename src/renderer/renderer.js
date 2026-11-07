@@ -839,7 +839,7 @@ function addMessage(kind, text = "", meta = {}) {
     item.classList.add("group-agent");
     const head = document.createElement("div");
     head.className = "agent-tag";
-    const kindLabel = meta.agent.kind === "cloud" ? "云端" : meta.agent.kind === "ssh" ? "SSH" : "本机";
+    const kindLabel = meta.agent.kind === "cloud" ? "云端" : meta.agent.kind === "ssh" ? "SSH" : meta.agent.kind === "ghost" ? "缺席" : "本机";
     head.textContent = `@${meta.agent.name} · ${kindLabel}`;
     // 成员配色（按名字哈希取色，亮暗主题均用主题内变量）
     item.dataset.agentName = meta.agent.name;
@@ -1875,6 +1875,9 @@ let groupAutoDiscussOn = false; // 自主讨论开关（按序接力，发言上
 let groupTurnsLive = new Map(); // requestId → { item, name, kind, conversationId }（渲染层群轮登记）
 const groupDeltaBuffer = new Map(); // 红线①：delta 合帧缓冲
 let groupDeltaTimer = null;
+// v3.42.0 修复①：群发收口状态（chat:group-send 改「启动即返」后，结束判定从「await sendGroupMessage
+// resolve」移到「主进程 group-turn-settled 事件 + 全部轮 finalize」双保险）：{conversationId, title, armed, total, failed}
+let groupSendState = null;
 
 /** 群布局切换（loadConversation 进入时调用）：建群对话挂成员名牌条 + 群工具栏 */
 async function applyGroupLayout(conversation) {
@@ -2001,7 +2004,58 @@ function renderGroupTurnBubble(turn) {
   return item;
 }
 
-/** 群轮终态转正：markdown 渲染 + 去占位 + 失败态样式 */
+/** v3.42.0 修复①：群轮气泡统一入口（幂等）——事件先到即建「正在思考」气泡并注册悬等，
+ * sendGroupMessage resolve 后快照建轮同样走这里（has 防重）。幽灵轮分流灰态缺席气泡。 */
+function ensureGroupTurnBubble(turn) {
+  const requestId = String(turn?.requestId || "");
+  if (!requestId) return null;
+  if (turn.ghost) return renderGhostTurnBubble(turn);
+  if (groupTurnsLive.has(requestId)) return groupTurnsLive.get(requestId).item;
+  renderGroupTurnBubble(turn);
+  window.agentChatPro.awaitGroupTurn(requestId)
+    .then((turnResult) => finalizeGroupTurn(requestId, turnResult))
+    .catch(() => finalizeGroupTurn(requestId, { failed: true, error: { code: "IPC", message: "该轮无返回" } }));
+  return groupTurnsLive.get(requestId)?.item || null;
+}
+
+/** v3.42.0 幽灵成员轮：群成员指向已删 Agent 池节点——灰态缺席气泡（不再静默出局无人知晓）。
+ * 不入 groupTurnsLive（不占群发忙闸、不计成员统计），直接终态呈现。 */
+function renderGhostTurnBubble(turn) {
+  const item = addMessage("assistant", "", { agent: { id: turn.agentId, name: turn.name, kind: "ghost" } });
+  item.classList.add("group-failed");
+  const note = document.createElement("div");
+  note.className = "draft-note";
+  note.textContent = `@${turn.name} 已不在 Agent 池，本轮缺席`;
+  item.prepend(note);
+  const content = item.querySelector(".message-content");
+  if (content) content.textContent = "（该成员的 Agent 节点已被删除——请到侧边栏「Agent 池」更新工作组成员）";
+  elements.messages.append(item);
+  if (isNearBottom()) elements.messages.scrollTop = elements.messages.scrollHeight;
+  return item;
+}
+
+/** v3.42.0 群发收口：主进程 group-turn-settled（全组终局）+ finalize 逐轮即时判定双保险。
+ * 条件 = 状态已布防 && 本对话已无任何进行中轮 → 状态条收口 + v3.41.0 任务完成通知（total/failed 实测计数）。 */
+function checkGroupSendSettle(conversationId) {
+  const state = groupSendState;
+  if (!state || !state.armed || String(state.conversationId) !== String(conversationId)) return;
+  for (const live of groupTurnsLive.values()) {
+    if (String(live.conversationId) === String(conversationId)) return; // 仍有成员在跑，不收口
+  }
+  state.armed = false;
+  setConnection("群聊已结束本轮，等待下一次发言", "connected");
+  reportTaskNotify({
+    kind: "group",
+    id: state.conversationId,
+    title: state.title,
+    force: state.conversationId !== conversationId,
+    summary: "",
+    totalMembers: state.total,
+    failedCount: state.failed
+  });
+}
+
+/** 群轮终态转正：markdown 渲染 + 去占位 + 失败态样式（v3.42.0：失败轮显示真实失败原因，不再一律「本轮无输出」） */
 async function finalizeGroupTurn(requestId, turnResult) {
   const live = groupTurnsLive.get(requestId);
   if (!live) return;
@@ -2011,14 +2065,28 @@ async function finalizeGroupTurn(requestId, turnResult) {
   item.classList.remove("group-streaming");
   const note = item.querySelector(".draft-note");
   if (note) note.remove();
+  const state = groupSendState;
+  if (state && state.armed && String(state.conversationId) === String(live.conversationId)) {
+    state.total += 1;
+    if (turnResult?.failed) state.failed += 1;
+  }
   if (turnResult?.failed) item.classList.add("group-failed");
+  else if (turnResult?.cancelled) item.classList.add("interrupted");
   const finalText = String(turnResult?.text ?? live.text ?? "");
   const content = item.querySelector(".message-content");
   if (content) {
     if (finalText) await renderAssistant(item, finalText, { static: true });
-    else content.textContent = "（本轮无输出）";
+    else if (turnResult?.failed) {
+      const err = turnResult.error || {};
+      content.textContent = `本轮失败：${err.code || "ERROR"} ${String(err.message || "未知错误").slice(0, 220)}`;
+    } else if (turnResult?.missing) {
+      content.textContent = "（该轮未启动——大概率已被紧急停止）";
+    } else {
+      content.textContent = "（本轮无输出）";
+    }
   }
   if (isNearBottom()) elements.messages.scrollTop = elements.messages.scrollHeight;
+  checkGroupSendSettle(live.conversationId);
 }
 
 /** 群发送（主入口）：@ 路由解析 → sendGroupMessage → 轮气泡建挂 → 每轮 awaitGroupTurn 悬等转正 */
@@ -2068,28 +2136,12 @@ async function sendGroupTurn() {
       // v3.37.0 群成员不再默认纯聊天：工作模式随群发（成员系统提示/工具行为与该模式语义一致）
       workModeId: currentModeId
     });
-    (result.turns || []).forEach((turn) => renderGroupTurnBubble({ ...turn, conversationId: result.conversationId || groupActiveConversationId }));
-    // 悬等各轮终态（不阻塞群输入——继续轮询；多轮并行/接力逐个转正）
-    // v3.41.0：全员收工（成功+失败全数转正）后上报一次群聊系统通知（失败计数带进文案），逐轮转正行为保持原样
+    // v3.42.0 修复①（chat:group-send 启动即返）：群轮状态布防 + 快照建轮（幂等——事件先到的轮已建）。
+    // 结束判定不再依赖本 await（它现在=启动确认而非全程），收口走 group-turn-settled 事件 + finalize 双保险。
     const groupNotifyConversationId = result.conversationId || groupActiveConversationId;
-    const groupNotifyTitle = conversationTitle;
-    const groupTurnResults = (result.turns || []).map((turn) =>
-      window.agentChatPro.awaitGroupTurn(turn.requestId)
-        .then((turnResult) => { finalizeGroupTurn(turn.requestId, turnResult); return turnResult; })
-        .catch(() => { finalizeGroupTurn(turn.requestId, { text: "（该轮无返回）", failed: true }); return { failed: true, text: "" }; })
-    );
-    Promise.all(groupTurnResults).then((settled) => {
-      reportTaskNotify({
-        kind: "group",
-        id: groupNotifyConversationId,
-        title: groupNotifyTitle,
-        force: groupNotifyConversationId !== conversationId,
-        summary: "",
-        totalMembers: settled.length,
-        failedCount: settled.filter((item) => item && item.failed).length
-      });
-    }).catch(() => {}); // 通知兜底失败不影响群聊主链路
-    setConnection("群聊已结束本轮，等待下一次发言", "connected");
+    groupSendState = { conversationId: groupNotifyConversationId, title: conversationTitle, armed: true, total: 0, failed: 0 };
+    (result.turns || []).forEach((turn) => ensureGroupTurnBubble({ ...turn, conversationId: groupNotifyConversationId }));
+    checkGroupSendSettle(groupNotifyConversationId); // 快轮兜底：主进程先发 settle 事件也不会漏收口（armed 事件侧等待）
     return true;
   } catch (error) {
     setConnection(error.message || "群聊发送失败", "error");
@@ -2115,6 +2167,8 @@ async function emergencyStopGroup() {
       }
       groupTurnsLive.delete(requestId);
     }
+    // v3.42.0：停止=取消分支——收口状态立即解除布防（不再等 settle 事件；任务完成通知不上报，对齐 v3.41.0 取消语义）
+    if (groupSendState && groupSendState.armed) groupSendState = { ...groupSendState, armed: false };
     setConnection("已紧急停止全部群聊成员", "connected");
   } catch (error) {
     setConnection(error.message || "停止失败", "error");
@@ -4513,6 +4567,18 @@ window.agentChatPro.onDelta(({ id, text }) => {
   }
 });
 window.agentChatPro.onChatEvent((event) => {
+  // v3.42.0 修复①：群轮「启动即返」两事件（主进程编排层直发，均不挂任何气泡 id 判断链）——
+  // group-turn-start：事件先到即建「正在思考」气泡+注册悬等（sendGroupMessage resolve 的快照建轮幂等）；幽灵轮出灰态缺席气泡
+  // group-turn-settled：主进程全组终局收口信号（全部轮 promise 已 settle 后发）——finalize 兜底收口
+  if (event.type === "group-turn-start") {
+    ensureGroupTurnBubble({ ...(event.turn || {}), conversationId: event.conversationId || groupActiveConversationId });
+    return;
+  }
+  if (event.type === "group-turn-settled") {
+    const settleId = event.conversationId || String(event.id || "").replace(/^group-/, "");
+    setTimeout(() => { checkGroupSendSettle(settleId); checkGroupSendSettle(groupActiveConversationId); }, 120);
+    return;
+  }
   const answer = messages.get(event.id);
   // v3.35.6 群轮分支：群轮的 connection/lifecycle/usage 不再单聊状态条投影（多成员互踩红线①；
   // thinking/round/ask-user 走下方通用分支按 messages.get(id) 挂群轮气泡）

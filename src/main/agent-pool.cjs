@@ -254,16 +254,22 @@ function deleteWorkgroup(id) {
   return true;
 }
 
-/** 群内成员解析（按工作组顺序返回池节点全量配置；解密 cloud key 仅供派发，绝不外传完整密钥） */
+/** 群内成员解析（按工作组顺序返回池节点全量配置；解密 cloud key 仅供派发，绝不外传完整密钥）
+ *  v3.42.0：幽灵引用不再静默出局——已删池节点的成员收集进 ghosts（agentId），编排层出缺席提示轮，
+ *  用户不再遇到「发言的成员变少了却不知道为什么」（v3.41.1 连带缺陷清单第三条）。 */
 function resolveGroupAgents(workgroupId) {
   const state = read();
   const group = state.workgroups.find((item) => item.id === workgroupId);
   if (!group) throw new Error("找不到该工作组（可能已被删除）。");
   const members = (group.members || []).slice().sort((a, b) => a.order - b.order);
   const agents = [];
+  const ghosts = [];
   for (const member of members) {
     const node = state.pool.find((item) => item.id === member.agentId);
-    if (!node) continue; // 已删节点自动出局
+    if (!node) {
+      ghosts.push(member.agentId); // 已删节点自动出局，但必须让用户知道它缺席了
+      continue;
+    }
     const config = node.kind === "cloud"
       ? {
           kind: "cloud",
@@ -280,7 +286,7 @@ function resolveGroupAgents(workgroupId) {
       : { kind: "local", agentId: node.id, name: node.name, engine: node.local.engine, thinkingLevel: node.thinkingLevel || "" };
     agents.push(config);
   }
-  return { group, agents };
+  return { group, agents, ghosts };
 }
 
 /** 子 Agent 权限白名单（模块四）：子 Agent 模型池严格受限 = 仅用户配置的云端 API 池节点 */

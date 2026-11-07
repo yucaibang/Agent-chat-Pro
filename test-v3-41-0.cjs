@@ -269,12 +269,14 @@ async function runWiringTests() {
     assert.ok(askPoint > rendererSrc.indexOf('event.type === "ask-user"'), "ask 上报应挂 ask-user 实时事件路径");
   });
 
-  await test("C6. renderer.js：群聊全员收工汇总（Promise.all + 成败计数）", () => {
-    assert.ok(/const groupTurnResults = \(result\.turns \|\| \[\]\)\.map\(/.test(rendererSrc), "群轮悬等收集缺失");
-    assert.ok(/Promise\.all\(groupTurnResults\)\.then\(\(settled\) =>/.test(rendererSrc), "全员收工汇总缺失");
+  await test("C6. renderer.js：群聊全员收工汇总（v3.42.0 对齐：groupSendState 逐轮累计 + settled 收口上报）", () => {
+    // v3.42.0 启动即返重构：悬等收集从 sendGroupTurn 的 Promise.all 移交 ensureGroupTurnBubble 内部
+    // awaitGroupTurn 注册；成败计数改 checkGroupSendSettle 收口时从 groupSendState（逐轮 finalize 累计）上报
+    assert.ok(!/const groupTurnResults = \(result\.turns \|\| \[\]\)\.map\(/.test(rendererSrc), "旧悬等收集应已移除（移交 ensureGroupTurnBubble）");
+    assert.ok(!/Promise\.all\(groupTurnResults\)\.then\(\(settled\) =>/.test(rendererSrc), "旧 Promise.all 收工应已移除（移交 checkGroupSendSettle）");
     assert.ok(/kind: "group",/.test(rendererSrc), "group 上报缺失");
-    assert.ok(/totalMembers: settled\.length/.test(rendererSrc), "成员总数未上报");
-    assert.ok(/failedCount: settled\.filter\(\(item\) => item && item\.failed\)\.length/.test(rendererSrc), "失败计数未上报");
+    assert.ok(/totalMembers: state\.total,/.test(rendererSrc), "成员总数未上报（逐轮累计）");
+    assert.ok(/failedCount: state\.failed/.test(rendererSrc), "失败计数未上报（逐轮累计）");
   });
 
   await test("C7. renderer.js：会话标题单点维护（load/列表两分支/回首页置空）", () => {

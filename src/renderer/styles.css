@@ -516,7 +516,7 @@ textarea::placeholder { color: var(--text-muted); }
 .composer-mode-trigger.automatic { color: #efb86f; background: #413322; }
 .composer-mode-trigger.safe { color: #6db3f2; background: #1a2a3a; }
 .composer-mode-selector { position: relative; }
-.composer-mode-popup { position: absolute; bottom: 100%; right: 0; margin-bottom: 6px; border: 1px solid var(--border-popover); border-radius: 10px; background: var(--bg-mode-dropdown); box-shadow: var(--shadow-dropdown); z-index: 70; padding: 8px; width: 460px; }   /* v3.25.5 用户令「拉宽」改定宽 460px：v3.25.4 的 min-width 300→350 无效——浮层实际宽被顶行长串（v3.25.1 起英标串变长，max-content≈380+）撑出，min-width 从未再起决定作用 → 定宽硬拉（box-sizing:border-box 含边距）；滑条/文案随 width:100% 全部变宽 */
+.composer-mode-popup { position: absolute; bottom: 100%; right: 0; margin-bottom: 6px; border: 1px solid var(--border-popover); border-radius: 10px; background: var(--bg-mode-dropdown); box-shadow: var(--shadow-dropdown); z-index: 70; padding: 8px; width: 460px; max-height: calc(100vh - 170px); overflow-y: auto;   /* v3.42.0 修复④（用户装机实锤「叠加过高滑条顶到应用顶上没有空间显示」）：浮层向上生长无上限，群聊成员堆叠超高后溢出窗口顶部被裁掉——整体兜底限高并允许上下滚动；成员堆叠区另设独立滚动（.think-group-rows）优先局部滚 */ }   /* v3.25.5 用户令「拉宽」改定宽 460px：v3.25.4 的 min-width 300→350 无效——浮层实际宽被顶行长串（v3.25.1 起英标串变长，max-content≈380+）撑出，min-width 从未再起决定作用 → 定宽硬拉（box-sizing:border-box 含边距）；滑条/文案随 width:100% 全部变宽 */
 .composer-mode-list { display: flex; flex-direction: column; gap: 2px; max-height: 280px; overflow-y: auto; }
 .composer-mode-item { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: 7px; cursor: pointer; color: var(--text-secondary); font-size: 13px; transition: background .12s; }
 .composer-mode-item:hover { background: var(--bg-active); }
@@ -1327,7 +1327,11 @@ body.devpanel-absent .dev-panel, body.devpanel-absent .dev-rail { display: none 
 .pool-fetch-result { grid-column: 1 / -1; font-size: 11.5px; color: var(--text-muted); line-height: 1.5; }
 /* ── v3.35.7 群聊思考面板（成员堆叠节：群内多少个 AI 就按各自模型档位一个个往上叠+预计消耗倍数）── */
 .pool-node-level { font-size: 11px; padding: 1px 8px; border-radius: 999px; background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--text-secondary); }
-.think-group-rows { display: flex; flex-direction: column; gap: 12px; margin: 10px 0 4px; }
+/* v3.42.0 修复④（用户令「做个滑动，上下各滑动来进行调整」）：成员堆叠区独立限高+上下滚动——
+   群里成员多时每节（名牌+滑条+消耗倍数）约 100px 叠加，原形态无限生长把浮层顶出窗口顶部被裁掉，
+   下层成员的滑条整个看不见。现独立滚动：浮层壳保持（顶行+单人滑条+模式列表常显），成员节在
+   42vh 内上下滚，滚到底才链到浮层整体滚动 */
+.think-group-rows { display: flex; flex-direction: column; gap: 12px; margin: 10px 0 4px; max-height: 42vh; overflow-y: auto; padding-right: 4px; scrollbar-gutter: stable; overscroll-behavior: contain; }
 .think-group-member {
   display: flex; flex-direction: column; gap: 6px; padding: 10px 12px;
   border: 1px solid var(--border-popover, #4443); border-radius: 12px;
@@ -1339,6 +1343,8 @@ body.devpanel-absent .dev-panel, body.devpanel-absent .dev-rail { display: none 
 .think-group-member.agent-kind-cloud .think-member-kind { background: color-mix(in srgb, #3b82f6 18%, transparent); color: #6f9fe6; }
 .think-group-member.agent-kind-ssh .think-member-kind { background: color-mix(in srgb, #16a34a 18%, transparent); color: #4eb96a; }
 .think-group-member.agent-kind-local .think-member-kind { background: color-mix(in srgb, #d99d5c 20%, transparent); color: #dba66f; }
+/* v3.42.0 幽灵成员徽章：群成员指向已删 Agent 池节点时出「缺席」灰态（气泡 .agent-tag 同类名复用） */
+.agent-kind-ghost { background: color-mix(in srgb, #9aa0a6 20%, transparent); color: var(--text-secondary); }
 .think-member-model { font-size: 11px; color: var(--text-secondary); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 .think-member-note { font-size: 11px; color: var(--text-tertiary); font-style: italic; }
 .think-member-cost { font-size: 12px; color: var(--accent); font-variant-numeric: tabular-nums; }

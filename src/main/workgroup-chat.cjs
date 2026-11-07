@@ -119,8 +119,9 @@ async function runCloudMemberTurn(ctx, agent, input, group, rosterNames) {
   // 对 workModeId 非空的群发恒炸 TypeError 且炸点在 try 外→被 startCloud 兜底静默吞掉（云端成员「没响应」无迹可查的根因）。
   // 对齐单聊 main.cjs 的双保险形态（async IIFE + try/catch），同步 throw 与异步 reject 都兜成 null。
   const modeConfig = input.workModeId ? await (async () => { try { return await ctx.deps.getMode(input.workModeId); } catch { return null; } })() : null;
-  // v3.37.0 群成员「各自干活」：工具组随 globalCloud 开关（toolsEnabled+非沙箱+有工作目录才注入），真实环境段随系统提示
-  const toolsInfo = typeof ctx.deps.groupTools === "function" ? ctx.deps.groupTools() : { enabled: false, allowCommand: false, workdir: "", environmentText: "" };
+  // v3.37.0 群成员「各自干活」：工具执行组随群轮编排层一次取值（v3.42.0 修复②：沙箱开启照常注入工具组，
+  // 工具走 ctx.sandboxBridge 共享执行器在容器内 /workspace 执行）
+  const toolsInfo = ctx.toolsInfo || { enabled: false, sandbox: false, allowCommand: false, workdir: "", environmentText: "" };
   const systemPrompt = groupSystemPrompt(group.name, rosterNames, agent.name, appendPlanConvention(modeConfig?.systemPrompt || ""), toolsInfo.environmentText || "");
   // 红线②：群成员请求体独立构建（@名牌归因 + 协作协议系统段；每次全新数组零共享引用）
   const cloudMessages = buildGroupMessages(conversation, systemPrompt);
@@ -139,6 +140,11 @@ async function runCloudMemberTurn(ctx, agent, input, group, rosterNames) {
   };
   if (!config.apiKey) throw new Error(`成员「${agent.name}」未配置 API Key。`);
   ctx.emit(requestId, { type: "lifecycle", status: "started", agent: { id: agent.agentId, name: agent.name, kind: "cloud" } });
+  if (ctx.sandboxBridgeError) {
+    // v3.42.0 修复②：沙箱建连失败→整组降级纯聊天，失败原因上屏（round--notice 徽标），
+    // 不再是「沙箱开=静默无工具零提示」——用户至少知道为什么成员只会聊天
+    ctx.emit(requestId, { type: "round", mark: `沙箱连接失败，本成员本轮转纯聊天：${ctx.sandboxBridgeError}` });
+  }
 
   let streamedText = "";
   let streamedReasoning = "";
@@ -230,7 +236,14 @@ async function runCloudMemberTurn(ctx, agent, input, group, rosterNames) {
           card.result = "群内子任务走 sub_agent 块";
         } else {
           try {
-            output = await ctx.deps.executeToolCall({ id: call.id, name: call.name, arguments: call.arguments }, { workdir: toolsInfo.workdir, allowCommand: toolsInfo.allowCommand, onLog: ctx.log });
+            // v3.42.0 修复②：沙箱语义落地——ctx.sandboxBridge 执行器随行（工具在容器内 /workspace 执行）；
+            // 非沙箱维持本机工作目录语义
+            output = await ctx.deps.executeToolCall({ id: call.id, name: call.name, arguments: call.arguments }, {
+              workdir: toolsInfo.sandbox ? "/workspace" : toolsInfo.workdir,
+              allowCommand: toolsInfo.allowCommand,
+              onLog: ctx.log,
+              sandboxExecutor: toolsInfo.sandbox ? ctx.sandboxBridge?.executor : undefined
+            });
             card.status = "completed";
             card.result = String(output).slice(0, 400);
             ctx.log("group_tool_success", { requestId, tool: call.name, outputLength: String(output).length });
@@ -610,11 +623,29 @@ function routeMembers(agents, mentionedIds = []) {
 }
 
 async function runGroupTurn(deps, input) {
-  const { group, agents } = pool.resolveGroupAgents(input.workgroupId);
-  if (!agents.length) throw new Error("工作组没有可用成员（节点可能已被删除）。");
+  const { group, agents, ghosts } = pool.resolveGroupAgents(input.workgroupId);
+  if (!agents.length && !(ghosts || []).length) throw new Error("工作组没有可用成员（节点可能已被删除）。");
   // v3.37.2：入口清停止旗——上一轮收口后按下的停止（旗无主残留）不得掐断本轮 SSH/本地成员；
   // 进行中的轮靠忙闸（chat:group-send 活跃条目检查）根本进不来，故此清不与「进行中停止」冲突
   stoppedConversations.delete(input.conversationId);
+  // v3.42.0 修复②：工具执行组一次取全群共用（原 runCloudMemberTurn 每轮自查 groupTools，且沙箱开=
+  // 整组禁工具）。沙箱执行器在此建立：全群云成员轮共享一张 SSH→docker exec 连接（群轮终局 dispose）。
+  const toolsInfoRaw = typeof deps.groupTools === "function"
+    ? deps.groupTools()
+    : { enabled: false, sandbox: false, allowCommand: false, workdir: "", environmentText: "" };
+  let toolsInfo = { ...toolsInfoRaw };
+  let sandboxBridge = null;
+  let sandboxBridgeError = "";
+  if (toolsInfo.sandbox) {
+    try {
+      sandboxBridge = await deps.createSandboxBridge();
+    } catch (error) {
+      // 沙箱建连失败：整组降级纯聊天（不再让每个成员的工具调用逐个失败），失败原因随事件上屏可见
+      sandboxBridgeError = String(error?.message || error).slice(0, 200);
+      toolsInfo = { ...toolsInfo, enabled: false };
+      deps.log("group_sandbox_bridge_failed", { error: sandboxBridgeError });
+    }
+  }
   const ctx = {
     deps,
     log: deps.log,
@@ -622,18 +653,30 @@ async function runGroupTurn(deps, input) {
     emitDelta: (requestId, text) => deps.sender.send("chat:group-delta", { id: requestId, text }),
     emitSub: (requestId, payload) => deps.sender.send("chat:subagent-event", { parentId: requestId, ...payload }),
     runSubAgentsForMember,
-    getMode: deps.getMode
+    getMode: deps.getMode,
+    toolsInfo, sandboxBridge, sandboxBridgeError,
+    // v3.42.0 修复①：轮启动事件——chat:group-send 改「启动即返」后，渲染层靠本事件即时建「正在思考」
+    // 气泡（不再等 sendGroupMessage resolve 批量建终态气泡），thinking/工具卡/round 事件全程实时上屏
+    emitTurnStart: (turn) => deps.sender.send("chat:event", { id: turn.requestId, agent: undefined, type: "group-turn-start", turn, conversationId: input.conversationId })
   };
   const rosterNames = agents.map((agent) => agent.name);
   const route = routeMembers(agents, input.mentionedAgentIds);
-  const turns = [];
   const isSequential = Boolean(input.autoDiscuss);
   const cloudMembers = route.filter((agent) => agent.kind === "cloud");
   const runnerMembers = route.filter((agent) => agent.kind !== "cloud");
+  const turns = [];
+  // v3.42.0 幽灵成员轮（v3.41.1 连带缺陷第三条）：群成员指向已删池节点时不再静默出局——
+  // 编排出「缺席提示轮」，渲染层直接建灰态气泡让用户知道谁缺席了（不注册悬等、不占群发忙闸）
+  const ghostTurns = (ghosts || []).map((agentId) => {
+    const turn = { requestId: `gg-${randomUUID()}`, ghost: true, agentId, name: `成员 ${String(agentId).slice(0, 8)}`, kind: "ghost" };
+    turns.push(turn);
+    return turn;
+  });
 
   const startCloud = (agent) => {
     const requestId = `g-${randomUUID()}`;
     turns.push({ requestId, agentId: agent.agentId, name: agent.name, kind: "cloud" });
+    ctx.emitTurnStart({ requestId, agentId: agent.agentId, name: agent.name, kind: "cloud", conversationId: input.conversationId });
     const promise = runCloudMemberTurn(ctx, agent, { ...input, requestId }, group, rosterNames).catch((error) => {
       // 引擎层兜底：轮 Promise 永不 reject（渲染层悬等只关心终态）；
       // 补漏：兜底收「try 外前置步骤炸 / 内部 catch 自身再炸」——原形态纯静默吞掉（零落库零事件，用户感知=「没响应」且无迹可查）。
@@ -649,9 +692,21 @@ async function runGroupTurn(deps, input) {
     groupTurns.set(requestId, { promise, conversationId: input.conversationId, agentId: agent.agentId });
     return promise;
   };
-  const startRunner = (agent) => {
+  // v3.42.0 修复①：SSH/本地成员改「先注册后排程」——轮启动事件即时外发（渲染层即时见到该成员的
+  // 「正在思考」气泡），实际启动由后台串行驱动器推进（runner 进程互斥 + SSH 卡槽互斥语义不变）。
+  // 原实现整轮 await 完才注册下一个，chat:group-send 直到全组结束才 resolve，渲染层建气泡时
+  // 一切已是终态（用户全程零可见态，工具卡/思考流全被吞在 IPC 往返之后）
+  const runnerQueue = [];
+  const registerRunner = (agent) => {
     const requestId = `g-${randomUUID()}`;
-    turns.push({ requestId, agentId: agent.agentId, name: agent.name, kind: agent.kind });
+    const turn = { requestId, agentId: agent.agentId, name: agent.name, kind: agent.kind, conversationId: input.conversationId };
+    turns.push(turn);
+    ctx.emitTurnStart(turn);
+    runnerQueue.push({ agent, turn });
+    return turn;
+  };
+  const startRegisteredRunner = ({ agent, turn }) => {
+    const requestId = turn.requestId;
     const promise = runRunnerMemberTurn(ctx, agent, { ...input, requestId }, group).catch((error) => {
       // 引擎层兜底（同云端成员兜底补漏）：emit + 失败落库（对齐内部 catch 的 kind 口径），副作用再包一层防二次 reject
       try {
@@ -666,34 +721,53 @@ async function runGroupTurn(deps, input) {
     groupTurns.set(requestId, { promise, conversationId: input.conversationId, agentId: agent.agentId });
     return promise;
   };
+  // 接力链直接启动形态（注册+立即跑）：自主讨论逐轮 await，顺序性天然成立
+  const startRunner = (agent) => startRegisteredRunner({ agent, turn: registerRunner(agent) });
+  const driveRunnerQueue = async () => {
+    for (const item of runnerQueue) {
+      if (stoppedConversations.has(input.conversationId)) break; // 紧急停止：未启动的成员轮不再开跑（渲染层悬等走 missing 收口）
+      try { await startRegisteredRunner(item); } catch (error) { deps.log("group_runner_drive_failed", { error: error.message }); }
+    }
+  };
 
+  let backgroundDone;
   if (isSequential) {
     // 自主讨论（Auto-Discuss）：按工作组顺序接力；发言上限 = maxTurns（默认 5，红线③）；
-    // 每次发言前检查停止旗——紧急停止可随时掐断接力链
-    const maxUtterances = Math.min(Math.max(Number(input.maxTurns) || group.maxTurns || 5, 1), 10);
-    const order = [...route];
-    let spoken = 0;
-    for (let i = 0; spoken < maxUtterances && i < order.length * maxUtterances; i += 1) {
-      if (stoppedConversations.has(input.conversationId)) break;
-      const agent = order[i % order.length];
-      try {
-        await (agent.kind === "cloud" ? startCloud(agent) : startRunner(agent));
-      } catch (error) {
-        deps.log("group_auto_failed", { error: error.message });
+    // 每次发言前检查停止旗——紧急停止可随时掐断接力链（v3.42.0：整链后台推进，逐轮启动事件外发）
+    backgroundDone = (async () => {
+      const maxUtterances = Math.min(Math.max(Number(input.maxTurns) || group.maxTurns || 5, 1), 10);
+      const order = [...route];
+      let spoken = 0;
+      for (let i = 0; spoken < maxUtterances && i < order.length * maxUtterances; i += 1) {
+        if (stoppedConversations.has(input.conversationId)) break;
+        const agent = order[i % order.length];
+        try {
+          await (agent.kind === "cloud" ? startCloud(agent) : startRunner(agent));
+        } catch (error) {
+          deps.log("group_auto_failed", { error: error.message });
+        }
+        spoken += 1;
       }
-      spoken += 1;
-    }
+    })();
   } else {
-    // 普通群发：云端成员并行；SSH/本地成员串行（进程互斥）
+    // 普通群发（v3.42.0 启动即返）：云端成员同步全部启动（并行）；SSH/本地成员同步注册+后台串行推进
     const cloudPromises = cloudMembers.map((agent) => startCloud(agent));
-    if (cloudPromises.length) await Promise.allSettled(cloudPromises);
-    for (const agent of runnerMembers) {
-      if (stoppedConversations.has(input.conversationId)) break;
-      await startRunner(agent);
-    }
+    for (const agent of runnerMembers) registerRunner(agent);
+    backgroundDone = (async () => {
+      const drivePromise = driveRunnerQueue();
+      if (cloudPromises.length) await Promise.allSettled(cloudPromises);
+      await drivePromise;
+    })();
   }
-  stoppedConversations.delete(input.conversationId);
-  return { turns, groupName: group.name, routed: route.map((agent) => agent.name) };
+  // 收尾：全组终局释放沙箱桥连接（红线⑤对齐）+ 清停止旗（原逻辑在 await 后，现统一挪全组 settle 后）
+  backgroundDone
+    .catch((error) => deps.log("group_turn_background_failed", { error: error.message }))
+    .finally(() => {
+      try { sandboxBridge?.dispose(); } catch { /* 桥缺失/已断开忽略 */ }
+      stoppedConversations.delete(input.conversationId);
+      deps.sender.send("chat:event", { id: `group-${input.conversationId}`, agent: undefined, type: "group-turn-settled", conversationId: input.conversationId });
+    });
+  return { turns, groupName: group.name, routed: route.map((agent) => agent.name), ghostTurns };
 }
 
 /** 紧急停止（大红按钮）：全员 stop——activeRequests 逐个 cancel + 置停止旗掐断接力链 */

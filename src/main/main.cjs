@@ -1825,6 +1825,12 @@ app.whenReady().then(async () => {
     const workdir = validatedLocalWorkdir(getCloudAiConfig().workingDirectory) || "";
     return `【本机运行环境（真实参数，直接可用）】操作系统：${platformName}（内核版本 ${os.release()}，架构 ${process.arch}）；你的工具（读文件/写文件/列目录${getCloudAiConfig().runCommandEnabled ? "/执行命令" : ""}/网络抓取）都是在这台 ${platformName} 机器上直接执行。工作目录：${workdir || "未配置（用户在连接设置配好云端工作目录后，文件与命令类工具才可用）"}。规则：能动手就动手，不要再说「不知道你电脑是什么系统」——以上就是真实系统参数。`;
   };
+  // v3.42.0 修复②：沙箱版环境段——群成员工具实际执行位置从「用户本机」变为「NAS Docker 沙箱容器」，
+  // 环境描述必须如实换位（原形态沙箱开=工具禁用无此分支；修复后成员要知道自己在容器里干活、工作目录是
+  // /workspace、容器默认断网所以网页抓取由 ACP 本机代跑）。
+  const cloudSandboxEnvironmentNote = () => {
+    return `【你的工具执行环境（真实参数，直接可用）】你的文件与命令类工具（读文件/写文件/列目录${getCloudAiConfig().runCommandEnabled ? "/执行命令" : ""}）经安全沙箱在远程主机的 Docker 容器内执行，容器内是 Linux（架构 ${process.arch}）系统；你的工作目录是容器内的 /workspace（读写文件、列目录、执行命令都以此为工作区）。容器默认断网隔离，网页抓取类需求交给「网络抓取」工具即可（由本机代跑）。规则：能动手就动手，不要再说「不知道你电脑是什么系统」——以上就是真实环境参数。`;
+  };
   // ── v3.35.6 多 AI 对话（工作）：Agent 池与工作组建档（模块一）──
   ipcMain.handle("agent-pool:list", () => poolModule.listPool());
   ipcMain.handle("agent-pool:add-cloud", (_event, input) => poolModule.addCloudNode(input || {}));
@@ -1860,12 +1866,58 @@ app.whenReady().then(async () => {
     toolDefinitions,
     groupTools: () => {
       const cloudConfig = getCloudAiConfig();
-      const enabled = Boolean(cloudConfig.toolsEnabled);
-      const allowCommand = enabled && Boolean(cloudConfig.runCommandEnabled);
-      const sandboxOn = enabled && Boolean(cloudConfig.sandboxEnabled);
+      const toolsEnabled = Boolean(cloudConfig.toolsEnabled);
+      const allowCommand = toolsEnabled && Boolean(cloudConfig.runCommandEnabled);
+      const sandboxOn = toolsEnabled && Boolean(cloudConfig.sandboxEnabled);
       const workdir = validatedLocalWorkdir(cloudConfig.workingDirectory) || "";
-      // 沙箱模式下工作目录语义在容器内，本模块不接沙盒执行器（成员级沙盒=后续增强）——工作目录缺失/沙箱开=不注入文件/命令工具，纯聊天不炸
-      return { enabled: enabled && !sandboxOn && Boolean(workdir), allowCommand, workdir, environmentText: cloudEnvironmentNote() };
+      // v3.42.0 修复②（用户装机实锤「群成员默认没有工具执行，则是聊天状态」）：沙箱开启不再是禁用工具的
+      // 理由——原形态 enabled = toolsEnabled && !sandboxOn && workdir，而 v3.22.0 沙箱是推荐开的，
+      // 用户开着沙箱时群成员从此永远纯聊天且零提示。修复 = 沙箱模式照常启用工具组（工作目录语义为
+      // 容器内 /workspace），沙箱执行器由 createSandboxBridge 建立（全群共享一张 SSH 连接，群轮终局 dispose）。
+      // 非沙箱仍维持「有工作目录才有工具组」语义（与单聊 runCloudWithTools 一致）。
+      // sandbox 判定不 throw：SSH 凭证缺失时 getSshConnection 会抛「请先保存密码」——groupTools 是同步
+      // 取值函数（runGroupTurn 每轮调用），凭证缺失降级为非沙箱语义（enabled 再依 workdir 判定），建连
+      // 环节的中文报错交给 createSandboxBridge 的 catch 链路如实上报。
+      const sandboxReady = (() => { try { return sandboxOn && Boolean(getSshConnection().host); } catch { return false; } })();
+      const sandboxEnabled = sandboxReady;
+      const enabled = toolsEnabled && (sandboxOn || Boolean(workdir));
+      return {
+        enabled,
+        sandbox: sandboxEnabled,
+        allowCommand,
+        workdir: sandboxEnabled ? "/workspace" : workdir,
+        environmentText: sandboxEnabled ? cloudSandboxEnvironmentNote() : cloudEnvironmentNote()
+      };
+    },
+    // v3.42.0 修复②：群轮共享沙箱执行器（懒建立 SSH 连接；形态复刻单聊 runCloudWithTools 的
+    // sandboxExecutor——exec 经 SSH→NAS `docker exec sandbox` 在容器内 /workspace 执行）。
+    // 群轮编排层调用一次，全部云成员轮共用这一张连接，群轮终局 dispose()。
+    createSandboxBridge: async () => {
+      const sshConn = getSshConnection(); // SSH 凭证缺失时抛「请先保存密码」中文提示
+      let client;
+      try {
+        client = await connect(
+          { host: sshConn.host, port: sshConn.port, username: sshConn.username, password: sshConn.password, hostFingerprint: sshConn.hostFingerprint },
+          () => false, // 未信任主机不在此处弹信任询问——提示用户先在 SSH 页完成首次连接信任
+          writeLog
+        );
+      } catch (error) {
+        throw new Error(`沙箱执行需要 SSH 连接 NAS：${error.message}（首次使用请先在 SSH 页面完成一次连接以信任主机指纹）`);
+      }
+      const executor = {
+        enabled: true,
+        run: async ({ command, timeoutMs, stdin }) => {
+          try {
+            const result = await exec(client, command, { timeoutMs, label: "沙箱命令", stdin });
+            return { code: result.code, stdout: result.stdout, stderr: result.stderr };
+          } catch (error) {
+            const seconds = Math.round(Number(timeoutMs) / 1000);
+            throw new Error(/超时/.test(error.message || "") ? `沙箱命令执行超时（${seconds} 秒），已终止。` : `沙箱执行失败：${error.message}`);
+          }
+        }
+      };
+      writeLog("group_sandbox_executor_ready", { host: sshConn.host, workdir: "/workspace" });
+      return { executor, dispose: () => { try { client.end(); } catch { /* 已断开 */ } } };
     },
   });
   ipcMain.handle("chat:group-send", async (event, input) => {
