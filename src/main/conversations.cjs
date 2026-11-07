@@ -220,6 +220,9 @@ function addAssistantMessage(id, text, sessionId, files = [], tools = [], reques
     // v3.35.6 群聊：成员身份随消息落库（气泡名牌 + 群聊上下文按成员转录归因）
     if (agentMeta && typeof agentMeta === "object") {
       completed.agent = { id: String(agentMeta.agentId || "").slice(0, 80), name: String(agentMeta.name || "").slice(0, 40) };
+      // v3.42.1 群聊子 Agent 派生账：成员消息保留 requestId（addUsageToMessage 按 requestId 定位追账——
+      // 子轮落库晚于父轮落库，靠这个锚点把换脑重试等子轮消耗追加进父成员消息 usage）
+      if (requestId) completed.requestId = requestId;
     }
     if (usage) completed.usage = usage;
     if (Number.isFinite(Number(durationMs))) completed.durationMs = Math.max(0, Math.round(Number(durationMs)));
@@ -228,8 +231,10 @@ function addAssistantMessage(id, text, sessionId, files = [], tools = [], reques
     if (draft) {
       Object.assign(draft, completed);
       delete draft.draft;
-      delete draft.requestId;
-    } else conversation.messages.push(completed);
+      // v3.42.1：requestId 默认删（单聊转正不留）；群成员消息保留（追账锚点，见上）
+      if (completed.requestId) draft.requestId = completed.requestId;
+      else delete draft.requestId;
+    } else { conversation.messages.push(completed); }
     if (connectionMode === "local") {
       const field = localSessionField(engine);
       if (field) conversation[field] = sessionId || conversation[field] || "";
@@ -242,6 +247,35 @@ function addAssistantMessage(id, text, sessionId, files = [], tools = [], reques
     conversation.sessionId = sessionId || conversation.sessionId;
     // v3.15.0：记录真实三值模式（ssh/cloud/local）——历史列表模式图标 + 切对话联动连接模式
     conversation.lastConnectionMode = ["ssh", "cloud", "local"].includes(connectionMode) ? connectionMode : "ssh";
+  });
+}
+
+// v3.42.1 群聊子 Agent 派生账：子轮（换脑重试等多次 attempt 的账全含）消耗追加进父成员消息 usage。
+// usage 形态兼容 {inputTokens,outputTokens,totalTokens,requests}（slimUsage）与 {prompt,completion,total}（原始账）；
+// 累计合并后恒标 cumulative:true（渲染层 loadConversation 重算走真账口径，不落估算）。
+// 父成员消息没有 requestId（旧数据/未带）或不存在的会话 → 静默 no-op（不阻塞群轮主链）。
+function addUsageToMessage(id, requestId, usage) {
+  const delta = {
+    inputTokens: Number(usage?.inputTokens ?? usage?.prompt ?? 0) || 0,
+    outputTokens: Number(usage?.outputTokens ?? usage?.completion ?? 0) || 0,
+    totalTokens: Number(usage?.totalTokens ?? usage?.total ?? 0) || 0,
+    requests: Number(usage?.requests ?? 0) || 0
+  };
+  if (!requestId || (!delta.totalTokens && !delta.requests)) return getConversation(id);
+  const conversation = getConversation(id);
+  if (!conversation) throw new Error("找不到此本地对话。请新建对话后重试。");
+  if (!conversation.messages.some((message) => message.role === "assistant" && message.requestId === requestId)) return conversation;
+  return update(id, (current) => {
+    const message = current.messages.find((message) => message.role === "assistant" && message.requestId === requestId);
+    if (!message) return;
+    const base = message.usage && typeof message.usage === "object" ? message.usage : {};
+    message.usage = {
+      inputTokens: (Number(base.inputTokens ?? base.prompt ?? 0) || 0) + delta.inputTokens,
+      outputTokens: (Number(base.outputTokens ?? base.completion ?? 0) || 0) + delta.outputTokens,
+      totalTokens: (Number(base.totalTokens ?? base.total ?? 0) || 0) + delta.totalTokens,
+      cumulative: true,
+      requests: (Number(base.requests ?? 0) || 0) + delta.requests
+    };
   });
 }
 
@@ -423,6 +457,7 @@ function makeTitle(text) {
 
 module.exports = {
   addAssistantMessage,
+  addUsageToMessage,
   addUserMessage,
   clearConversationSession,
   createConversation,

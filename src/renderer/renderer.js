@@ -756,7 +756,7 @@ function updateTokenDisplay() {
   const counter = document.querySelector("#token-counter");
   const countEl = document.querySelector("#token-count");
   if (!counter || !countEl) return;
-  const total = conversationTokens + streamingTokens + confirmedTokens;
+  const total = conversationTokens + streamingTokens + confirmedTokens + groupUsageLedgerSum();
   countEl.textContent = total.toLocaleString();
   counter.hidden = total === 0 && !contextTokens && !contextLimit;
   // v3.15.1：streaming 态仅当进行中任务属于当前显示的对话（后台任务不点亮当前计数器）
@@ -772,6 +772,7 @@ function addConversationTokens(count) {
 function resetStreamingTokens() {
   streamingTokens = 0;
   confirmedTokens = 0;
+  groupUsageLedger.clear(); // v3.42.1：群轮流内桶清空（切会话/重载不留残留账）
 }
 
 // ── 上下文进度条（v3.10.0）──
@@ -1875,6 +1876,15 @@ let groupAutoDiscussOn = false; // 自主讨论开关（按序接力，发言上
 let groupTurnsLive = new Map(); // requestId → { item, name, kind, conversationId }（渲染层群轮登记）
 const groupDeltaBuffer = new Map(); // 红线①：delta 合帧缓冲
 let groupDeltaTimer = null;
+// v3.42.1 群聊真账桶（对齐单聊 confirmedTokens 口径）：requestId（云成员轮）/ `requestId:subId`（子 Agent 轮）
+// → 该轮流内累计真账（cumulative 绝对值）。updateTokenDisplay 的 total 把全桶求和并入——
+// 「所有 AI 加起来一条计数」（用户点名：不按成员拆条，太长难看）。轮收尾（finalizeGroupTurn）清桶并账。
+const groupUsageLedger = new Map();
+function groupUsageLedgerSum() {
+  let sum = 0;
+  for (const value of groupUsageLedger.values()) sum += Number(value) || 0;
+  return sum;
+}
 // v3.42.0 修复①：群发收口状态（chat:group-send 改「启动即返」后，结束判定从「await sendGroupMessage
 // resolve」移到「主进程 group-turn-settled 事件 + 全部轮 finalize」双保险）：{conversationId, title, armed, total, failed}
 let groupSendState = null;
@@ -1977,6 +1987,14 @@ function enqueueGroupDelta(requestId, text) {
       const content = live.item.querySelector(".message-content");
       if (content) content.textContent += chunkText;
       live.text += chunkText;
+      // v3.42.1：群轮流内估算入账（SSH/本地成员轮没有 usage 真账事件——账不能空转）。
+      // absolute 口径 = estimateTokens(整段累计文本)，与 loadConversation 重算（tokensForMessage）同口径
+      // ——收尾并账值与重开会话重算值一致。云端轮真账到达置 usageSeen 旗，估算永不再覆盖真账；
+      // 会话路由：后台群轮的估算不挪用当前对话计数（v3.15.1 红线对偶）
+      if (!live.usageSeen && String(live.conversationId) === String(conversationId)) {
+        groupUsageLedger.set(String(rid), estimateTokens(live.text));
+        updateTokenDisplay();
+      }
       // v3.37.0 状态可视化：首段正文到达 →「正在回复…」（思考阶段已过；note 不再长期停在「正在处理…」的哑态）
       if (live.text && live.item.classList.contains("group-streaming")) {
         const note = live.item.querySelector(".draft-note");
@@ -2069,6 +2087,19 @@ async function finalizeGroupTurn(requestId, turnResult) {
   if (state && state.armed && String(state.conversationId) === String(live.conversationId)) {
     state.total += 1;
     if (turnResult?.failed) state.failed += 1;
+  }
+  // v3.42.1：群轮真账收尾——本轮（含子 Agent 派生轮）流内真账并入会话累计账并清桶。
+  // 落库侧消息已带 cumulative 真账（子轮账经 addUsageToMessage 追加），重开会话由 loadConversation 重算兜底。
+  let settledUsage = 0;
+  for (const key of [...groupUsageLedger.keys()]) {
+    if (key === String(requestId) || key.startsWith(`${requestId}:`)) {
+      settledUsage += Number(groupUsageLedger.get(key)) || 0;
+      groupUsageLedger.delete(key);
+    }
+  }
+  if (settledUsage) {
+    conversationTokens += settledUsage;
+    updateTokenDisplay();
   }
   if (turnResult?.failed) item.classList.add("group-failed");
   else if (turnResult?.cancelled) item.classList.add("interrupted");
@@ -4580,10 +4611,30 @@ window.agentChatPro.onChatEvent((event) => {
     return;
   }
   const answer = messages.get(event.id);
-  // v3.35.6 群轮分支：群轮的 connection/lifecycle/usage 不再单聊状态条投影（多成员互踩红线①；
-  // thinking/round/ask-user 走下方通用分支按 messages.get(id) 挂群轮气泡）
-  const GROUP_OPAQUE_EVENTS = ["upload", "connection", "lifecycle", "usage"];
+  // v3.35.6 群轮分支：群轮的 connection/lifecycle 不再单聊状态条投影（多成员互踩红线①；
+  // thinking/round/ask-user 走下方通用分支按 messages.get(id) 挂群轮气泡）。
+  // v3.42.1：usage 从不透明名单移除——群轮真账照收（主进程 v3.42.1 起每轮轮末发累计真账）。
+  const GROUP_OPAQUE_EVENTS = ["upload", "connection", "lifecycle"];
   if (groupTurnsLive.has(String(event?.id || ""))) {
+    // v3.42.1 修复（用户实测：群聊 token 计数只有几千~2 万 ≈ 只有输出）：群轮真账实时上屏。
+    // 主进程事件形态：{id: 群轮 requestId, type: "usage", subId?（子 Agent 派生轮）,
+    //   usage: {inputTokens, outputTokens, totalTokens, cumulative: true, requests}, conversationId}。
+    // 桶覆盖语义（cumulative 绝对值——多轮工具循环/子轮换脑重试每轮发累计值，不重复累计）；
+    // 桶键带 subId 区分成员轮与子轮；合计 = Σ桶（所有 AI 加起来一条）。
+    if (event.type === "usage") {
+      const liveTurn = groupTurnsLive.get(String(event.id || ""));
+      // 真账（cumulative）已到 → 估算止步（原始单轮账不算，估算仍先垫底到轮末真账覆盖）
+      if (liveTurn && event.usage?.cumulative === true) liveTurn.usageSeen = true;
+      const eventConversationId = String(event.conversationId || liveTurn?.conversationId || "");
+      if (!eventConversationId || eventConversationId !== conversationId) return; // 红线：后台群轮账不挪用当前对话计数
+      if (event.usage?.cumulative !== true) return; // 只吃累计真账（流中原始单轮账忽略）
+      const realUsage = Number(event.usage.totalTokens ?? event.usage.total_tokens ?? 0) || 0;
+      if (!realUsage) return;
+      const usageKey = String(event.id) + (event.subId ? `:${event.subId}` : "");
+      groupUsageLedger.set(usageKey, realUsage);
+      updateTokenDisplay();
+      return;
+    }
     if (GROUP_OPAQUE_EVENTS.includes(event.type)) return;
     if (event.type === "group-agent-failed") {
       const live = groupTurnsLive.get(event.id);

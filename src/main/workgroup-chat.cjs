@@ -190,6 +190,12 @@ async function runCloudMemberTurn(ctx, agent, input, group, rosterNames) {
       if (result.cancelled) break;
       // v3.37.0 自查修复：多轮工具循环 usage 按轮累计（对齐单聊 main.cjs runCloudWithTools 每轮 accumulateUsage 口径）——原来只在循环后收最后一轮，漏计
       accumulateUsage(usageTotal, result.usage);
+      // v3.42.1 修复（用户实测：群聊 token 计数只有几千~2 万 ≈ 只有输出）：每轮轮末即发累计真账
+      // （cumulative 绝对值 + conversationId 随行），对齐单聊 main.cjs L1306-1309 的口径。渲染层按
+      // requestId 桶覆盖（多轮工具循环不重复累计），所有成员轮合计一条计数。
+      if (usageTotal.requests || usageTotal.total) {
+        ctx.emit(requestId, { type: "usage", usage: slimUsage(usageTotal), conversationId: input.conversationId });
+      }
       const toolCalls = toolsInfo.enabled ? (result.toolCalls || []) : [];
       if (!toolCalls.length) break;
       const callsRaw = toolCalls.map((call, index) => {
@@ -267,6 +273,11 @@ async function runCloudMemberTurn(ctx, agent, input, group, rosterNames) {
     const repetition = collapseRepetition(streamedText);
     const finalText = repetition.collapsed ? repetition.text : streamedText;
     if (result.cancelled) {
+      // v3.42.1：取消分支也上屏真账（流中已耗的账不因用户停止而丢失——break 在累计之前，此处补收）
+      accumulateUsage(usageTotal, result.usage);
+      if (usageTotal.requests || usageTotal.total) {
+        ctx.emit(requestId, { type: "usage", usage: slimUsage(usageTotal), conversationId: input.conversationId });
+      }
       const cancelledText = finalText || "已停止。";
       ctx.deps.addAssistantMessage(input.conversationId, cancelledText, "", [], [], requestId, "cloud",
         usageTotal.requests ? slimUsage(usageTotal) : undefined, undefined, undefined, undefined, undefined,
@@ -293,8 +304,13 @@ async function runCloudMemberTurn(ctx, agent, input, group, rosterNames) {
     }
     const slim = slimError(error);
     ctx.emit(requestId, { type: "group-agent-failed", agent: { id: agent.agentId, name: agent.name, kind: "cloud" }, error: slim });
+    // v3.42.1：失败轮已耗的账也照发照落（网络断在半途时 onUsage 之外的账不丢）
+    if (usageTotal.requests || usageTotal.total) {
+      ctx.emit(requestId, { type: "usage", usage: slimUsage(usageTotal), conversationId: input.conversationId });
+    }
     ctx.deps.addAssistantMessage(input.conversationId, `（@${agent.name} 本轮失败：${slim.code} ${slim.message}）`, "", [], [], requestId, "cloud",
-      undefined, undefined, undefined, undefined, undefined, "", { agentId: agent.agentId, name: agent.name });
+      usageTotal.requests ? slimUsage(usageTotal) : undefined, undefined, undefined, undefined, undefined,
+      streamedReasoning, { agentId: agent.agentId, name: agent.name });
     return { requestId, agentId: agent.agentId, name: agent.name, kind: "cloud", failed: true, error: slim, text: "" };
   } finally {
     ctx.deps.activeRequests.delete(requestId);
@@ -480,6 +496,15 @@ async function executeSubAgent(ctx, opts, depth = 0) {
   }
   const subId = `sub-${randomUUID()}`;
   ctx.emitSub(opts.parentRequestId, { type: "subagent", subId, state: "processing", agent: { id: target.agentId, name: target.name } });
+  // v3.42.1 修复（用户实测：群聊 token 计数只算输出）：子 Agent 派生轮的账全部算内——
+  // 子轮每次请求（含换脑重试的 rerun）都经 onUsage 收账累计（subUsageTotal 跨 attempt 保留），
+  // 流中随到随发 cumulative 绝对值（渲染层按 `${parentRequestId}:${subId}` 桶覆盖），
+  // 并把累计值经各 return 带回（runSubAgentsForMember→addUsageToMessage 落库追账）。
+  const subUsageTotal = { prompt: 0, completion: 0, total: 0, requests: 0 };
+  const slimSubUsage = () => {
+    if (!subUsageTotal.requests && !subUsageTotal.total) return undefined;
+    return { inputTokens: subUsageTotal.prompt, outputTokens: subUsageTotal.completion, totalTokens: subUsageTotal.total, requests: subUsageTotal.requests };
+  };
   const attempt = async (node, resumeNote) => {
     const conversation = await ctx.deps.getConversation(opts.conversationId);
     const transcript = buildGroupTranscript(conversation.messages || [], node.name)
@@ -498,7 +523,14 @@ async function executeSubAgent(ctx, opts, depth = 0) {
       apiKey: node.apiKey, baseURL: node.baseURL || providerBaseURL(node.provider), model: node.model,
       provider: node.provider, maxTokens: getCloudAiConfig().maxTokens, proxy: getCloudAiConfig().proxy
     };
-    return sendCloudChat(cloudConfig, messages, { onLog: ctx.log });
+    return sendCloudChat(cloudConfig, messages, {
+      onLog: ctx.log,
+      // v3.42.1：子轮账随到随收随发（cumulative 绝对值 + subId 随行；渲染层独立桶覆盖不与成员轮互踩）
+      onUsage: (usage) => {
+        accumulateUsage(subUsageTotal, usage);
+        ctx.emit(opts.parentRequestId, { type: "usage", subId, usage: slimUsage(subUsageTotal), conversationId: opts.conversationId });
+      }
+    });
   };
   // 红线③：子 Agent 互调深度锁死——sub 只能从主成员发起（depth=0），换脑重试不增层
   void depth;
@@ -523,7 +555,7 @@ async function executeSubAgent(ctx, opts, depth = 0) {
           const rerun = await attempt(nextTarget, `（你此前请求换脑至 ${nextTarget.model} 并已获用户同意；请从既有基础继续完成任务。）`);
           ctx.emitSub(opts.parentRequestId, { type: "subagent", subId, state: "done", agent: { id: nextTarget.agentId, name: nextTarget.name }, text: summarize(rerun.text) });
           await injectSubReport(ctx, opts, nextTarget, rerun.text);
-          return { status: "done", agentLabel: `@${nextTarget.name}`, text: rerun.text || "" };
+          return { status: "done", agentLabel: `@${nextTarget.name}`, text: rerun.text || "", usage: slimSubUsage() };
         }
         ctx.emitSub(opts.parentRequestId, { type: "subagent", subId, state: "rejected", agent: { id: target.agentId, name: target.name }, text: "换脑目标不在 Agent 池白名单，已拒绝。" });
       } else {
@@ -532,14 +564,14 @@ async function executeSubAgent(ctx, opts, depth = 0) {
     }
     ctx.emitSub(opts.parentRequestId, { type: "subagent", subId, state: "done", agent: { id: target.agentId, name: target.name }, text: summarize(result.text) });
     await injectSubReport(ctx, opts, target, result.text);
-    return { status: "done", agentLabel: `@${target.name}`, text: result.text || "" };
+    return { status: "done", agentLabel: `@${target.name}`, text: result.text || "", usage: slimSubUsage() };
   } catch (error) {
     // 额度熔断（模块四③）：402/429 等错误 → ask_user 给用户两条路（换模型恢复 / 中止取产出）
     const slim = slimError(error);
     const quotaLike = ["4002", "402", "429", "insufficient", "balance", "quota", "rate"].some((needle) => (slim.code + slim.message).toLowerCase().includes(needle));
     ctx.emitSub(opts.parentRequestId, { type: "subagent", subId, state: "failed", agent: { id: target.agentId, name: target.name }, payload: slim });
     if (!quotaLike) {
-      return { status: "failed", agentLabel: `@${target.name}`, text: "", error: slim };
+      return { status: "failed", agentLabel: `@${target.name}`, text: "", error: slim, usage: slimSubUsage() };
     }
     const fuseCallId = `fuse-${subId}`;
     pendingAsks.set(fuseCallId, { conversationId: opts.conversationId, requestId: opts.parentRequestId });
@@ -553,20 +585,20 @@ async function executeSubAgent(ctx, opts, depth = 0) {
       const alternate = pool.whitelistedCloudTargets().find((node) => node.agentId !== target.agentId) || null;
       if (!alternate) {
         ctx.emitSub(opts.parentRequestId, { type: "subagent", subId, state: "failed", agent: { id: target.agentId, name: target.name }, text: "Agent 池没有其他云端节点可换，子任务中止。" });
-        return { status: "failed", agentLabel: `@${target.name}`, text: "", error: { code: "NO_ALT", message: "池内无备用节点" } };
+        return { status: "failed", agentLabel: `@${target.name}`, text: "", error: { code: "NO_ALT", message: "池内无备用节点" }, usage: slimSubUsage() };
       }
       try {
         const rerun = await attempt(alternate, `（原 @${target.name} 因 ${slim.code} 失败；用户同意换至你继续，请基于任务要求完成。）`);
         ctx.emitSub(opts.parentRequestId, { type: "subagent", subId, state: "done", agent: { id: alternate.agentId, name: alternate.name }, text: summarize(rerun.text) });
         await injectSubReport(ctx, opts, alternate, rerun.text);
-        return { status: "done", agentLabel: `@${alternate.name}`, text: rerun.text || "" };
+        return { status: "done", agentLabel: `@${alternate.name}`, text: rerun.text || "", usage: slimSubUsage() };
       } catch (retryError) {
         const retrySlim = slimError(retryError);
         ctx.emitSub(opts.parentRequestId, { type: "subagent", subId, state: "failed", agent: { id: alternate.agentId, name: alternate.name }, payload: retrySlim });
-        return { status: "failed", agentLabel: `@${alternate.name}`, text: "", error: retrySlim };
+        return { status: "failed", agentLabel: `@${alternate.name}`, text: "", error: retrySlim, usage: slimSubUsage() };
       }
     }
-    return { status: "aborted", agentLabel: `@${target.name}`, text: "", error: slim };
+    return { status: "aborted", agentLabel: `@${target.name}`, text: "", error: slim, usage: slimSubUsage() };
   }
 }
 
@@ -608,6 +640,13 @@ async function runSubAgentsForMember(ctx, input, agent, requestId, text) {
     });
     if (result.status === "failed" || result.status === "aborted") {
       ctx.emit(requestId, { type: "round", mark: `└─ 子 Agent ${result.agentLabel} 未完成（${result.error?.code || "未知"}）：已注入现有产出。` });
+    }
+    // v3.42.1：子轮真账落库——追加进父成员消息 usage（addUsageToMessage 按 requestId 定位父成员消息；
+    // 重开会话 loadConversation 重算真账口径（cumulative）自然含子轮消耗）
+    try {
+      if (result.usage) ctx.deps.addUsageToMessage?.(input.conversationId, requestId, result.usage);
+    } catch (error) {
+      ctx.log("group_sub_usage_merge_failed", { requestId, error: error.message });
     }
   }
 }

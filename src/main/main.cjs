@@ -28,6 +28,7 @@ const IS_BRIDGE = EDITION.edition === "bridge";
 const { CLOUD_AI_TAG } = require("./agent-http-bridge.cjs");
 const {
   addAssistantMessage,
+  addUsageToMessage, // v3.42.1 群聊子 Agent 派生账：子轮消耗追加进父成员消息 usage
   addUserMessage,
   clearConversationSession,
   createConversation,
@@ -1854,6 +1855,7 @@ app.whenReady().then(async () => {
     getConversation,
     getMode,
     addAssistantMessage,
+    addUsageToMessage, // v3.42.1：群轮子 Agent 派生账落库（子轮消耗追加进父成员消息 usage）
     addUserMessage,
     saveAssistantDraft,
     activeRequests,

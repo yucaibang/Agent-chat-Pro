@@ -248,7 +248,9 @@ body.maximized .window-shell { border-radius: 0; border: 0; box-shadow: none; }
 .workspace-trigger .spark { margin-right: 0; }
 .workspace-titles { display: flex; flex-direction: column; gap: 1px; flex: 1; min-width: 0; }
 .workspace-name { font-size: 16px; font-weight: 680; letter-spacing: .2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.workspace-desc { font-size: 11px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* v3.42.1：副标题不再长显在收起条（用户点评：单对话状态下「一对一专攻」常显不美观）——
+   workspace-trigger 收起条内整体隐藏；副标题该出现在下拉列表项（workspace-item-desc 照常显示） */
+.workspace-desc { display: none; }
 .workspace-arrow { color: var(--text-muted); font-size: 12px; flex: 0 0 auto; }
 .workspace-dropdown { position: absolute; left: 4px; right: 4px; top: 100%; margin-top: 4px; border: 1px solid var(--border-popover); border-radius: 10px; background: var(--bg-mode-dropdown); box-shadow: var(--shadow-dropdown); z-index: 70; padding: 6px; min-width: 210px; }
 .workspace-item { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: 7px; cursor: pointer; color: var(--text-secondary); font-size: 13px; transition: background .12s; }
