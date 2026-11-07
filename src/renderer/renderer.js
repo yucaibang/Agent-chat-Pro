@@ -6423,6 +6423,11 @@ async function openGroupSetup() {
         document.querySelectorAll("[data-group-tab]").forEach((item) => item.classList.toggle("active", item === tab));
         document.querySelector("#group-tab-pool").hidden = tabId !== "pool";
         document.querySelector("#group-tab-workgroups").hidden = tabId !== "workgroups";
+        // v3.42.2 修复（用户报障：保存云端节点后切 tab 看到旧快照）：列表只在对话框打开与保存
+        // 成功时刷，tab 切换后呈现的是打开瞬间的内存快照——切到哪个 tab 就重拉哪个列表，
+        // 保证勾选框/池列表任何时点与 agent-pool.json 同源最新
+        if (tabId === "workgroups") void renderSetupWgList();
+        else if (tabId === "pool") void renderSetupPoolList();
       });
     });
     document.querySelector("#group-setup-close").addEventListener("click", () => dialog.close());
@@ -6547,6 +6552,9 @@ async function openGroupSetup() {
         status.textContent = "云端节点已入池。";
         ["#pool-cloud-name", "#pool-cloud-key", "#pool-cloud-model", "#pool-cloud-baseurl"].forEach((sel) => { document.querySelector(sel).value = ""; });
         await renderSetupPoolList();
+        // v3.42.2 修复（用户报障实锤缺口）：工作组勾选框同步刷——SSH/本机实例保存双列表都刷，
+        // 云端节点保存原来只刷池列表，用户切到「工作组」tab 看不到刚保存的云端节点
+        await renderSetupWgList();
       } catch (error) {
         status.textContent = `保存失败：${error.message || error}`;
       }
@@ -6588,7 +6596,19 @@ function initGroupSetupUI() { void 0; }
 async function renderSetupPoolList() {
   const list = document.querySelector("#group-pool-list");
   if (!list) return;
-  const nodes = await window.agentChatPro.listAgentPool();
+  // v3.42.2 修复（用户报障「不显示云端节点的选项」）：读取失败不再静默吞成空白——
+  // 反白显性上报，用户能看到原因而不是误以为池为空
+  let nodes = [];
+  try {
+    nodes = await window.agentChatPro.listAgentPool();
+  } catch (error) {
+    list.replaceChildren();
+    const failed = document.createElement("p");
+    failed.className = "group-hint";
+    failed.textContent = `⚠️ Agent 池读取失败：${error.message || error}（新建对话不修复此错，请重启应用；仍失败请反馈日志）`;
+    list.append(failed);
+    return;
+  }
   list.replaceChildren();
   if (!nodes.length) {
     const empty = document.createElement("p");
@@ -6654,10 +6674,22 @@ let groupSetupSelectedWorkgroupId = "";
 async function renderSetupWgList() {
   const list = document.querySelector("#group-wg-list");
   if (!list) return;
-  const [workgroups, nodes] = await Promise.all([
-    window.agentChatPro.listWorkgroups(),
-    window.agentChatPro.listAgentPool()
-  ]);
+  // v3.42.2 修复（用户报障「不显示云端节点的选项」）：读取失败不再静默吞成空白勾选框
+  let workgroups = [];
+  let nodes = [];
+  try {
+    [workgroups, nodes] = await Promise.all([
+      window.agentChatPro.listWorkgroups(),
+      window.agentChatPro.listAgentPool()
+    ]);
+  } catch (error) {
+    list.replaceChildren();
+    const failed = document.createElement("p");
+    failed.className = "group-hint";
+    failed.textContent = `⚠️ 工作组/Agent 池读取失败：${error.message || error}（请重启应用；仍失败请反馈日志）`;
+    list.append(failed);
+    return;
+  }
   list.replaceChildren();
   const checks = document.querySelector("#wg-member-checks");
   checks.replaceChildren();
@@ -6714,6 +6746,15 @@ async function renderSetupWgList() {
     label.append(check, document.createTextNode(` @${node.name}（${node.kind === "cloud" ? "云端" : node.kind === "ssh" ? "SSH" : "本机"}）`));
     checks.append(label);
   });
+  // v3.42.2 修复（用户报障核心：池空时勾选框区域全空白、零引导，用户不知道云端成员要独立入池）：
+  // 主设置里的云端连接（provider/key/model）与工作群成员池是两套存储（v3.35.6 规格：成员独立
+  // 计费、密钥不与主连接共用）——主连接保存了不等于池里有节点，必须在此给显性引导
+  if (!nodes.length) {
+    const hint = document.createElement("p");
+    hint.className = "group-hint";
+    hint.textContent = "还没有可勾选的成员：请切到「Agent 池」页添加节点（云端 / SSH / 本机）。主设置里的云端连接不会自动入池——工作群成员独立计费、密钥单独填，添加后回到这里勾选即可建群。";
+    checks.append(hint);
+  }
   if (!workgroups.length) {
     const empty = document.createElement("p");
     empty.className = "group-hint";
