@@ -6,7 +6,7 @@
 
 [![Version](https://img.shields.io/badge/version-3.42.3-blue.svg)]()
 [![Platform](https://img.shields.io/badge/platform-Windows-green.svg)]()
-[![Tests](https://img.shields.io/badge/tests-51%20files%20green-brightgreen.svg)]()
+[![Tests](https://img.shields.io/badge/tests-52%20files%20green-brightgreen.svg)]()
 
 ---
 
