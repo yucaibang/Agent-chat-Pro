@@ -96,7 +96,9 @@ console.log("── B 组：版本断言 ──");
 }
 {
   const readme = fs.readFileSync(path.join(ROOT, "README.md"), "utf8");
-  check("B2 README badge 版本含 3.42.2", readme.includes("version-3.42.2"));
+  const pkg2 = JSON.parse(fs.readFileSync(path.join(ROOT, "package.json"), "utf8"));
+  // v3.42.3 起 B2 放宽为「README badge 与 package.json 同步自洽」——不再写死版本号随 bump 翻红（v3.25.0 E1 先例）
+  check("B2 README badge 版本与 package.json 一致", readme.includes(`version-${pkg2.version}-blue`));
 }
 
 console.log(`━━━ test-v3-42-2 共 ${passed + failed} 项 · 通过 ${passed} · 失败 ${failed} ━━━`);

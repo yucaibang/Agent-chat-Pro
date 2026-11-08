@@ -1811,8 +1811,14 @@ async function loadConversation(id) {
   elements.messages.replaceChildren();
   // v3.15.0 bug1：此对话正在后台处理中——最后一条 draft 是流式元素本体，跳过渲染，随后重新挂载流式元素
   const streamingOngoing = Boolean(activeId && streamingConversationId === conversation.id);
+  // v3.42.3：群聊后台轮切回（v3.42.0 启动即返后群轮可后台推进）——本对话仍有进行中群轮时，
+  // 其 draft 不重复渲染（live 气泡重新挂载接管，后续 delta 无缝续写同一引用）；未进行中的 draft 照常渲染
+  const groupLiveForConversation = [...groupTurnsLive.values()].filter(
+    (live) => String(live.conversationId) === String(conversation.id)
+  );
   conversation.messages.forEach((message) => {
     if (message.draft && streamingOngoing) return;
+    if (message.draft && groupLiveForConversation.length && groupTurnsLive.has(String(message.requestId || ""))) return;
     const item = addMessage(message.role, message.text, { senderType: message.senderType || "", agent: message.agent || null });
     // v3.15.5 修复2：写入落库锚点（mid/at/role）——右键「删除此条及下方所有消息」据此同步落库删除
     item.dataset.msgId = message.mid || "";
@@ -1841,6 +1847,14 @@ async function loadConversation(id) {
   if (streamingOngoing) {
     const answer = messages.get(activeId);
     if (answer && !answer.isConnected) elements.messages.append(answer);
+  }
+  // v3.42.3：群聊后台轮切回——重挂进行中群轮气泡（同一引用，thinking/delta/工具卡无缝续写；
+  // live 项挂载顺序=登记序）；后台成员的最终消息落库照常，finalize 时该气泡原位转正
+  for (const live of groupLiveForConversation) {
+    if (live.item && !live.item.isConnected) elements.messages.append(live.item);
+  }
+  if (groupLiveForConversation.length) {
+    setConnection(`群聊仍在后台处理中（${groupLiveForConversation.length} 位成员），输出结束后自动完成`, "connected");
   }
   elements.empty.hidden = conversation.messages.length > 0 || streamingOngoing;
   if (streamingOngoing) {
@@ -1980,6 +1994,7 @@ function enqueueGroupDelta(requestId, text) {
   groupDeltaBuffer.set(requestId, (groupDeltaBuffer.get(requestId) || "") + String(text || ""));
   const flush = () => {
     groupDeltaTimer = null;
+    let touchedCurrentView = false; // v3.42.3：仅本轮 flush 有当前视图的轮才允许跟随滚动（后台轮写 detached 引用照常积累，不拉扯他会话）
     for (const [rid, chunkText] of groupDeltaBuffer.entries()) {
       groupDeltaBuffer.delete(rid);
       const live = groupTurnsLive.get(rid);
@@ -1987,6 +2002,7 @@ function enqueueGroupDelta(requestId, text) {
       const content = live.item.querySelector(".message-content");
       if (content) content.textContent += chunkText;
       live.text += chunkText;
+      if (String(live.conversationId) === String(conversationId)) touchedCurrentView = true;
       // v3.42.1：群轮流内估算入账（SSH/本地成员轮没有 usage 真账事件——账不能空转）。
       // absolute 口径 = estimateTokens(整段累计文本)，与 loadConversation 重算（tokensForMessage）同口径
       // ——收尾并账值与重开会话重算值一致。云端轮真账到达置 usageSeen 旗，估算永不再覆盖真账；
@@ -2001,7 +2017,7 @@ function enqueueGroupDelta(requestId, text) {
         if (note && note.textContent !== `@${live.name} 正在回复…`) note.textContent = `@${live.name} 正在回复…`;
       }
     }
-    if (isNearBottom()) elements.messages.scrollTop = elements.messages.scrollHeight;
+    if (touchedCurrentView && isNearBottom()) elements.messages.scrollTop = elements.messages.scrollHeight;
   };
   if (!groupDeltaTimer) groupDeltaTimer = setTimeout(flush, 24);
 }
@@ -2023,10 +2039,14 @@ function renderGroupTurnBubble(turn) {
 }
 
 /** v3.42.0 修复①：群轮气泡统一入口（幂等）——事件先到即建「正在思考」气泡并注册悬等，
- * sendGroupMessage resolve 后快照建轮同样走这里（has 防重）。幽灵轮分流灰态缺席气泡。 */
+ * sendGroupMessage resolve 后快照建轮同样走这里（has 防重）。幽灵轮分流灰态缺席气泡。
+ * v3.42.3 会话归属守卫：后台群轮（启动即返+背景推进）不再把「正在思考」气泡建进当前看到的
+ * 其他会话视图（用户切走后启动的成员轮/幽灵轮此前直接建进错误视图并接流=视图污染）；
+ * 后台轮输出照常落库，切回时 loadConversation 重挂 live 项无缝衔接（v3.15.0 单聊同款语义）。 */
 function ensureGroupTurnBubble(turn) {
   const requestId = String(turn?.requestId || "");
   if (!requestId) return null;
+  if (String(turn?.conversationId || "") !== String(groupActiveConversationId)) return null;
   if (turn.ghost) return renderGhostTurnBubble(turn);
   if (groupTurnsLive.has(requestId)) return groupTurnsLive.get(requestId).item;
   renderGroupTurnBubble(turn);
@@ -2197,6 +2217,7 @@ async function emergencyStopGroup() {
         live.item.prepend(note2);
       }
       groupTurnsLive.delete(requestId);
+      messages.delete(requestId); // v3.42.3：messages Map 同步清（finalize 此前因 live 缺席早退不删，残留 detached 引用）
     }
     // v3.42.0：停止=取消分支——收口状态立即解除布防（不再等 settle 事件；任务完成通知不上报，对齐 v3.41.0 取消语义）
     if (groupSendState && groupSendState.armed) groupSendState = { ...groupSendState, armed: false };

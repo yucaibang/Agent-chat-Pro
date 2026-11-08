@@ -75,7 +75,7 @@ const askUserRegistry = createAskUserRegistry();
 const { collapseRepetition } = require("./repetition-guard.cjs"); // v3.15.5 修复1：复读检测折叠
 // v3.35.6 多 AI 对话（工作）：Agent 池/工作组建档（模块一）+ 群聊引擎与 Sub-Agent 包工头（模块三④）
 const poolModule = require("./agent-pool.cjs");
-const { runGroupTurn, awaitGroupTurn, stopGroupTurns, executeSubAgent, summarize: subSummarize, slimError: subSlimError } = require("./workgroup-chat.cjs");
+const { runGroupTurn, awaitGroupTurn, stopGroupTurns, executeSubAgent, isGroupTurnActive, summarize: subSummarize, slimError: subSlimError } = require("./workgroup-chat.cjs");
 const {
   auditToolDetails
 } = require("./status-event-normalizer.cjs");
@@ -1932,10 +1932,15 @@ app.whenReady().then(async () => {
     if (!getConversation(conversationId)) throw new Error("找不到对话，请新建后重试。");
     // v3.37.2 群发忙闸：该对话仍有进行中群轮时拒绝（渲染层闸兜底主闸）——
     // 原来无闸：群发进行中再群发=双群轮并发（云成员上下文互踩、SSH 卡槽 profile 切换互踩、消息双份落库）
+    // v3.42.3 忙闸双查：activeRequests 只认已登记轮——「门检查」与「首轮登记」之间隔着 getConversation
+    // IO / createSandboxBridge SSH 建连秒级窗口，纯 activeRequests 闸可被快速二连发穿透，补引擎层同步集合闸
     for (const entry of activeRequests.values()) {
       if (entry && entry.conversationId === conversationId) {
         throw new Error("群聊正在进行中（有成员仍在工作）。请点红色停止按钮结束本轮，或等本轮结束后再发。");
       }
+    }
+    if (isGroupTurnActive(conversationId)) {
+      throw new Error("群聊正在进行中（有成员仍在工作）。请点红色停止按钮结束本轮，或等本轮结束后再发。");
     }
     writeLog("group_send_start", {
       conversationId, workgroupId, textLength: message.length,

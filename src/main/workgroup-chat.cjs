@@ -38,6 +38,14 @@ const pool = require("./agent-pool.cjs");
 const groupTurns = new Map(); // requestId → Promise<{ agentId, name, ... }>
 const stoppedConversations = new Set(); // 紧急停止旗（大红按钮置位，接力驱动逐旗收口）
 const pendingAsks = new Map(); // callId → { conversationId }（子 Agent 换脑/熔断选择卡悬等登记，群停止总收口）
+// v3.42.3 群发忙闸第二道（同步语义）：「chat:group-send 门检查（activeRequests）」与「首轮真正登记进
+// activeRequests」之间隔着 getConversation IO / createSandboxBridge SSH 建连（秒级）——纯 activeRequests
+// 闸可被快速二连发穿透（双群轮并发：消息双份落库、SSH 卡槽互踩、双 sandbox bridge）。主进程忙闸改双查
+// （activeRequests ∪ 本集合）；集合生命周期 = runGroupTurn 同步入场登记 → 全组 settle（backgroundDone.finally）清退。
+const activeGroupConversations = new Set();
+function isGroupTurnActive(conversationId) {
+  return activeGroupConversations.has(String(conversationId || ""));
+}
 
 /** 红线④：错误瘦身——只传 {code,message}，message 截 300 字，严禁 Stack 堆栈 */
 function slimError(error) {
@@ -667,6 +675,10 @@ async function runGroupTurn(deps, input) {
   // v3.37.2：入口清停止旗——上一轮收口后按下的停止（旗无主残留）不得掐断本轮 SSH/本地成员；
   // 进行中的轮靠忙闸（chat:group-send 活跃条目检查）根本进不来，故此清不与「进行中停止」冲突
   stoppedConversations.delete(input.conversationId);
+  // v3.42.3：忙闸同步登记（先于一切 await——resolveGroupAgents 之后无同步 throw 路径，清退由
+  // backgroundDone.finally 兜底，异常路径不会泄漏集合条目把对话锁死）
+  const conversationKey = String(input.conversationId || "");
+  activeGroupConversations.add(conversationKey);
   // v3.42.0 修复②：工具执行组一次取全群共用（原 runCloudMemberTurn 每轮自查 groupTools，且沙箱开=
   // 整组禁工具）。沙箱执行器在此建立：全群云成员轮共享一张 SSH→docker exec 连接（群轮终局 dispose）。
   const toolsInfoRaw = typeof deps.groupTools === "function"
@@ -799,12 +811,16 @@ async function runGroupTurn(deps, input) {
     })();
   }
   // 收尾：全组终局释放沙箱桥连接（红线⑤对齐）+ 清停止旗（原逻辑在 await 后，现统一挪全组 settle 后）
+  // + v3.42.3：忙闸同步登记清退（全组 settle 才解锁，二连发整段窗口全被闸住）
   backgroundDone
     .catch((error) => deps.log("group_turn_background_failed", { error: error.message }))
     .finally(() => {
       try { sandboxBridge?.dispose(); } catch { /* 桥缺失/已断开忽略 */ }
       stoppedConversations.delete(input.conversationId);
-      deps.sender.send("chat:event", { id: `group-${input.conversationId}`, agent: undefined, type: "group-turn-settled", conversationId: input.conversationId });
+      activeGroupConversations.delete(conversationKey);
+      try {
+        deps.sender.send("chat:event", { id: `group-${input.conversationId}`, agent: undefined, type: "group-turn-settled", conversationId: input.conversationId });
+      } catch { /* 窗口已销毁（应用退出中）：settled 信号无处可去，静默 */ }
     });
   return { turns, groupName: group.name, routed: route.map((agent) => agent.name), ghostTurns };
 }
@@ -859,5 +875,6 @@ module.exports = {
   summarize,
   stopGroupTurns,
   awaitGroupTurn,
+  isGroupTurnActive,
   providerBaseURL
 };
