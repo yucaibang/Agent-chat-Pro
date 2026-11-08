@@ -12,7 +12,7 @@ const { applyOpenAiThinking, applyAnthropicThinking } = require("./thinking-leve
  * 云端 AI 聊天模块 — OpenAI 兼容 API + Anthropic Messages API
  *
  * 支持服务商：
- * - 智谱 AI / DeepSeek / Kimi / 豆包 / OpenAI / Gemini / Groq / 硅基流动 — OpenAI 兼容
+ * - 智谱 AI / DeepSeek / Kimi / 豆包 / OpenAI / Gemini / xAI Grok / 硅基流动 — OpenAI 兼容
  * - Anthropic Claude — Messages API 适配
  * - 任何 OpenAI 兼容 API（自定义）
  *
@@ -136,7 +136,7 @@ function buildChatBody(messages, options = {}) {
     max_tokens: options.maxTokens || 8192,
     // v3.21.3 修复①：OpenAI 兼容流式默认不回 usage 块（token 计量只剩估算值）。
     // 标准字段 stream_options.include_usage 会让端点在最后一个 chunk 附带完整 usage；
-    // 主流 OpenAI 兼容端点（智谱/DeepSeek/Kimi/OpenAI/Groq/硅基流动/豆包）均支持，未知字段在中转站一般被忽略。
+    // 主流 OpenAI 兼容端点（智谱/DeepSeek/Kimi/OpenAI/xAI/硅基流动/豆包）均支持，未知字段在中转站一般被忽略。
     // Anthropic 分支不走此函数（原生 message_delta 自带 usage）。
     stream_options: { include_usage: true }
   };
@@ -553,7 +553,7 @@ const PROVIDER_LABELS = {
   doubao: "豆包",
   openai: "OpenAI",
   gemini: "Gemini",
-  groq: "Groq",
+  xai: "Grok",
   siliconflow: "硅基流动",
   anthropic: "Claude",
   custom: "自定义接口"

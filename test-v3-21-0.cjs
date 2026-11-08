@@ -127,12 +127,12 @@ async function main() {
 
   await test("A9. 端点表：8 家全配齐（豆包不在表），anthropic 用 x-api-key + version", () => {
     assert.deepStrictEqual(Object.keys(cloudModels.PULL_ENDPOINTS).sort(),
-      ["anthropic", "deepseek", "gemini", "groq", "kimi", "openai", "siliconflow", "zhipu"]);
+      ["anthropic", "deepseek", "gemini", "kimi", "openai", "siliconflow", "xai", "zhipu"]);
     assert.ok(cloudModels.PULL_ENDPOINTS.deepseek.url.endsWith("/models"));
     assert.strictEqual(cloudModels.PULL_ENDPOINTS.kimi.url, "https://api.moonshot.cn/v1/models");
     assert.strictEqual(cloudModels.PULL_ENDPOINTS.anthropic.auth, "anthropic");
     assert.ok(cloudModels.PULL_ENDPOINTS.gemini.url.includes("/v1beta/openai/models"));
-    assert.ok(cloudModels.PULL_ENDPOINTS.groq.url.includes("/openai/v1/models"));
+    assert.ok(cloudModels.PULL_ENDPOINTS.xai.url.includes("/v1/models"));
   });
 
   await test("A10. 超时（挂起服务器 + 200ms 超时）→ reason 含「请求超时」", async () => {
@@ -249,15 +249,13 @@ async function main() {
     assert.ok(!rendererSrc.includes("claude-sonnet-4-20250514"), "4-20250514 已退役");
   });
 
-  await test("C9. Groq production+preview 全在列；mixtral/gemma2 死款不复现", () => {
-    for (const id of ["llama-3.3-70b-versatile", "llama-3.1-8b-instant", "openai/gpt-oss-120b",
-      "openai/gpt-oss-20b", "qwen/qwen3.8-27b", "minimaxai/minimax-m2.7",
-      "openai/gpt-oss-safeguard-20b", "meta-llama/llama-4-scout-17b-16e-instruct",
-      "groq/compound", "groq/compound-mini"]) {
+  await test("C9. xAI Grok 主力全在列；mixtral/gemma2/compound 死款不复现", () => {
+    for (const id of ["grok-4", "grok-4-fast", "grok-code-fast-1", "grok-3", "grok-3-mini"]) {
       assert.ok(rendererSrc.includes(`value: "${id}"`), `缺 ${id}`);
     }
     assert.ok(!rendererSrc.includes("mixtral"), "mixtral 已下线");
     assert.ok(!rendererSrc.includes("gemma2-9b"), "gemma2-9b-it 已下线");
+    assert.ok(!rendererSrc.includes("groq/compound"), "Groq Compound 随服务商替换下线（v3.43.0）");
   });
 
   await test("C10. 硅基流动主力全在列（GLM5.x/DS V4/Kimi/Qwen3.5 系）+ Qwen2.5 死款不复现", () => {

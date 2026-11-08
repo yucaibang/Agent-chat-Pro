@@ -18,7 +18,7 @@ const PULL_ENDPOINTS = {
   openai: { url: "https://api.openai.com/v1/models", auth: "bearer" },
   gemini: { url: "https://generativelanguage.googleapis.com/v1beta/openai/models", auth: "bearer" },
   anthropic: { url: "https://api.anthropic.com/v1/models", auth: "anthropic" },
-  groq: { url: "https://api.groq.com/openai/v1/models", auth: "bearer" },
+  xai: { url: "https://api.x.ai/v1/models", auth: "bearer" },
   siliconflow: { url: "https://api.siliconflow.cn/v1/models", auth: "bearer" }
 };
 

@@ -115,10 +115,10 @@ async function runLevelsTests() {
     assert.ok(o3.levels.length === 4 && !o3.levels.some((l) => l.id === "xhigh"), "o3 应四挡无超高");
   });
 
-  await test("A6 Groq 仅 gpt-oss 支持挡；硅基流动按模型前缀分族", () => {
-    const oss = levels.resolveThinkingProfile("groq", "gpt-oss-120b");
-    assert.deepStrictEqual(oss.levels.map((l) => l.id), ["low", "medium", "high"]);
-    assert.strictEqual(levels.resolveThinkingProfile("groq", "llama-3.3-70b"), null, "非 oss 应零挡");
+  await test("A6 xAI 仅 grok 系支持挡；硅基流动按模型前缀分族", () => {
+    const grok = levels.resolveThinkingProfile("xai", "grok-4-fast");
+    assert.deepStrictEqual(grok.levels.map((l) => l.id), ["low", "high"]);
+    assert.strictEqual(levels.resolveThinkingProfile("xai", "llama-3.3-70b"), null, "xai 下非 grok 前缀应零挡");
     const sQwen35 = levels.resolveThinkingProfile("siliconflow", "Qwen3.5-Plus");
     assert.strictEqual(sQwen35.family, "siliconflow_effort");
     const sQwen3 = levels.resolveThinkingProfile("siliconflow", "Qwen3-32B");

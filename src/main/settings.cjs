@@ -598,7 +598,7 @@ function getCloudAiConfig() {
     openai: { baseURL: "https://api.openai.com/v1", defaultModel: "gpt-5.4-mini" },
     gemini: { baseURL: "https://generativelanguage.googleapis.com/v1beta/openai", defaultModel: "gemini-2.5-flash" },
     anthropic: { baseURL: "https://api.anthropic.com/v1", defaultModel: "claude-sonnet-5-5" },
-    groq: { baseURL: "https://api.groq.com/openai/v1", defaultModel: "llama-3.3-70b-versatile" },
+    xai: { baseURL: "https://api.x.ai/v1", defaultModel: "grok-4-fast" },
     siliconflow: { baseURL: "https://api.siliconflow.cn/v1", defaultModel: "Qwen/Qwen3.5-27B" },
     custom: { baseURL: "", defaultModel: "" }
   };

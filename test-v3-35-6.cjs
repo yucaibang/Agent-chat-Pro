@@ -279,7 +279,7 @@ async function runStaticTests() {
     assert.ok(stylesSrc.includes(".voice-button.recording") && stylesSrc.includes("@keyframes voice-pulse"), "录音红态脉动样式在册");
     // 行为：voice-transcribe.cjs 实调（fetchImpl 注入，不发真网）
     const voiceTranscribe = require(path.join(ROOT, "src", "main", "voice-transcribe.cjs"));
-    for (const [provider, model] of [["zhipu", "glm-asr-2512"], ["siliconflow", "FunAudioLLM/SenseVoiceSmall"], ["openai", "whisper-1"], ["groq", "whisper-large-v3"]]) {
+    for (const [provider, model] of [["zhipu", "glm-asr-2512"], ["siliconflow", "FunAudioLLM/SenseVoiceSmall"], ["openai", "whisper-1"]]) {
       assert.ok(voiceTranscribe.asrInfoFor(provider).supported && voiceTranscribe.asrInfoFor(provider).model === model, `${provider} → ${model} 映射正确`);
     }
     assert.ok(!voiceTranscribe.asrInfoFor("deepseek").supported && !voiceTranscribe.asrInfoFor("doubao").supported, "无转录端点的服务商明确不支持（deepseek/豆包等）");
@@ -298,7 +298,7 @@ async function runStaticTests() {
     assert.ok(!noKey.ok && noKey.noKey, "没有已保存云端 Key 直接拦下并给引导");
     const tooLong = await voiceTranscribe.transcribeAudio({ provider: "zhipu", apiKey: "k", baseURL: "https://open.bigmodel.cn/api/paas/v4" }, { audioBase64: wavB64, seconds: 45 }, fakeFetch);
     assert.ok(!tooLong.ok && tooLong.reason.includes("超出"), "智谱 30 秒官方时长上限主进程二次校验");
-    const denied = await voiceTranscribe.transcribeAudio({ provider: "groq", apiKey: "bad", baseURL: "https://api.groq.com/openai/v1" }, { audioBase64: wavB64 }, async () => ({ ok: false, status: 401, text: () => "{}" }));
+    const denied = await voiceTranscribe.transcribeAudio({ provider: "openai", apiKey: "bad", baseURL: "https://api.openai.com/v1" }, { audioBase64: wavB64 }, async () => ({ ok: false, status: 401, text: () => "{}" }));
     assert.ok(!denied.ok && denied.reason.includes("密钥无效"), "401 中文文案（密钥无效）");
   });
   await test("5.10 空态建群入口布局加固（v3.35.8 线上截图 bug：窄容器下按钮被压成一字一行窄条）", () => {

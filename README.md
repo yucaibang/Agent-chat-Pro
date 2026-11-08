@@ -4,9 +4,9 @@
 
 一个面向 Windows 桌面的 Electron 应用：把「连着云上的 AI 服务商」「SSH 到远端机器跑 Claude Code」「本机跑 Claude Code」三种工作方式装进同一个界面，并围绕它长出了一整套周边——云办公沙箱、N2N 虚拟专网体检与一键部署、设备联动、开发面板、防破解构建管线等。
 
-[![Version](https://img.shields.io/badge/version-3.42.3-blue.svg)]()
+[![Version](https://img.shields.io/badge/version-3.43.0-blue.svg)]()
 [![Platform](https://img.shields.io/badge/platform-Windows-green.svg)]()
-[![Tests](https://img.shields.io/badge/tests-52%20files%20green-brightgreen.svg)]()
+[![Tests](https://img.shields.io/badge/tests-53%20files%20green-brightgreen.svg)]()
 
 ---
 
@@ -18,7 +18,7 @@
 - **本机运行** — 使用本机 Claude Code / AtomCode daemon 引擎 / 自定义命令引擎
 
 ### 🤖 十家 AI 服务商 + 模型清单全量
-智谱 AI · DeepSeek · Kimi · 豆包 · OpenAI · Gemini · Anthropic · Groq · 硅基流动 · 自定义中转。填写密钥后可一键「🔄 拉取」实时读官方模型列表，下拉框现拉现用；模型名支持手动填写，中转站兼容 one-api/new-api。
+智谱 AI · DeepSeek · Kimi · 豆包 · OpenAI · Gemini · Anthropic · Grok（xAI） · 硅基流动 · 自定义中转。填写密钥后可一键「🔄 拉取」实时读官方模型列表，下拉框现拉现用；模型名支持手动填写，中转站兼容 one-api/new-api。
 
 ### 💬 现代聊天体验
 - 思考过程折叠块标题带「字数 · ⏱ 耗时 · 🧠 档位」元信息（流式渐进收敛）
@@ -134,7 +134,7 @@ API 密钥使用 Electron safeStorage **加密后落盘在你本机用户目录*
 <details>
 <summary><b>支持哪些 AI 服务商？中转站能用吗？</b></summary>
 
-内置十家：智谱 AI、DeepSeek、Kimi、豆包、OpenAI、Gemini、Anthropic、Groq、硅基流动 + 自定义。自定义兼容 OpenAI 格式的中转端点（one-api / new-api 等），手填 Base URL + 密钥 + 模型名即可。各家清单随版本更新，也可点「🔄 拉取」实时读你密钥能用的全部模型。
+内置十家：智谱 AI、DeepSeek、Kimi、豆包、OpenAI、Gemini、Anthropic、Grok（xAI）、硅基流动 + 自定义。自定义兼容 OpenAI 格式的中转端点（one-api / new-api 等），手填 Base URL + 密钥 + 模型名即可。各家清单随版本更新，也可点「🔄 拉取」实时读你密钥能用的全部模型。
 </details>
 
 <details>

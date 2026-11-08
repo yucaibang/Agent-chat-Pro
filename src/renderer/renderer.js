@@ -3314,24 +3314,19 @@ const CLOUD_PROVIDERS = {
     registerUrl: "https://console.anthropic.com/settings/keys",
     hint: '需要 Anthropic API Key。<a href="https://console.anthropic.com/settings/keys" id="cloud-register-link">点击管理密钥</a>。'
   },
-  groq: {
-    name: "Groq",
-    baseUrl: "https://api.groq.com/openai/v1/",
+  xai: {
+    name: "Grok（xAI）",
+    baseUrl: "https://api.x.ai/v1/",
     pullModels: true,
     models: [
-      { value: "llama-3.3-70b-versatile", label: "Llama 3.3 70B（~280tps）" },
-      { value: "llama-3.1-8b-instant", label: "Llama 3.1 8B（~560tps 极速）" },
-      { value: "openai/gpt-oss-120b", label: "GPT-OSS-120B（~500tps）" },
-      { value: "openai/gpt-oss-20b", label: "GPT-OSS-20B（~1000tps）" },
-      { value: "qwen/qwen3.8-27b", label: "Qwen3.8-27B（视觉）" },
-      { value: "minimaxai/minimax-m2.7", label: "MiniMax-M2.7" },
-      { value: "openai/gpt-oss-safeguard-20b", label: "GPT-OSS-Safeguard-20B（安全审查）" },
-      { value: "meta-llama/llama-4-scout-17b-16e-instruct", label: "Llama 4 Scout 17B" },
-      { value: "groq/compound", label: "Groq Compound（联网 Agent 系统）" },
-      { value: "groq/compound-mini", label: "Groq Compound-Mini（联网）" }
+      { value: "grok-4", label: "Grok-4（旗舰）" },
+      { value: "grok-4-fast", label: "Grok-4-Fast（高性价比）" },
+      { value: "grok-code-fast-1", label: "Grok-Code-Fast-1（编程）" },
+      { value: "grok-3", label: "Grok-3" },
+      { value: "grok-3-mini", label: "Grok-3-Mini（可调 reasoning_effort）" }
     ],
-    registerUrl: "https://console.groq.com/keys",
-    hint: '还没有密钥？<a href="https://console.groq.com/keys" id="cloud-register-link">点击注册 Groq</a>，极速推理，免费额度。'
+    registerUrl: "https://console.x.ai/",
+    hint: '还没有密钥？<a href="https://console.x.ai/" id="cloud-register-link">点击注册 xAI（Grok）</a>，OpenAI 兼容接口。'
   },
   siliconflow: {
     name: "硅基流动",
@@ -3895,7 +3890,7 @@ document.querySelector("#attach").addEventListener("click", () => elements.fileP
 // ── v3.36.0 输入栏「听说」：麦克风语音输入（点击开始录音，说完再点一次，云端转录把文字插进输入框）──
 // Electron 内置 webkitSpeechRecognition 在 Electron 里从未真正可用（electron#46143 维护者确认依赖
 // Chrome 专属云服务），故录音走渲染层 WebAudio 采 16kHz 单声道 WAV → voice:transcribe IPC →
-// 云端转录端点（智谱/硅基流动/OpenAI/Groq，密钥用连接设置已保存的云配置，零新增配置）。
+// 云端转录端点（智谱/硅基流动/OpenAI，密钥用连接设置已保存的云配置，零新增配置）。
 const voiceButton = document.querySelector("#voice");
 const VOICE_DEFAULT_PLACEHOLDER = elements.prompt?.placeholder || "给 Agent 发消息…（Enter 发送，Shift + Enter 换行）";
 let voiceSession = null; // { stream, audioContext, source, processor, chunks, sampleRate, startedAt, timer, maxSeconds }
@@ -6401,7 +6396,7 @@ document.querySelector("#save-auto-compact").addEventListener("click", async (ev
 // ── v3.35.6 建群对话框（模块一 群主视角）：Agent 池管理 + 工作组编排 ──────────────
 const GROUP_PROVIDERS = [
   ["zhipu", "智谱 GLM"], ["deepseek", "DeepSeek"], ["kimi", "Kimi"], ["doubao", "豆包"],
-  ["openai", "OpenAI"], ["anthropic", "Anthropic"], ["gemini", "Gemini"], ["groq", "Groq"],
+  ["openai", "OpenAI"], ["anthropic", "Anthropic"], ["gemini", "Gemini"], ["xai", "Grok"],
   ["siliconflow", "硅基流动"], ["custom", "custom"]
 ];
 

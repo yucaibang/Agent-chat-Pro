@@ -505,7 +505,7 @@ async function runSourceTests() {
     const tl = require(path.join(ROOT, "src", "main", "thinking-levels.cjs"));
     const counts = {};
     // 真实签名 resolveThinkingProfile(provider, model)（位置参数）——provider "unknown" 不命中精判，走模型前缀链
-    for (const model of ["glm-5.0", "deepseek-v4-pro", "kimi-k3", "gemini-3.8-flash", "gemini-2.5-flash", "claude-sonnet-5-5", "groq/llama-3.3-70b"]) {
+    for (const model of ["glm-5.0", "deepseek-v4-pro", "kimi-k3", "gemini-3.8-flash", "gemini-2.5-flash", "claude-sonnet-5-5", "grok-4-fast", "xai/llama-3.3-70b"]) {
       const profile = tl.resolveThinkingProfile("unknown", model);
       counts[model] = profile && profile.levels ? profile.levels.length : 0;
     }
@@ -515,7 +515,7 @@ async function runSourceTests() {
     assert.strictEqual(counts["claude-sonnet-5-5"], 4, "anthropic 预算四档");
     for (const k of Object.keys(counts)) {
       const n = counts[k];
-      assert.ok(k === "groq/llama-3.3-70b" ? (n === 0 || n === 3) : (n >= 2 && n <= 7), `${k} 档数在 2~7 域内（groq 非 gpt-oss 前缀=不支持=0）`);
+      assert.ok(k === "xai/llama-3.3-70b" ? n === 0 : (n >= 2 && n <= 7), `${k} 档数在 2~7 域内（xai provider 未知时 grok 前缀=2 挡，xai/ 非法前缀=不支持=0）`);
     }
     assert.strictEqual(tl.SSH_LEVELS.length, 5, "SSH 表五档未变（主进程零触碰旁证）");
   });

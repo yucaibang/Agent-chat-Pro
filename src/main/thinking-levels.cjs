@@ -6,7 +6,7 @@
  * 背景调研结论（2026-10-13，官方文档一手交叉验证：DeepSeek/阿里百炼/OpenAI Codex/硅基流动/
  * aiproxy 归一化矩阵）：各家「原生思考挡位」是四字段族并存的现实，不存在统一参数——
  *  ① reasoning_effort（枚举挡位）：OpenAI（minimal~xhigh，挡位随模型各异）、DeepSeek（low/high/max）、
- *     智谱 GLM（七档，默认 max）、Groq gpt-oss、Gemini OpenAI 兼容层（none/low/medium/high）
+ *     智谱 GLM（七档，默认 max）、xAI Grok（low/high）、Gemini OpenAI 兼容层（none/low/medium/high）
  *  ② thinking.type（开关）：智谱/Kimi（enabled/disabled）、豆包（auto/disabled）、DeepSeek（开关+effort 并存）
  *  ③ enable_thinking（布尔）：阿里百炼（Qwen 系）、硅基流动（Qwen3/GLM-4.6/DeepSeek-V3.2）
  *  ④ thinking_budget（数字）：豆包/Qwen/硅基流动（超限模型立即收输出）
@@ -43,7 +43,7 @@ const ANTHROPIC_BUDGET = { off: 0, low: 4096, medium: 12288, high: 24576 };
 
 /** 家族注入器：把用户选挡位写进 OpenAI 兼容请求体（body 原地改；choice 无效则不动） */
 const INJECTORS = {
-  /** 纯 reasoning_effort 枚举（OpenAI/Groq/Gemini 兼容层） */
+  /** 纯 reasoning_effort 枚举（OpenAI/xAI/Gemini 兼容层） */
   reasoning_effort(body, choice, levels) {
     if (!hasChoice(levels, choice)) return false;
     body.reasoning_effort = choice === "off" ? "none" : choice === "dynamic" ? body.reasoning_effort : choice;
@@ -120,10 +120,10 @@ function resolveThinkingProfile(provider, model) {
     if (/^(qwen3-|glm-?4\.6|deepseek-?v3\.2)/.test(m)) return { family: "siliconflow_switch", model, levels: levelsOf("siliconswitch") };
     return null; // 硅基流动其余模型（非思考类）不注入
   }
-  // Groq：仅 gpt-oss 系支持 effort 挡（必须在 OpenAI 前缀匹配之前——gpt-oss 的 gpt- 前缀会被截胡）
-  if (isProvider(["groq"])) {
-    if (!/^gpt-oss/.test(m)) return null;
-    return { family: "groq", model, levels: levelsOf("groqoss") };
+  // xAI：grok 系支持 reasoning_effort 两挡（官方实锤 low/high；xai provider 下非 grok 模型零注入）
+  if (isProvider(["xai"]) || /^grok/.test(m)) {
+    if (!/^grok/.test(m)) return null;
+    return { family: "xai", model, levels: levelsOf("xai") };
   }
   // OpenAI：effort 枚举（codex 系/新旗舰附超高挡）
   if (isProvider(["openai"]) || /^(gpt-|o[134])/.test(m)) {
@@ -237,11 +237,10 @@ function levelsRaw(kind, extra) {
       if (/codex/.test(m) || /gpt-5\.[1-9]/.test(m)) levels.push({ id: "xhigh", label: "超高", hint: "仅部分模型支持" });
       return levels;
     }
-    case "groqoss":
+    case "xai":
       return [
-        { id: "low", label: "低" },
-        { id: "medium", label: "中", hint: "默认挡" },
-        { id: "high", label: "高" }
+        { id: "low", label: "低", hint: "reasoning_effort=low" },
+        { id: "high", label: "高", hint: "reasoning_effort=high（官方仅 low/high 两挡）" }
       ];
     case "qwenEffort":
       return [
@@ -274,7 +273,7 @@ function applyOpenAiThinking(body, context) {
     case "anthropic_budget":
       return false; // Anthropic 原生体只在 applyAnthropicThinking 注入
     case "openai":
-    case "groq":
+    case "xai":
       return INJECTORS.reasoning_effort(body, choice, levels);
     case "google":
       return INJECTORS.reasoning_effort(body, choice, levels);

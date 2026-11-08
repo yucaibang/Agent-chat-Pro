@@ -7,17 +7,15 @@
 // - zhipu      POST {baseURL}/audio/transcriptions  model=glm-asr-2512            （官方限 .wav/.mp3 ≤25MB ≤30 秒）
 // - siliconflow 同上                                 model=FunAudioLLM/SenseVoiceSmall
 // - openai     同上                                  model=whisper-1
-// - groq       同上                                  model=whisper-large-v3
-// 响应统一 {text}。其余服务商（deepseek/kimi/doubao/gemini/anthropic/custom）无公开转录端点，明确提示引导。
+// 响应统一 {text}。其余服务商（deepseek/kimi/doubao/gemini/xai/anthropic/custom）无公开转录端点，明确提示引导。
 
 const DEFAULT_TIMEOUT_MS = 60000;
 
-// 四家 OpenAI 兼容转录端点共用的 model 名（其余家暂无公开兼容端点）
+// 三家 OpenAI 兼容转录端点共用的 model 名（其余家暂无公开兼容端点）
 const ASR_MODELS = {
   zhipu: "glm-asr-2512",
   siliconflow: "FunAudioLLM/SenseVoiceSmall",
   openai: "whisper-1",
-  groq: "whisper-large-v3",
 };
 
 // 各家官方时长上限（秒）。渲染层据此自动截止录音，主进程再校验一次。
@@ -25,7 +23,6 @@ const ASR_LIMIT_SECONDS = {
   zhipu: 30,        // 官方文档：音频时长 ≤ 30 秒
   siliconflow: 3600,
   openai: 1500,
-  groq: 3000,
 };
 
 // 渲染层点「听说」前先问一次：当前云端服务商支持转录吗/最长说多久
@@ -35,7 +32,7 @@ function asrInfoFor(provider) {
   if (!model) {
     return {
       supported: false,
-      reason: "该服务商没有公开的语音识别接口。语音输入目前支持：智谱 / 硅基流动 / OpenAI / Groq——在连接设置切换云端服务商即可使用。",
+      reason: "该服务商没有公开的语音识别接口。语音输入目前支持：智谱 / 硅基流动 / OpenAI——在连接设置切换云端服务商即可使用。",
     };
   }
   return { supported: true, model, maxSeconds: Math.min(ASR_LIMIT_SECONDS[key] || 60, 300) };

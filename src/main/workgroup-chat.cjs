@@ -343,7 +343,7 @@ function providerBaseURL(provider) {
     openai: "https://api.openai.com/v1",
     gemini: "https://generativelanguage.googleapis.com/v1beta/openai",
     anthropic: "https://api.anthropic.com/v1",
-    groq: "https://api.groq.com/openai/v1",
+    xai: "https://api.x.ai/v1",
     siliconflow: "https://api.siliconflow.cn/v1"
   };
   return map[provider] || "";
