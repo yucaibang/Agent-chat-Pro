@@ -4712,6 +4712,11 @@ window.agentChatPro.onChatEvent((event) => {
   } else if (event.type === "usage") {
     // v3.15.1：后台任务的 usage 不挪用当前对话的 token 计量（切回该对话时按消息重算兜底）
     if (streamingConversationId !== conversationId) return;
+    // v3.43.1：子 Agent 派生轮的子账事件（cumulative 但值为子轮独立累计的绝对值）——此处是单聊分支
+    // （群轮分支在上方 groupTurnsLive 内已按 `requestId:subId` 桶收账），直接覆盖 confirmedTokens 会把
+    // 主轮已累计的真账顶掉。主进程已把子账并进主轮累计器（v3.43.1 单聊并账）并随 emit 真账，
+    // 故带 subId 的事件在单聊分支一律忽略，等主轮累计事件到达。
+    if (event.subId) return;
     // 处理 usage 事件：用实际 token 数据替换估算值
     if (event.usage) {
       const usage = event.usage;

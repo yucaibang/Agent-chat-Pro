@@ -1390,6 +1390,16 @@ app.whenReady().then(async () => {
                   expect: String(card.input?.expect || ""),
                   targetAgentId: String(card.input?.agent || "")
                 });
+                // v3.43.1：单聊子 Agent 派生账并入主轮累计器（群聊线 v3.42.1 已修，单聊此漏——
+                // subResult.usage 原来被丢弃：轮末落库/轮末 emit 的累计真账缺子账，重开会话账目少计）。
+                // 并账后随即 emit 一次累计真账（渲染层 confirmedTokens 即时换算为含子账的总账）。
+                if (subResult.usage) {
+                  const subMerged = accumulateUsage(usageTotal, subResult.usage);
+                  if (subMerged > 0) {
+                    sendWorkStatusSignal(event.sender, "chat:event", { id, type: "usage", usage: { inputTokens: usageTotal.prompt, outputTokens: usageTotal.completion, totalTokens: usageTotal.total, cumulative: true, requests: usageTotal.requests } });
+                    writeLog("cloud_spawn_usage", { requestId: id, promptTokens: usageTotal.prompt, totalTokens: usageTotal.total });
+                  }
+                }
                 if (subResult.status === "done") {
                   card.status = "completed";
                   card.result = subSummarize(subResult.text, 400);

@@ -132,7 +132,9 @@ async function main() {
   await test("B2 云工具循环轮间断点查停止旗 + 紧急停止 cancelAll 群轮 requestId", () => {
     const cloudTurn = wgSrc.slice(wgSrc.indexOf("async function runCloudMemberTurn"));
     const loopStart = cloudTurn.indexOf("for (let round = 0; round <= 10");
-    const flagCheck = cloudTurn.indexOf("if (stoppedConversations.has(input.conversationId)) break;", loopStart);
+    // v3.43.1 放宽：停止旗检查的收口形态由「break」演进为「result=取消形态再 break」（修复 round=0 停止旗
+    // result=null 的 TypeError 误报失败）——锚点改行为语义（轮开头查旗），不写死收口语句
+    const flagCheck = cloudTurn.indexOf("if (stoppedConversations.has(input.conversationId))", loopStart);
     assert.ok(flagCheck > -1 && flagCheck < cloudTurn.indexOf("const promise = sendCloudChat", loopStart),
       "云工具循环每轮开头先查停止旗再开新请求");
     const stopFn = wgSrc.slice(wgSrc.indexOf("function stopGroupTurns"));

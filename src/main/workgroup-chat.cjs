@@ -190,7 +190,11 @@ async function runCloudMemberTurn(ctx, agent, input, group, rosterNames) {
     let loopMessages = cloudMessages;
     for (let round = 0; round <= 10; round += 1) {
       // v3.37.2 红线三补强：轮间断点查停止旗（紧急停止后不再开新轮；悬等中停止由 stopGroupTurns cancelAll 收口）
-      if (stoppedConversations.has(input.conversationId)) break;
+      // v3.43.1 修复：round=0 停止旗直接 break 时 result 尚为 null，下方 `result.cancelled` 必炸 TypeError
+      // （Cannot read properties of null）→ 外层 catch 误报「本轮失败：ERROR …null…」+ 落库失败消息。
+      // 触发=群发后（启动即返）成员轮还在 getConversation/getMode 窗口内点大红停止——activeRequests
+      // 尚未登记本 requestId，stopGroupTurns 只置旗不动它。改：break 前把 result 置成取消形态，按「停止」收口不背失败锅。
+      if (stoppedConversations.has(input.conversationId)) { result = { cancelled: true }; break; }
       if (round > 0) ctx.emit(requestId, { type: "round", round });
       const promise = sendCloudChat(config, loopMessages, callbacks);
       if (entry) { entry.promise = promise; entry.cancel = () => { promise.cancel?.(); }; }
