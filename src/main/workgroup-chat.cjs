@@ -816,12 +816,18 @@ async function runGroupTurn(deps, input) {
   }
   // 收尾：全组终局释放沙箱桥连接（红线⑤对齐）+ 清停止旗（原逻辑在 await 后，现统一挪全组 settle 后）
   // + v3.42.3：忙闸同步登记清退（全组 settle 才解锁，二连发整段窗口全被闸住）
+  // + v3.43.2：groupTurns 登记表按对话清退（在案挂账的微泄漏——每轮注册 groupTurns.set 永不删除，
+  //   长会话内存微涨且靠重启才清零。渲染层悬等在轮开始时注册、Promise settle 后与条目生命周期无关，
+  //   终局清退不影响已 resolve 的悬等；awaitGroupTurn 对清退后条目走 missing 收口语义照旧）
   backgroundDone
     .catch((error) => deps.log("group_turn_background_failed", { error: error.message }))
     .finally(() => {
       try { sandboxBridge?.dispose(); } catch { /* 桥缺失/已断开忽略 */ }
       stoppedConversations.delete(input.conversationId);
       activeGroupConversations.delete(conversationKey);
+      for (const [turnId, turnEntry] of [...groupTurns.entries()]) {
+        if (turnEntry && turnEntry.conversationId === input.conversationId) groupTurns.delete(turnId);
+      }
       try {
         deps.sender.send("chat:event", { id: `group-${input.conversationId}`, agent: undefined, type: "group-turn-settled", conversationId: input.conversationId });
       } catch { /* 窗口已销毁（应用退出中）：settled 信号无处可去，静默 */ }

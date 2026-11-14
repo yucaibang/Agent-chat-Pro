@@ -222,8 +222,12 @@ async function runUnitTests() {
     };
     const out = await wg.runGroupTurn(deps, { conversationId: "c-stop1", workgroupId: "wg-test", message: "hi", workModeId: "automatic", mentionedAgentIds: [] });
     const turn = out.turns[0];
+    // v3.43.2 对齐：groupTurns 条目在全组 settle 终局按对话清退（微泄漏治理）——悬等必须先于 settle
+    // 注册（与真实渲染层时序一致：group-turn-start 事件先到即挂悬等；settle 后 awaitGroupTurn 走
+    // {missing:true} 语义，见 test-v3-43-2 A2）。原装置 settle 后再 awaitGroupTurn 读轮结果的形态失效。
+    const settledTurn = await wg.awaitGroupTurn(turn.requestId);
     await waitFor(() => toolExecuted >= 1, 2000, "第一轮工具已执行（停止旗已在工具路径内置位）");
-    const turnResult = await wg.awaitGroupTurn(turn.requestId);
+    const turnResult = await settledTurn;
     await waitFor(() => settledOf("c-stop1").length === 1, 2000, "settled(c-stop1)");
     assert.strictEqual(turnResult.cancelled, true, `中断轮应返回 cancelled:true，实际 ${JSON.stringify(turnResult)}`);
     assert.ok(!turnResult.failed, "中断轮不得带 failed");

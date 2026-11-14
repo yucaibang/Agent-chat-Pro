@@ -1869,8 +1869,16 @@ async function loadConversation(id) {
   elements.send.classList.toggle("busy", streamingOngoing);
   elements.send.title = streamingOngoing ? "停止生成（Esc）" : "发送";
   // 从历史消息估算累计 token（v3.21.3 修复①：云端消息优先用落库的真实累计账目）
+  // v3.43.2 切回双计防线：进行中轮的中间草稿不计入重算——「轮进行中切走→切回」场景下，草稿中间态
+  // 若再入 conversationTokens，该轮后续的流账/真账（单聊轮末 confirmedTokens 为 absolute 真账替换；
+  // 群轮桶 + finalize 并账）会把同一段文本重复计入，且固化到重开会话才被矫正。计账跳过与上方渲染
+  // 跳过（draft && streamingOngoing / draft && groupTurnsLive.has(requestId)）同口径——只有无 live
+  // 接管的 draft（中断遗留）才照常计入重算。
   conversationTokens = 0;
   for (const msg of conversation.messages) {
+    if (msg.draft
+      && (streamingOngoing
+        || (groupLiveForConversation.length && groupTurnsLive.has(String(msg.requestId || ""))))) continue;
     conversationTokens += tokensForMessage(msg);
   }
   resetStreamingTokens();
