@@ -5,7 +5,7 @@ const fs = require("fs");
 const path = require("path");
 const os = require("os");
 const { randomUUID } = require("crypto");
-const { spawnSync } = require("child_process"); // v3.16.1 print:detect 调 reg/tasklist
+const { spawn, spawnSync } = require("child_process"); // v3.16.1 print:detect 调 reg/tasklist；v3.44.0 updater 静默装
 const { clearModelAdminPassword, getConnection, getSettings, getAtomcodeToken, getSshConnection, getCloudAiConfig, sameSshTarget, saveSettings, setModelAdminPassword, switchSshProfile, trustHostFingerprint, verifyModelAdminPassword, ensureAgentBridgeToken, getAgentBridgeConversationId, setAgentBridgeConversationId, setAgentBridgeConfig } = require("./settings.cjs");
 const { connect, connectWithRetry, downloadRemoteFile, ensureDeviceControlKey, exec, finalizeDeviceControl, getAgentSdkBridgeStatus, getClaudeModelStatus, installAgentSdkBridge, markDeviceControlDisabled, readDeviceControlIpTrack, readRemoteFile, runClaude, uninstallAgentSdkBridge, updateClaudeAutoCompactWindow, updateClaudeModel, updateClaudeModelEntry, verifyConnection } = require("./ssh.cjs");
 const { copyLocalFile, getLocalClaudeModelStatus, readLocalFile, runLocalClaude, updateLocalAutoCompactWindow, updateLocalClaudeModel, updateLocalClaudeModelEntry, validatedWorkingDirectory: validatedLocalWorkdir, verifyLocalConnection } = require("./local.cjs");
@@ -22,6 +22,8 @@ const { contextTokensFromUsage } = require("./protocol.cjs");
 const { scanSystemCaches, cleanSystemCaches } = require("./cache-cleaner.cjs");
 const { getDeviceControlStatus, installDeviceControl, preferredAddress, uninstallDeviceControl } = require("./device-control.cjs");
 const { scanCoexistence, summarizeCoexistence } = require("./coexistence-scanner.cjs");
+// v3.44.0 应用内更新：双线路检测（GitCode 默认/GitHub 备用）+ 三层校验下载 + NSIS 静默装
+const { checkForUpdate, downloadUpdateAsset, installUpdate } = require("./updater.cjs");
 // 产品形态开关（阉割机制）：bridge 版 = Agent HTTP 桥在场、设备联动/打印联动/本机引擎/彩蛋关闭
 const EDITION = require("./edition.cjs");
 const IS_BRIDGE = EDITION.edition === "bridge";
@@ -459,6 +461,73 @@ app.whenReady().then(async () => {
     const current = getSettings();
     const signal = safeSignal("tool-permission-signal", () => signalMonitor.createToolPermission({ requestId: randomUUID(), connectionMode: current.connectionMode, automatic: Boolean(enabled) }));
     return toolPermissionService.setAutomaticMode(enabled, signal);
+  });
+  // ── v3.44.0 应用内更新（关于页「检测更新」）：检测 → 下载校验 → 弹窗确认 → NSIS 静默装 ──
+  // 更新线路取设置中心的 updateChannel：auto（默认双线路自动降级）/ gitcode / github
+  // ⚠ Bridge Edition 全线闸：Bridge 版本线 1.x 与主版 3.x 不同源，比对必误报「永远有新版」
+  ipcMain.handle("update:check", async () => {
+    if (IS_BRIDGE) return { status: "unreachable", currentVersion: app.getVersion(), remoteVersion: null, asset: null, sumsAsset: null, sourceId: null, sources: [], attempts: ["Bridge Edition 无应用内更新（版本线 1.x 与主版 3.x 不同源）"] };
+    const mode = getSettings().updateChannel || "auto";
+    const result = await checkForUpdate({ mode, currentVersion: app.getVersion() });
+    writeLog("update_check", {
+      mode,
+      status: result.status,
+      remote: result.remoteVersion,
+      current: result.currentVersion,
+      sources: (result.sources || []).map((item) => ({ id: item.sourceId, release: item.releaseVersion, tag: item.tagVersion, error: item.error })),
+      attempts: result.attempts
+    });
+    return result;
+  });
+  // v3.44.0 防任意写/任意下：附件名一概取 basename 且必须 -Setup.exe 结尾（ASSET_EXE 形态之外全部拒绝）
+  const UPDATE_ASSET_NAME_PATTERN = /-Setup\.exe$/i;
+  const UPDATE_DIRECTORY = () => path.join(app.getPath("temp"), "acp-update");
+  ipcMain.handle("update:download", async (event, payload = {}) => {
+    if (IS_BRIDGE) throw new Error("Bridge Edition 无应用内更新，请到发布页手动下载");
+    const asset = payload.asset && typeof payload.asset === "object" ? payload.asset : {};
+    const assetName = path.basename(String(asset.name || ""));
+    if (!UPDATE_ASSET_NAME_PATTERN.test(assetName)) throw new Error("不是 Agent Chat Pro 安装包（文件名不符 -Setup.exe 形态），已拒绝下载");
+    const result = await downloadUpdateAsset({
+      asset: { ...asset, name: assetName },
+      sumsAsset: payload.sumsAsset && payload.sumsAsset.name ? payload.sumsAsset : null,
+      file: path.join(UPDATE_DIRECTORY(), assetName),
+      onProgress: (received, total) => {
+        try { event.sender.send("update:event", { type: "progress", received, total, remoteVersion: payload.remoteVersion || "" }); } catch { /* 窗口已关：进度事件丢弃，下载继续 */ }
+      }
+    });
+    writeLog("update_download_ok", { file: result.file, size: result.size, verifiedWith: result.verifiedWith });
+    // 下载 + 校验通过 → 弹窗确认：「立即安装并重启」= 静默装 + 退出（NSIS runAfterFinish 自动拉起新版）；「稍后」= 关于页保留安装入口
+    let response = 1;
+    try {
+      const answer = await dialog.showMessageBox(window, {
+        type: "info",
+        buttons: ["立即安装并重启", "稍后自行安装"],
+        defaultId: 0,
+        cancelId: 1,
+        title: "Agent Chat Pro 更新",
+        message: payload.remoteVersion ? `新版本 ${payload.remoteVersion} 安装包已就绪` : "新版本安装包已就绪",
+        detail: `已通过校验（方式：${result.verifiedWith}）。\n点击「立即安装并重启」后 Agent Chat Pro 将退出并静默安装，完成后自动启动新版本。`
+      });
+      response = answer.response;
+    } catch (error) {
+      writeLog("update_dialog_failed", { error: String(error?.message || error) });
+    }
+    if (response === 0) {
+      installUpdate({ file: result.file, spawnImpl: spawn, quitImpl: () => app.quit() });
+      writeLog("update_install_start", { file: result.file, via: "dialog" });
+      return { ...result, installChoice: "install" };
+    }
+    return { ...result, installChoice: "later" };
+  });
+  ipcMain.handle("update:install", async (_event, payload = {}) => {
+    // 防任意执行：只认 temp/acp-update 目录内、-Setup.exe 结尾的安装包（必须先经 update:download 产物）
+    if (IS_BRIDGE) throw new Error("Bridge Edition 无应用内更新，请到发布页手动下载");
+    const requested = path.resolve(String(payload.file || ""));
+    if (!requested.startsWith(UPDATE_DIRECTORY() + path.sep)) throw new Error("安装包路径不在更新目录内，已拒绝执行");
+    if (!UPDATE_ASSET_NAME_PATTERN.test(path.basename(requested))) throw new Error("不是 Agent Chat Pro 安装包（文件名不符 -Setup.exe 形态），已拒绝执行");
+    installUpdate({ file: requested, spawnImpl: spawn, quitImpl: () => app.quit() });
+    writeLog("update_install_start", { file: requested, via: "about-page" });
+    return { launched: true, file: requested };
   });
   // ── v3.22.0 云办公二期：沙箱网络切换 / 状态查询（SSH→NAS docker network 插拔；命令即时生效） ──
   const SANDBOX_SSH_CONFIG = () => {

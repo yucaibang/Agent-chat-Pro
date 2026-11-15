@@ -4,9 +4,9 @@
 
 一个面向 Windows 桌面的 Electron 应用：把「连着云上的 AI 服务商」「SSH 到远端机器跑 Claude Code」「本机跑 Claude Code」三种工作方式装进同一个界面，并围绕它长出了一整套周边——云办公沙箱、N2N 虚拟专网体检与一键部署、设备联动、开发面板、防破解构建管线等。
 
-[![Version](https://img.shields.io/badge/version-3.43.2-blue.svg)]()
+[![Version](https://img.shields.io/badge/version-3.44.0-blue.svg)]()
 [![Platform](https://img.shields.io/badge/platform-Windows-green.svg)]()
-[![Tests](https://img.shields.io/badge/tests-55%20files%20green-brightgreen.svg)]()
+[![Tests](https://img.shields.io/badge/tests-56%20files%20green-brightgreen.svg)]()
 
 ---
 
@@ -38,6 +38,9 @@
 - **混淆后模块加载冒烟**进构建管线：混淆产物逐模块 require 实测，炸就停在构建
 - **TDZ 守门测试**：全模块作用域树扫描「声明后置」形态，防执行路径上的 ReferenceError
 - Bridge Edition（独立阉割版产物线）：内置 Agent HTTP 桥，云端 AI 经 127.0.0.1 HTTP 桥与 SSH Agent 对话，带人工放行队列与限频
+
+### ⬇️ 应用内更新
+关于页「检测更新」：双线路检测（默认 GitCode 国内直连，失败自动切 GitHub 备用）→ 三层校验下载（SHA256 清单 / digest / size，过一即放行，全失败绝不安装）→ 确认弹窗 → NSIS 静默安装并自动重启新版本。线路可在设置中心自定义（自动 / 仅 GitCode / 仅 GitHub）。
 
 ### 🧩 插件与周边
 - **开发面板（可选插件）**：右侧实时观察 AI 正在编辑的文件（活动流、三态色点、窄条折叠），三模式全支持

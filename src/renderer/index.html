@@ -515,6 +515,23 @@
             </div>
           </div>
         </details>
+        <!-- v3.44.0：更新线路（关于页「检测更新」用；线路一 GitCode / 线路二 GitHub） -->
+        <details id="update-channel-settings">
+          <summary>⬇️ 更新线路（关于页「检测更新」用）</summary>
+          <div class="device-control-card">
+            <div class="device-control-heading">
+              <div><strong>检测更新走哪条线路</strong><small>GitCode = 线路一（默认·国内直连）；GitHub = 线路二（备用·需代理 / VPN）。</small></div>
+            </div>
+            <label>线路选择
+              <select id="update-channel" name="updateChannel">
+                <option value="auto">自动（默认：线路一 GitCode 优先，失败自动切线路二 GitHub）</option>
+                <option value="gitcode">仅线路一 · GitCode（默认线路 · 国内直连）</option>
+                <option value="github">仅线路二 · GitHub（备用线路 · 代理 / VPN 环境下使用）</option>
+              </select>
+            </label>
+            <span class="field-hint">「自动」= 线路一优先、线路一失败自动切线路二；两条线路都连不上时，关于页会逐行报出每条线路的失败原因。</span>
+          </div>
+        </details>
         <p id="settings-status" class="status"></p>
         <div class="dialog-actions">
           <button type="button" id="open-diagnostics" class="secondary">打开诊断日志</button>
@@ -852,7 +869,10 @@
             <!-- v3.40.0：向导重开入口（老用户误点跳过可回来；force 打开无视 done 标记） -->
             <div class="device-control-actions" style="margin-top:8px">
               <button type="button" class="secondary" id="about-reopen-onboarding">📖 重新运行新手向导</button>
+              <!-- v3.44.0：应用内更新检测（线路一 GitCode 默认国内直连 / 线路二 GitHub 备用需代理） -->
+              <button type="button" class="secondary" id="about-check-update">⬇️ 检测更新</button>
             </div>
+            <div id="about-update-status" class="field-hint" style="margin-top:8px;white-space:pre-line" hidden></div>
           </section>
         </div>
       </div>

@@ -91,6 +91,7 @@ const OBFUSCATE_FILES = {
     "main/task-notify.cjs",     // 任务完成系统通知：决策矩阵与通知文案纯函数（v3.41.0）
     "main/agent-pool.cjs",      // 多 AI 对话（工作）：Agent 池与工作组建档（v3.35.6 模块一）
     "main/workgroup-chat.cjs",  // 多 AI 对话（工作）：群聊引擎与 Sub-Agent 包工头（v3.35.6 模块三四）
+    "main/updater.cjs",         // 应用内更新检测：双线路双判据 + 三层校验 + NSIS 静默装（v3.44.0）
     // SSH 远程 CLI 适配器（v3.19.0 F3）——五家选一，qwen/codex/hermes 走远端 CLI 直跑
     "main/adapters/ssh-cli-base.cjs",
     "main/adapters/qwen-cli.cjs",

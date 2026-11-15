@@ -259,9 +259,10 @@ async function runUnitTests() {
 
   console.log("── D 组：版本自洽 ──");
 
-  await test("D1. package.json 版本 ≥ 3.43.2", async () => {
+  await test("D1. package.json 版本 ≥ 3.43.2（锚点随版本线演进放宽为 ≥ 形态，v3.42.3 先例）", async () => {
     const v = String(pkg.version || "");
-    assert.ok(v === "3.43.2", `package.json version 应为 3.43.2，实为 ${v}`);
+    const m = /^3\.(\d+)\.(\d+)$/.exec(v);
+    assert.ok(m && (Number(m[1]) > 43 || (Number(m[1]) === 43 && Number(m[2]) >= 2)), `package.json version 应 ≥ 3.43.2，实为 ${v}`);
   });
 
   await test("D2. README badge 与 package.json 自洽", async () => {

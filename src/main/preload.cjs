@@ -27,6 +27,10 @@ contextBridge.exposeInMainWorld("agentChatPro", {
   loadSettings: () => ipcRenderer.invoke("settings:load"),
   saveSettings: (settings) => ipcRenderer.invoke("settings:save", settings),
   setToolMode: (enabled) => ipcRenderer.invoke("settings:tool-mode", enabled),
+  // ── 应用内更新 IPC（v3.44.0，关于页「检测更新」）──
+  checkUpdate: () => ipcRenderer.invoke("update:check"),
+  downloadUpdate: (payload) => ipcRenderer.invoke("update:download", payload),
+  installUpdate: (payload) => ipcRenderer.invoke("update:install", payload),
   // v3.22.0 云办公二期：沙箱状态查询与临时联网切换（立即生效动作，非表单保存）
   getSandboxStatus: () => ipcRenderer.invoke("sandbox:status"),
   setSandboxNetwork: (enabled) => ipcRenderer.invoke("sandbox:setNetwork", enabled),
@@ -244,4 +248,6 @@ contextBridge.exposeInMainWorld("agentChatPro", {
   getSignalLights: () => ipcRenderer.invoke("signal:lights:get"),
   // ── Bridge 强制关闭通知 ──
   onBridgeForceClosed: (handler) => ipcRenderer.on("bridge:force-closed", (_event, detail) => handler(detail)),
+  // ── 应用内更新进度事件（v3.44.0：{type:"progress", received, total, remoteVersion}）──
+  onUpdateEvent: (handler) => ipcRenderer.on("update:event", (_event, payload) => handler(payload)),
 });

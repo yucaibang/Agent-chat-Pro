@@ -377,6 +377,11 @@ function normalizeLocalEngine(value) {
   return value === "atomcode" || value === "custom" ? value : "claude";
 }
 
+/** v3.44.0 应用更新的线路模式归一：三态 auto（默认双线路自动降级）/ gitcode（仅线路一）/ github（仅线路二） */
+function normalizeUpdateChannel(value) {
+  return value === "gitcode" || value === "github" ? value : "auto";
+}
+
 /** 外观参数钳制（v3.21.4）：clamp 至滑杆合法域；非法/低于下限（含旧版 0-1 比例残留 0.15）回退默认值 */
 // v3.24.0 模型思考调节：挡位记忆归一（settings.thinkingChoices）
 const { normalizeThinkingChoices } = require("./thinking-levels.cjs");
@@ -513,6 +518,8 @@ function getSettings() {
     // Agent HTTP 桥（阉割版 Bridge Edition 专用；主版字段在场但功能门控关闭；Token 不出此接口）
     agentBridgePort: normalizeAgentBridgePort(raw.agentBridgePort),
     agentBridgeGate: raw.agentBridgeGate === undefined ? true : Boolean(raw.agentBridgeGate),
+    // v3.44.0 应用更新线路：auto（默认）/ gitcode（仅线路一）/ github（仅线路二）
+    updateChannel: normalizeUpdateChannel(raw.updateChannel),
     // 代理设置
     proxyEnabled: Boolean(raw.proxyEnabled),
     proxyType: raw.proxyType === "socks5" ? "socks5" : "http",
@@ -663,6 +670,8 @@ function saveSettings(input) {
     agentBridgeGate: input.agentBridgeGate !== undefined
       ? Boolean(input.agentBridgeGate)
       : (previous.agentBridgeGate === undefined ? true : Boolean(previous.agentBridgeGate)),
+    // v3.44.0 应用更新线路（白名单透传：auto / gitcode / github，缺省回退 previous）
+    updateChannel: normalizeUpdateChannel(input.updateChannel !== undefined ? input.updateChannel : previous.updateChannel),
     agentBridgeTokenEncrypted: previous.agentBridgeTokenEncrypted || "",
     workingDirectory: String(input.workingDirectory || "").trim(),
     skipPermissions: Boolean(input.skipPermissions),

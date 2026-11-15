@@ -124,6 +124,8 @@ function settingsFromForm() {
     workModeId: currentModeId,
     networkType: document.querySelector("#network-type").value,
     externalMethod: document.querySelector("#external-method").value,
+    // v3.44.0 更新线路：auto（默认）/ gitcode（仅线路一）/ github（仅线路二）
+    updateChannel: ["gitcode", "github"].includes(String(data.get("updateChannel") || "")) ? data.get("updateChannel") : "auto",
     cloudAiProvider: provider,
     // v3.21.0：custom 走模型名手填框（原先恒为字面 "custom" 的隐性 bug 修复）
     cloudAiModel: provider === "custom"
@@ -169,6 +171,11 @@ function populateSettings(settings) {
   currentConnectionMode = settings.connectionMode === "local" ? "local" : settings.connectionMode === "cloud" ? "cloud" : "ssh";
   elements.form.elements.namedItem("localEngine").value = settings.localEngine || "claude";
   currentLocalEngine = settings.localEngine || "claude";
+  // v3.44.0：更新线路回填（非法值一律保持 default auto——不跟随脏数据）
+  const updateChannelSelect = document.querySelector("#update-channel");
+  if (updateChannelSelect && ["auto", "gitcode", "github"].includes(String(settings.updateChannel || ""))) {
+    updateChannelSelect.value = settings.updateChannel;
+  }
   updateConnectionModeUI();
   // v3.24.0：不再按全局 skipPermissions 覆盖输入栏模式图标（根因见 setToolModeAppearance；图标随当前模式）
   const password = elements.form.elements.namedItem("password");
@@ -2802,6 +2809,131 @@ async function fillAboutVersion() {
 }
 fillAboutVersion();
 
+// ── v3.44.0 应用内更新（关于页「检测更新」）：双线路双判据 → 下载校验 → 静默安装 ──
+// 版本铁则（主进程 updater.cjs 钉死）：远端 > 本地才算新版；相等/更低一律「已是最新版」。
+const aboutUpdateStatus = document.querySelector("#about-update-status");
+const aboutCheckUpdateButton = document.querySelector("#about-check-update");
+let aboutUpdateCheckResult = null;   // 最近一次检测的完整结果（update 态下载用）
+let aboutUpdateProgressHandler = null; // 下载进行中的进度回调（onUpdateEvent 分发）
+let aboutUpdateDownloadInFlight = false; // 双击闸：下载进行中再点直接忽略（防并发双写同一安装包文件）
+
+window.agentChatPro.onUpdateEvent?.((payload) => {
+  if (payload && payload.type === "progress" && aboutUpdateProgressHandler) aboutUpdateProgressHandler(payload);
+});
+
+function describeUpdateAttempts(result) {
+  const lines = [];
+  for (const attempt of (result && result.attempts) || []) lines.push(`· ${attempt}`);
+  if (!lines.length) {
+    for (const item of (result && result.sources) || []) {
+      if (item.error) lines.push(`· ${item.label || item.sourceId}：${item.error}`);
+    }
+  }
+  if (!lines.length) lines.push("· 两条线路均未取得版本信息（网络或远端仓库不可达）");
+  return lines.join("\n");
+}
+
+function renderUpdateReadyState(result) {
+  // 「稍后自行安装」路径：下载+校验已过，给「立即安装」入口（弹窗被关掉后的兜底）
+  aboutUpdateStatus.innerHTML = "";
+  const readyLine = document.createElement("div");
+  readyLine.textContent = `✅ 安装包已就绪（已通过校验：${result.verifiedWith}）`;
+  const installNowButton = document.createElement("button");
+  installNowButton.type = "button";
+  installNowButton.className = "secondary";
+  installNowButton.textContent = "🚀 立即安装";
+  installNowButton.addEventListener("click", async () => {
+    installNowButton.disabled = true;
+    aboutUpdateStatus.textContent = "🚀 正在退出并静默安装，完成后将自动启动新版本…";
+    try { await window.agentChatPro.installUpdate({ file: result.file }); }
+    catch (error) {
+      aboutUpdateStatus.textContent = `❌ 安装失败：${String(error?.message || error)}`;
+      installNowButton.disabled = false;
+    }
+  });
+  aboutUpdateStatus.append(readyLine, installNowButton);
+}
+
+async function runAboutUpdateDownload() {
+  const check = aboutUpdateCheckResult;
+  if (!check || check.status !== "update" || !check.asset) return;
+  if (aboutUpdateDownloadInFlight) return; // 主进程只挂一条下载流，双击并发会双写同一文件
+  aboutUpdateDownloadInFlight = true;
+  aboutCheckUpdateButton.disabled = true;
+  aboutUpdateStatus.innerHTML = "";
+  const progressLine = document.createElement("div");
+  progressLine.textContent = "⬇️ 正在下载安装包…";
+  aboutUpdateStatus.append(progressLine);
+  aboutUpdateProgressHandler = (payload) => {
+    const total = Number(payload.total) || 0;
+    const received = Number(payload.received) || 0;
+    progressLine.textContent = total > 0
+      ? `⬇️ 正在下载安装包… ${total > 0 ? Math.min(100, Math.round((received / total) * 100)) : 0}%（${received} / ${total} 字节）`
+      : `⬇️ 正在下载安装包… ${received} 字节`;
+  };
+  const resetProgressHandler = () => { aboutUpdateProgressHandler = null; aboutCheckUpdateButton.disabled = false; aboutUpdateDownloadInFlight = false; };
+  try {
+    const result = await window.agentChatPro.downloadUpdate({
+      asset: check.asset,
+      sumsAsset: check.sumsAsset || null,
+      remoteVersion: check.remoteVersion
+    });
+    resetProgressHandler();
+    if (result.installChoice === "install") {
+      aboutUpdateStatus.textContent = "🚀 安装已开始：Agent Chat Pro 即将退出并静默安装，完成后自动启动新版本。";
+    } else {
+      renderUpdateReadyState(result);
+    }
+  } catch (error) {
+    resetProgressHandler();
+    aboutUpdateStatus.textContent = `❌ 下载或校验失败：${String(error?.message || error)}\n为安全起见已放弃安装。`;
+  }
+}
+
+if (aboutCheckUpdateButton && aboutUpdateStatus) {
+  aboutCheckUpdateButton.addEventListener("click", async () => {
+    // Bridge Edition 版本线 1.x 与主版 3.x 不同源，双线比对必误报「永远有新版」——点击时即收口
+    if (editionState.edition === "bridge") {
+      aboutUpdateCheckResult = null;
+      aboutUpdateStatus.hidden = false;
+      aboutUpdateStatus.textContent = "ℹ️ Bridge Edition 无应用内更新（版本线与主版不同源），请到发布页手动下载。";
+      return;
+    }
+    aboutUpdateCheckResult = null;
+    aboutUpdateStatus.hidden = false;
+    aboutUpdateStatus.innerHTML = "";
+    aboutUpdateStatus.textContent = "⏳ 正在检测更新（线路一 GitCode → 失败自动切线路二 GitHub）…";
+    aboutCheckUpdateButton.disabled = true;
+    try {
+      const result = await window.agentChatPro.checkUpdate();
+      aboutUpdateCheckResult = result;
+      if (result.status === "latest") {
+        aboutUpdateStatus.textContent = `✅ 已是最新版（当前 ${result.currentVersion}）`;
+      } else if (result.status === "update") {
+        aboutUpdateStatus.innerHTML = "";
+        const foundLine = document.createElement("div");
+        foundLine.textContent = `🆕 发现新版本 ${result.remoteVersion}（当前 ${result.currentVersion} · 来源 ${result.sourceId === "github" ? "线路二 GitHub" : "线路一 GitCode"}）`;
+        const downloadButton = document.createElement("button");
+        downloadButton.type = "button";
+        downloadButton.className = "secondary";
+        downloadButton.textContent = "⬇️ 下载并安装";
+        downloadButton.addEventListener("click", () => { downloadButton.disabled = true; runAboutUpdateDownload(); });
+        aboutUpdateStatus.append(foundLine, downloadButton);
+      } else if (result.status === "asset-missing") {
+        aboutUpdateStatus.textContent = `⚠️ 新版本 ${result.remoteVersion} 正在上架，安装包尚未上传，请稍后再检测。`;
+      } else {
+        // unreachable：失败原因逐行列出（自动模式报双线，单线路模式报该线路）
+        const attempted = (result.sources || []).length;
+        aboutUpdateStatus.textContent = `❌ 更新线路不可达（检测了 ${attempted} 条线路），失败原因：\n${describeUpdateAttempts(result)}`;
+      }
+    } catch (error) {
+      aboutUpdateStatus.textContent = `❌ 检测更新失败：${String(error?.message || error)}`;
+    } finally {
+      aboutCheckUpdateButton.disabled = false;
+    }
+  });
+}
+
 // ── v3.15.8 关于页彩蛋：点击「Agent Chat Pro」标题弹出跳跳龙小游戏 ──
 // 阉割版 Bridge Edition：easterEgg 门控关闭 → 不注册点击（主进程 app:open-dino-game 也不注册）
 if (editionState.gates.easterEgg !== false) {
@@ -2836,6 +2968,11 @@ async function applyEdition() {
     }
   }
   if (gates.deviceLink === false) document.querySelectorAll('[data-settings-tab="device"]').forEach((tab) => { tab.hidden = true; });
+  // v3.44.0 应用内更新仅主版提供：Bridge 版本线 1.x 与主版 3.x 不同源（比对必误报新版）
+  if (isBridge) {
+    hide("#update-channel-settings");
+    hide("#about-check-update");
+  }
   if (gates.agentBridge) {
     const section = document.querySelector("#agentbridge-settings");
     if (section) section.hidden = false;
