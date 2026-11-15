@@ -789,9 +789,21 @@ async function runGroupTurn(deps, input) {
   if (isSequential) {
     // 自主讨论（Auto-Discuss）：按工作组顺序接力；发言上限 = maxTurns（默认 5，红线③）；
     // 每次发言前检查停止旗——紧急停止可随时掐断接力链（v3.42.0：整链后台推进，逐轮启动事件外发）
+    // v3.44.1 @ 提及修复：接力 order 不再直接用 routeMembers 过滤后的 route——@ 提及把 route 砍到
+    // 只剩被提及成员，i % order.length 恒指同一人 => 被 @ 者连说满 maxUtterances 轮（「@ 谁谁一直说」
+    // 且内容雷同，v3.26.0 起潜伏）。@ 语义=被提及者优先发言，其余成员按工作组序续接（全群接力，
+    // 上限不变）；@ 了不存在成员=广播兜底全群按原序；普通群发（非 autoDiscuss）仍走 route 定向单发不变。
+    const wanted = (Array.isArray(input.mentionedAgentIds) ? input.mentionedAgentIds : [])
+      .map((value) => String(value).replace(/^@/, "").trim()).filter(Boolean);
+    const mentioned = wanted.length
+      ? agents.filter((agent) => wanted.includes(agent.agentId) || wanted.includes(agent.name))
+      : [];
+    const rest = wanted.length
+      ? agents.filter((agent) => !wanted.includes(agent.agentId) && !wanted.includes(agent.name))
+      : [];
+    const order = wanted.length ? [...mentioned, ...rest] : [...agents];
     backgroundDone = (async () => {
       const maxUtterances = Math.min(Math.max(Number(input.maxTurns) || group.maxTurns || 5, 1), 10);
-      const order = [...route];
       let spoken = 0;
       for (let i = 0; spoken < maxUtterances && i < order.length * maxUtterances; i += 1) {
         if (stoppedConversations.has(input.conversationId)) break;

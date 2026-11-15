@@ -439,9 +439,14 @@ async function runWiringTests() {
     assert.ok(pipelineSrc.includes("src/main/updater.cjs") === false || pipelineSrc.includes('"src/main/updater.cjs"') === false || true, "无需字节码级（无密钥）");
   });
 
-  await test("B7. 版本：package.json 3.44.0 + README badge", () => {
-    assert.strictEqual(pkg.version, "3.44.0");
-    assert.ok(read("README.md").includes("version-3.44.0-blue"), "README badge 未升版");
+  await test("B7. 版本：package.json ≥3.44.0 + README badge 自洽（v3.44.1 随例放宽，防下次 bump 翻红）", () => {
+    const m = /^(\d+)\.(\d+)\.(\d+)$/.exec(String(pkg.version || ""));
+    assert.ok(m, `package.json version 应为 x.y.z 形态，实为 ${pkg.version}`);
+    const [major, minor, patch] = m.slice(1).map(Number);
+    assert.ok(major > 3 || (major === 3 && minor >= 44), `package.json version 应 ≥ 3.44.0，实为 ${pkg.version}`);
+    const badge = /version-([0-9.]+)-blue/.exec(read("README.md"));
+    assert.ok(badge, "README 应含 version badge");
+    assert.strictEqual(badge[1], pkg.version, `README badge ${badge[1]} 应与 package.json ${pkg.version} 自洽`);
   });
 
   await test("B8. Bridge 闸 + 窗口加固：main 三 handler IS_BRIDGE 收口 / renderer 点击态闸+applyEdition 隐藏 / direction=desc", () => {
