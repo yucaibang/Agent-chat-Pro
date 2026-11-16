@@ -379,7 +379,7 @@ function normalizeLocalEngine(value) {
 
 /** v3.44.0 应用更新的线路模式归一：三态 auto（默认双线路自动降级）/ gitcode（仅线路一）/ github（仅线路二） */
 function normalizeUpdateChannel(value) {
-  return value === "gitcode" || value === "github" ? value : "auto";
+  return ["gitcode", "github", "web"].includes(value) ? value : "auto";
 }
 
 /** 外观参数钳制（v3.21.4）：clamp 至滑杆合法域；非法/低于下限（含旧版 0-1 比例残留 0.15）回退默认值 */

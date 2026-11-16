@@ -463,7 +463,7 @@ app.whenReady().then(async () => {
     return toolPermissionService.setAutomaticMode(enabled, signal);
   });
   // ── v3.44.0 应用内更新（关于页「检测更新」）：检测 → 下载校验 → 弹窗确认 → NSIS 静默装 ──
-  // 更新线路取设置中心的 updateChannel：auto（默认双线路自动降级）/ gitcode / github
+  // 更新线路取设置中心的 updateChannel：auto（默认三线路全查自动降级）/ web / gitcode / github
   // ⚠ Bridge Edition 全线闸：Bridge 版本线 1.x 与主版 3.x 不同源，比对必误报「永远有新版」
   ipcMain.handle("update:check", async () => {
     if (IS_BRIDGE) return { status: "unreachable", currentVersion: app.getVersion(), remoteVersion: null, asset: null, sumsAsset: null, sourceId: null, sources: [], attempts: ["Bridge Edition 无应用内更新（版本线 1.x 与主版 3.x 不同源）"] };

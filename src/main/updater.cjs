@@ -1,9 +1,12 @@
 "use strict";
 /**
- * v3.44.0 应用内更新检测（双线路 · 双判据）—— 口令「软件开发继续」立项
+ * v3.44.0 应用内更新检测—— 口令「软件开发继续」立项；v3.45.0 增线路三=官网 manifest
  *
- * 线路一 GitCode（默认 · 国内直连）：gitcode.com/api/v5（Gitee v5 兼容形态）
+ * 线路一 GitCode（国内直连）：gitcode.com/api/v5（Gitee v5 兼容形态）
  * 线路二 GitHub（备用 · 需代理/VPN 环境）：api.github.com
+ * 线路三 官网 manifest（v3.45.0 起主位优先级 0）：Agent-Chat-Pro-Web 部署页 latest.json——
+ *        版本发现+校验值先行（installer.sha256 直供 digest 校验层），字节流仍走
+ *        GitCode/GitHub 附件直链（file_base_urls）→ 不新增下载源，红线不破
  *
  * 版本判据（双保障，实测 2026-11-15）：
  *   ① Release 附件（主）：releases API → 最新正式 release 的 tag_name + assets 里的安装包
@@ -33,8 +36,24 @@ const SUMS_PATTERN = /^SHA256SUMS-v([0-9]+\.[0-9]+\.[0-9]+)\.txt$/i;
 // 版本化名优先，通用名兜底；两形态都不含文件行时再退化走裸哈希形态解析
 const SUMS_PLAIN_PATTERN = /^SHA256SUMS\.txt$/i;
 
-/** 线路常量（v3.44.0 UI 备注同源）：新增线路=在此登记并实现 releases/tags 两个字段即可 */
+/**
+ * 线路常量（v3.44.0 UI 备注同源；v3.45.0 增线路三=官网 manifest）：
+ *   kind=gitcode/github → releasesUrl+tagsUrl 双判据检测
+ *   kind=manifest      → manifestUrls failover 拉 latest.json（官网线路三，优先级 0 主位）：
+ *                        清单自带 installer.sha256=最强校验凭证（走 digest 校验层）；
+ *                        字节流仍指 GitCode/GitHub 附件直链（file_base_urls）——
+ *                        官网=版本发现+校验值先行，不承运安装包字节流（官网 README 契约同源）。
+ * 治理红线（官网 README 同源）：内核更新源 ≤ 3 条；守门断言 UPDATE_SOURCES.length > 3 即翻红。
+ */
 const UPDATE_SOURCES = [
+  {
+    id: "web",
+    label: "官网",
+    hint: "版本清单线路 · latest.json（安装包走 GitCode/GitHub 附件直链）",
+    manifestUrls: ["https://agent-chatp.agent--orbit.com/latest.json"],
+    kind: "manifest",
+    priority: 0,
+  },
   {
     id: "gitcode",
     label: "GitCode",
@@ -54,6 +73,14 @@ const UPDATE_SOURCES = [
     priority: 2,
   },
 ];
+
+/**
+ * 下载 host 白名单（v3.45.0 结构性防线）：官网清单的 file_base_urls 决定字节流落地源——
+ * 若清单被缓存/CDN 劫持，假 hash 可与假 URL 自签闭环（hash 同出一份清单）；
+ * host 白名单把字节流硬钉在发行体系域名内，是 hash 校验拦不住的唯一结构性防线。
+ * 新增大文件源域名（飞牛外链等）在此登记。
+ */
+const DOWNLOAD_HOST_PATTERN = /(^|\.)((gitcode|github|githubusercontent)\.com|fnnas\.net|mfrp\.space)$/i;
 
 // ────────────────────────── 版本号工具 ──────────────────────────
 
@@ -108,11 +135,88 @@ async function fetchJson(fetchImpl, url) {
 
 // ────────────────────────── 单线路检测 ──────────────────────────
 
+/** 下载 URL 拼接（与官网 index.html 的 url() 同构）：基址去尾斜杠 + 文件名全量编码（空格→%20，
+ *  GitCode 直链实弹实测：%20 形态 302→206 取回 PE32 真身；裸空格 curl 直接拒 URL） */
+function joinAssetUrl(base, fileName) {
+  return `${String(base || "").replace(/\/+$/, "")}/${String(fileName).split("/").map(encodeURIComponent).join("/")}`;
+}
+
+/**
+ * 官网 manifest 线路解析（latest.json → 线路检测结果，v3.45.0 线路三）：
+ *   version → releaseVersion（清单是版本发现主源，双判据语义里它自成一判）
+ *   installer.sha256（64hex 合规才采）→ asset.digest   installer.size → asset.size
+ *   file_base_urls 取首个 https + host 白名单合规位 → download.updateAsset 下载源
+ * published=false → 照报版本、不设 asset（版本发现先行，聚合自然 asset-missing，发版窗口期如实语义）
+ * 安全校验：URL 禁非 https；host 不过白名单不设 asset（自签闭环的结构防线见 DOWNLOAD_HOST_PATTERN）
+ */
+function parseManifestPayload(manifest) {
+  if (!manifest || typeof manifest !== "object") return null;
+  const releaseVersion = normalizeVersion(manifest.version)
+    ? `${manifest.version}`.trim().replace(/^v/i, "")
+    : null;
+  if (!releaseVersion) return null;
+  const installer = manifest.installer && typeof manifest.installer === "object" ? manifest.installer : {};
+  const download = manifest.download && typeof manifest.download === "object" ? manifest.download : {};
+
+  let asset = null;
+  if (installer.published === true && installer.file && Array.isArray(download.file_base_urls)) {
+    for (const candidate of download.file_base_urls) {
+      const base = String(candidate || "").trim();
+      const url = joinAssetUrl(base, installer.file);
+      const host = (() => { try { return new URL(url).hostname; } catch { return ""; } })();
+      if (/^https:\/\//i.test(url) && DOWNLOAD_HOST_PATTERN.test(host)) {
+        const digest = /^([0-9a-f]{64})$/i.test(String(installer.sha256 || "").trim())
+          ? String(installer.sha256).trim().toLowerCase() : "";
+        asset = { name: String(installer.file).trim(), url, size: Number(installer.size) || 0, digest };
+        break;
+      }
+    }
+  }
+  return { releaseVersion: `v${releaseVersion}`, asset };
+}
+
+/**
+ * 检测官网 manifest 线路（kind=manifest）：manifestUrls 逐位 failover——
+ * 网络失败/清单不可解析都按「此位失败」跳下一位；全败 → error 汇总（unreachable 语义）。
+ */
+async function detectManifestSource(source, fetchImpl = fetch) {
+  const result = {
+    sourceId: source.id,
+    label: source.label,
+    priority: source.priority,
+    releaseVersion: null,
+    tagVersion: null,
+    asset: null,
+    sumsAsset: null,
+    error: null,
+  };
+  const urls = Array.isArray(source.manifestUrls) ? source.manifestUrls : [];
+  if (!urls.length) {
+    result.error = "manifest: 未配置 manifestUrls";
+    return result;
+  }
+  let lastError = null;
+  for (const manifestUrl of urls) {
+    try {
+      const payload = parseManifestPayload(await fetchJson(fetchImpl, manifestUrl));
+      if (!payload) throw new Error("清单不可解析（version/installer 形态不合规）");
+      result.releaseVersion = payload.releaseVersion;
+      result.asset = payload.asset;
+      return result;
+    } catch (error) {
+      lastError = String(error.message || error);
+    }
+  }
+  result.error = `manifest: ${lastError || "全部 failover 位不可达"}`;
+  return result;
+}
+
 /**
  * 检测单一线路 → { sourceId, label, releaseVersion, tagVersion, asset, sumsAsset, error }
- * asset={url,size,digest,name}（digest 仅 GitHub API 提供）；找不到附件时不设 asset。
+ * asset={url,size,digest,name}（digest=GitHub API/官网清单提供）；找不到时不设 asset。
  */
 async function detectOneSource(source, fetchImpl = fetch) {
+  if (source.kind === "manifest") return detectManifestSource(source, fetchImpl);
   const result = {
     sourceId: source.id,
     label: source.label,
@@ -185,8 +289,16 @@ async function detectOneSource(source, fetchImpl = fetch) {
  *   { status: "latest" | "update" | "asset-missing" | "unreachable",
  *     currentVersion, remoteVersion, asset, sumsAsset, sourceId, sources, attempts }
  */
+/**
+ * 聚合检测（check 更新主入口）：
+ *   mode = "auto"（默认，三线路全查+自动降级借线）/ "web"（仅官网清单）/ "gitcode"（仅线路一）/ "github"（仅线路二）；
+ *   未知 mode 向后兼容按 auto 处理（main 层 settings 白名单已收口，此为守门双保险）
+ * 返回：
+ *   { status: "latest" | "update" | "asset-missing" | "unreachable",
+ *     currentVersion, remoteVersion, asset, sumsAsset, sourceId, sources, attempts }
+ */
 async function checkForUpdate({ mode = "auto", currentVersion, fetchImpl = fetch } = {}) {
-  const list = mode === "gitcode" || mode === "github"
+  const list = mode && mode !== "auto" && UPDATE_SOURCES.some((item) => item.id === mode)
     ? UPDATE_SOURCES.filter((item) => item.id === mode)
     : UPDATE_SOURCES;
   const sources = [];
@@ -379,7 +491,11 @@ function installUpdate({ file, spawnImpl, quitImpl } = {}) {
 
 module.exports = {
   UPDATE_SOURCES,
+  DOWNLOAD_HOST_PATTERN,
   USER_AGENT,
+  joinAssetUrl,
+  parseManifestPayload,
+  detectManifestSource,
   normalizeVersion,
   compareVersions,
   maxVersion,

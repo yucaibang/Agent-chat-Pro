@@ -125,7 +125,7 @@ function settingsFromForm() {
     networkType: document.querySelector("#network-type").value,
     externalMethod: document.querySelector("#external-method").value,
     // v3.44.0 更新线路：auto（默认）/ gitcode（仅线路一）/ github（仅线路二）
-    updateChannel: ["gitcode", "github"].includes(String(data.get("updateChannel") || "")) ? data.get("updateChannel") : "auto",
+    updateChannel: ["web", "gitcode", "github"].includes(String(data.get("updateChannel") || "")) ? data.get("updateChannel") : "auto",
     cloudAiProvider: provider,
     // v3.21.0：custom 走模型名手填框（原先恒为字面 "custom" 的隐性 bug 修复）
     cloudAiModel: provider === "custom"
@@ -173,7 +173,7 @@ function populateSettings(settings) {
   currentLocalEngine = settings.localEngine || "claude";
   // v3.44.0：更新线路回填（非法值一律保持 default auto——不跟随脏数据）
   const updateChannelSelect = document.querySelector("#update-channel");
-  if (updateChannelSelect && ["auto", "gitcode", "github"].includes(String(settings.updateChannel || ""))) {
+  if (updateChannelSelect && ["auto", "web", "gitcode", "github"].includes(String(settings.updateChannel || ""))) {
     updateChannelSelect.value = settings.updateChannel;
   }
   updateConnectionModeUI();
@@ -2902,7 +2902,7 @@ if (aboutCheckUpdateButton && aboutUpdateStatus) {
     aboutUpdateCheckResult = null;
     aboutUpdateStatus.hidden = false;
     aboutUpdateStatus.innerHTML = "";
-    aboutUpdateStatus.textContent = "⏳ 正在检测更新（双线路 GitCode / GitHub 并查，按优先级自动选择可用线路）…";
+    aboutUpdateStatus.textContent = "⏳ 正在检测更新（三线路：官网清单 / GitCode / GitHub 并查，按优先级自动选择可用线路）…";
     aboutCheckUpdateButton.disabled = true;
     try {
       const result = await window.agentChatPro.checkUpdate();

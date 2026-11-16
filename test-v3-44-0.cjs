@@ -74,8 +74,10 @@ function makeMockFetch(routes) {
   };
 }
 
-// 双线路 release/tags API 的 URL 常量（来自 updater.cjs UPDATE_SOURCES，测试不硬编码）
-const [gitcode, github] = updater.UPDATE_SOURCES;
+// release/tags API 的 URL 常量（来自 updater.cjs UPDATE_SOURCES，按 id 显式取——
+// v3.45.0 起 UPDATE_SOURCES 主位增官网 manifest 线路 web，位置解构不再可靠）
+const gitcode = updater.UPDATE_SOURCES.find((item) => item.id === "gitcode");
+const github = updater.UPDATE_SOURCES.find((item) => item.id === "github");
 
 // ════════════════ A. updater.cjs 行为真跑 ════════════════
 async function runUnitTests() {
@@ -418,14 +420,14 @@ async function runWiringTests() {
     assert.ok(rendererSrc.includes("runAboutUpdateDownload"), "下载编排函数缺失");
   });
 
-  await test("B4. index.html：检测按钮 + 更新线路三态 select + 双线路备注文案", () => {
+  await test("B4. index.html：检测按钮 + 更新线路四态 select + 三线路备注文案（v3.45.0 起 web 在场）", () => {
     assert.ok(indexSrc.includes('id="about-check-update"') && indexSrc.includes("检测更新"), "关于页按钮缺失");
     assert.ok(indexSrc.includes('id="about-update-status"'), "更新状态展示区缺失");
     assert.ok(indexSrc.includes('id="update-channel"') && indexSrc.includes('name="updateChannel"'), "线路控件缺失");
-    assert.ok(indexSrc.includes('value="auto"') && indexSrc.includes('value="gitcode"') && indexSrc.includes('value="github"'), "三态 option 缺失");
+    assert.ok(indexSrc.includes('value="auto"') && indexSrc.includes('value="gitcode"') && indexSrc.includes('value="github"') && indexSrc.includes('value="web"'), "四态 option 缺失");
     assert.ok(indexSrc.includes("默认线路 · 国内直连"), "线路一备注缺失");
     assert.ok(indexSrc.includes("备用线路 · 代理 / VPN 环境下使用"), "线路二备注缺失");
-    assert.ok(indexSrc.includes("双线路并查"), "自动降级说明缺失（v3.44.2 订正：双线全查聚合，非失败才切）");
+    assert.ok(indexSrc.includes("三线路并查"), "三线全查说明缺失（v3.45.0 起 auto=三线路并查聚合）");
   });
 
   await test("B5. settings.cjs：updateChannel 三态归一 + 输出 + 白名单透传", () => {
@@ -461,7 +463,7 @@ async function runWiringTests() {
     assert.ok(rendererSrc.includes('hide("#update-channel-settings")') && rendererSrc.includes('hide("#about-check-update")'), "applyEdition 未隐藏更新 UI");
     assert.ok(rendererSrc.includes("aboutUpdateDownloadInFlight"), "下载双击并发闸缺失（防双写同一安装包）");
     // ③ updater：GitCode releases 升序窗口加固（实锤：GitCode v5 releases 默认时间升序，per_page 窗口会漏最新）
-    assert.ok(updater.UPDATE_SOURCES[0].releasesUrl.includes("direction=desc"), "GitCode releases 未带 direction=desc");
+    assert.ok(gitcode.releasesUrl.includes("direction=desc"), "GitCode releases 未带 direction=desc");
   });
 }
 
