@@ -524,12 +524,12 @@
             </div>
             <label>线路选择
               <select id="update-channel" name="updateChannel">
-                <option value="auto">自动（默认：线路一 GitCode 优先，失败自动切线路二 GitHub）</option>
+                <option value="auto">自动（默认：双线路并查，按优先级选择可用线路）</option>
                 <option value="gitcode">仅线路一 · GitCode（默认线路 · 国内直连）</option>
                 <option value="github">仅线路二 · GitHub（备用线路 · 代理 / VPN 环境下使用）</option>
               </select>
             </label>
-            <span class="field-hint">「自动」= 线路一优先、线路一失败自动切线路二；两条线路都连不上时，关于页会逐行报出每条线路的失败原因。</span>
+            <span class="field-hint">「自动」= 双线路并查、按优先级自动选择可用线路（GitCode 优先）；两条线路都连不上时，关于页会逐行报出每条线路的失败原因。</span>
           </div>
         </details>
         <p id="settings-status" class="status"></p>

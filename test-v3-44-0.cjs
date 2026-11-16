@@ -425,7 +425,7 @@ async function runWiringTests() {
     assert.ok(indexSrc.includes('value="auto"') && indexSrc.includes('value="gitcode"') && indexSrc.includes('value="github"'), "三态 option 缺失");
     assert.ok(indexSrc.includes("默认线路 · 国内直连"), "线路一备注缺失");
     assert.ok(indexSrc.includes("备用线路 · 代理 / VPN 环境下使用"), "线路二备注缺失");
-    assert.ok(indexSrc.includes("失败自动切线路二"), "自动降级说明缺失");
+    assert.ok(indexSrc.includes("双线路并查"), "自动降级说明缺失（v3.44.2 订正：双线全查聚合，非失败才切）");
   });
 
   await test("B5. settings.cjs：updateChannel 三态归一 + 输出 + 白名单透传", () => {

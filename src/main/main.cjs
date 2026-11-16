@@ -482,42 +482,51 @@ app.whenReady().then(async () => {
   // v3.44.0 防任意写/任意下：附件名一概取 basename 且必须 -Setup.exe 结尾（ASSET_EXE 形态之外全部拒绝）
   const UPDATE_ASSET_NAME_PATTERN = /-Setup\.exe$/i;
   const UPDATE_DIRECTORY = () => path.join(app.getPath("temp"), "acp-update");
+  // v3.44.2 主进程单飞闸（纵深）：渲染层已有单飞闸，但 handler 闸才是绝对防线——
+  // 并发双下载会双开 createWriteStream 写同一落地文件（对齐 v3.42.3 群闸穿透教训）
+  let updateDownloadInFlight = false;
   ipcMain.handle("update:download", async (event, payload = {}) => {
     if (IS_BRIDGE) throw new Error("Bridge Edition 无应用内更新，请到发布页手动下载");
-    const asset = payload.asset && typeof payload.asset === "object" ? payload.asset : {};
-    const assetName = path.basename(String(asset.name || ""));
-    if (!UPDATE_ASSET_NAME_PATTERN.test(assetName)) throw new Error("不是 Agent Chat Pro 安装包（文件名不符 -Setup.exe 形态），已拒绝下载");
-    const result = await downloadUpdateAsset({
-      asset: { ...asset, name: assetName },
-      sumsAsset: payload.sumsAsset && payload.sumsAsset.name ? payload.sumsAsset : null,
-      file: path.join(UPDATE_DIRECTORY(), assetName),
-      onProgress: (received, total) => {
-        try { event.sender.send("update:event", { type: "progress", received, total, remoteVersion: payload.remoteVersion || "" }); } catch { /* 窗口已关：进度事件丢弃，下载继续 */ }
-      }
-    });
-    writeLog("update_download_ok", { file: result.file, size: result.size, verifiedWith: result.verifiedWith });
-    // 下载 + 校验通过 → 弹窗确认：「立即安装并重启」= 静默装 + 退出（NSIS runAfterFinish 自动拉起新版）；「稍后」= 关于页保留安装入口
-    let response = 1;
+    if (updateDownloadInFlight) throw new Error("已有安装包下载任务正在进行中，请等待其完成后再试");
+    updateDownloadInFlight = true;
     try {
-      const answer = await dialog.showMessageBox(window, {
-        type: "info",
-        buttons: ["立即安装并重启", "稍后自行安装"],
-        defaultId: 0,
-        cancelId: 1,
-        title: "Agent Chat Pro 更新",
-        message: payload.remoteVersion ? `新版本 ${payload.remoteVersion} 安装包已就绪` : "新版本安装包已就绪",
-        detail: `已通过校验（方式：${result.verifiedWith}）。\n点击「立即安装并重启」后 Agent Chat Pro 将退出并静默安装，完成后自动启动新版本。`
+      const asset = payload.asset && typeof payload.asset === "object" ? payload.asset : {};
+      const assetName = path.basename(String(asset.name || ""));
+      if (!UPDATE_ASSET_NAME_PATTERN.test(assetName)) throw new Error("不是 Agent Chat Pro 安装包（文件名不符 -Setup.exe 形态），已拒绝下载");
+      const result = await downloadUpdateAsset({
+        asset: { ...asset, name: assetName },
+        sumsAsset: payload.sumsAsset && payload.sumsAsset.name ? payload.sumsAsset : null,
+        file: path.join(UPDATE_DIRECTORY(), assetName),
+        onProgress: (received, total) => {
+          try { event.sender.send("update:event", { type: "progress", received, total, remoteVersion: payload.remoteVersion || "" }); } catch { /* 窗口已关：进度事件丢弃，下载继续 */ }
+        }
       });
-      response = answer.response;
-    } catch (error) {
-      writeLog("update_dialog_failed", { error: String(error?.message || error) });
+      writeLog("update_download_ok", { file: result.file, size: result.size, verifiedWith: result.verifiedWith, note: result.note || "" });
+      // 下载 + 校验通过 → 弹窗确认：「立即安装并重启」= 静默装 + 退出（NSIS runAfterFinish 自动拉起新版）；「稍后」= 关于页保留安装入口
+      let response = 1;
+      try {
+        const answer = await dialog.showMessageBox(window, {
+          type: "info",
+          buttons: ["立即安装并重启", "稍后自行安装"],
+          defaultId: 0,
+          cancelId: 1,
+          title: "Agent Chat Pro 更新",
+          message: payload.remoteVersion ? `新版本 ${payload.remoteVersion} 安装包已就绪` : "新版本安装包已就绪",
+          detail: `已通过校验（方式：${result.verifiedWith}）。\n点击「立即安装并重启」后 Agent Chat Pro 将退出并静默安装，完成后自动启动新版本。`
+        });
+        response = answer.response;
+      } catch (error) {
+        writeLog("update_dialog_failed", { error: String(error?.message || error) });
+      }
+      if (response === 0) {
+        installUpdate({ file: result.file, spawnImpl: spawn, quitImpl: () => app.quit() });
+        writeLog("update_install_start", { file: result.file, via: "dialog" });
+        return { ...result, installChoice: "install" };
+      }
+      return { ...result, installChoice: "later" };
+    } finally {
+      updateDownloadInFlight = false;
     }
-    if (response === 0) {
-      installUpdate({ file: result.file, spawnImpl: spawn, quitImpl: () => app.quit() });
-      writeLog("update_install_start", { file: result.file, via: "dialog" });
-      return { ...result, installChoice: "install" };
-    }
-    return { ...result, installChoice: "later" };
   });
   ipcMain.handle("update:install", async (_event, payload = {}) => {
     // 防任意执行：只认 temp/acp-update 目录内、-Setup.exe 结尾的安装包（必须先经 update:download 产物）

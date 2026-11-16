@@ -134,9 +134,19 @@ async function detectOneSource(source, fetchImpl = fetch) {
     if (latestRelease) {
       result.releaseVersion = latestRelease.tag_name;
       const assets = Array.isArray(latestRelease.assets) ? latestRelease.assets : [];
-      const target = normalizeVersion(latestRelease.tag_name).patch;
-      const exe = assets.find((item) => item && item.name && ASSET_EXE_PATTERN.test(String(item.name).trim())
-        && normalizeVersion(ASSET_EXE_PATTERN.exec(String(item.name).trim())?.[1])?.patch === target);
+      const targetVersion = normalizeVersion(latestRelease.tag_name);
+      const exe = assets.find((item) => {
+        if (!item || !item.name) return false;
+        const name = String(item.name).trim();
+        if (!ASSET_EXE_PATTERN.test(name)) return false;
+        const assetVersion = normalizeVersion(ASSET_EXE_PATTERN.exec(name)?.[1]);
+        // v3.44.2 加固：附件版本与 release tag 全版本比对（原 only-patch 形态会让
+        // major/minor 不同而 patch 撞巧的附件误入场 → 借线资格白白空转）
+        return Boolean(assetVersion && targetVersion
+          && assetVersion.major === targetVersion.major
+          && assetVersion.minor === targetVersion.minor
+          && assetVersion.patch === targetVersion.patch);
+      });
       if (exe) {
         result.asset = {
           name: String(exe.name).trim(),
@@ -240,6 +250,27 @@ function sha256File(file) {
   return crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex");
 }
 
+/**
+ * 拉取清单并解析出「该附件」的期望 sha256（v3.44.2 修复 Bug B 抽独立函数）：
+ *   HTTP 非 ok / 解析不出 → null（调用方回退 digest/size 弱校验，设计本义）
+ *   网络层异常（DNS 失败/超时/传输中断）→ throw（调用方 catch 后回退弱校验，不作废已完成的下载）
+ *   ⚠ 15s AbortController 超时：此前裸 fetch 无超时（undici 默认 300s），清单卡住 = 长时间无响应
+ */
+async function fetchManifestExpected(sumsAsset, assetName, fetchImpl = fetch) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+  try {
+    const manifestRes = await fetchImpl(sumsAsset.url, {
+      headers: { "User-Agent": USER_AGENT },
+      signal: controller.signal,
+    });
+    if (!manifestRes.ok) return null;
+    return manifestSha256ForAsset(await manifestRes.text(), assetName);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 const MANIFEST_ROW_PATTERN = /^([0-9a-f]{64})\s+\*?(.+)$/i;
 const MANIFEST_BARE_PATTERN = /^[0-9a-f]{64}$/i;
 
@@ -276,37 +307,60 @@ async function downloadUpdateAsset({ asset, sumsAsset, file, fetchImpl = fetch, 
   const total = Number(response.headers.get("content-length")) || asset.size || 0;
   let received = 0;
   const out = fs.createWriteStream(file);
+  // v3.44.2 修复（Bug A）：写盘错误监听必须在流式循环期就位——磁盘满/句柄耗尽（ENOSPC 等）
+  // 在循环中段 emit，此前监听挂在 end 阶段 = Unhandled 'error' event → 主进程整应用崩溃
+  // （Linux /dev/full 实测复现：ENOSPC 裸抛 exit 1）。持久置位 writeError，drain/end 竞速处再临场 race。
+  let writeError = null;
+  out.on("error", (error) => { writeError = error; });
   for await (const chunk of response.body) {
+    if (writeError) throw writeError; // 上一轮写入已失败：立即终止，防对已销毁流继续写
     received += chunk.length;
-    if (!out.write(chunk)) await new Promise((resolve) => out.once("drain", resolve));
+    if (!out.write(chunk)) {
+      // backpressure 等待 drain；期间若 emit error 必须同步 reject（error 后 drain 不会再来，不竞速就永挂）
+      await new Promise((resolve, reject) => {
+        const fail = (error) => reject(error);
+        out.once("error", fail);
+        out.once("drain", () => { out.off("error", fail); resolve(); });
+      });
+    }
     if (typeof onProgress === "function") onProgress(received, total || asset.size || 0);
   }
-  await new Promise((resolve, reject) => { out.end(resolve); out.on("error", reject); });
+  await new Promise((resolve, reject) => {
+    const fail = (error) => reject(error);
+    out.once("error", fail);
+    out.end(() => { out.off("error", fail); resolve(); });
+  });
   const realSize = fs.statSync(file).size;
 
   // —— 校验三层：① SHA256 清单附件 ② GitHub digest ③ size 对账
   const verify = { manifest: false, digest: false, size: false };
   const localHash = sha256File(file);
+  let manifestNote = "";
+  // v3.44.2 修复（Bug B）：清单「拉取失败」（网络层异常）≠ 清单「校验失败」（hash 不符）——
+  // 前者回退 digest/size 弱校验（已完成的下载不作废），后者保持绝不回退安全线（原语义钉死）
   if (sumsAsset && sumsAsset.url) {
-    const manifestRes = await fetchImpl(sumsAsset.url, { headers: { "User-Agent": USER_AGENT } });
-    if (manifestRes.ok) {
-      // manifestSha256ForAsset 兼容标准行/裸哈希两形态（GitCode 历史清单实拉形态），解析不出 → 回退 digest/size
-      const expected = manifestSha256ForAsset(await manifestRes.text(), asset.name);
-      if (expected) {
-        verify.manifest = expected.toLowerCase() === localHash;
-        if (!verify.manifest) throw new Error(`SHA256 清单校验失败（清单 ${expected} vs 实际 ${localHash}）——为安全起见已放弃安装`);
-      }
+    let expected = null;
+    try {
+      // manifestSha256ForAsset 兼容标准行/裸哈希两形态（GitCode 历史清单实拉形态）
+      expected = await fetchManifestExpected(sumsAsset, asset.name, fetchImpl);
+    } catch (error) {
+      manifestNote = `清单拉取失败（${String((error && error.message) || error)}），已回退弱校验`;
+    }
+    if (expected) {
+      verify.manifest = expected.toLowerCase() === localHash;
+      if (!verify.manifest) throw new Error(`SHA256 清单校验失败（清单 ${expected} vs 实际 ${localHash}）——为安全起见已放弃安装`);
     }
   }
   verify.digest = Boolean(asset.digest) && asset.digest.toLowerCase() === localHash;
   if (!verify.manifest && !verify.digest) {
     verify.size = Boolean(asset.size) && asset.size === realSize;
     if (!verify.size) {
-      if (asset.size) throw new Error(`校验失败（size ${asset.size} vs 实际 ${realSize}）——为安全起见已放弃安装`);
-      throw new Error("无可校验凭证（清单/digest/size 全缺）——为安全起见已放弃安装");
+      const note = manifestNote ? `\n${manifestNote}` : "";
+      if (asset.size) throw new Error(`校验失败（size ${asset.size} vs 实际 ${realSize}）——为安全起见已放弃安装${note}`);
+      throw new Error(`无可校验凭证（清单/digest/size 全缺）——为安全起见已放弃安装${note}`);
     }
   }
-  return { file, size: realSize, hash: localHash, verifiedWith: verify.manifest ? "manifest" : verify.digest ? "digest" : "size" };
+  return { file, size: realSize, hash: localHash, verifiedWith: verify.manifest ? "manifest" : verify.digest ? "digest" : "size", note: manifestNote || undefined };
 }
 
 // ────────────────────────── 安装（NSIS 静默） ──────────────────────────
@@ -333,6 +387,7 @@ module.exports = {
   checkForUpdate,
   parseSumsManifest,
   manifestSha256ForAsset,
+  fetchManifestExpected,
   sha256File,
   downloadUpdateAsset,
   installUpdate,

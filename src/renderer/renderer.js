@@ -2902,7 +2902,7 @@ if (aboutCheckUpdateButton && aboutUpdateStatus) {
     aboutUpdateCheckResult = null;
     aboutUpdateStatus.hidden = false;
     aboutUpdateStatus.innerHTML = "";
-    aboutUpdateStatus.textContent = "⏳ 正在检测更新（线路一 GitCode → 失败自动切线路二 GitHub）…";
+    aboutUpdateStatus.textContent = "⏳ 正在检测更新（双线路 GitCode / GitHub 并查，按优先级自动选择可用线路）…";
     aboutCheckUpdateButton.disabled = true;
     try {
       const result = await window.agentChatPro.checkUpdate();
