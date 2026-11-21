@@ -3,6 +3,7 @@
 // v3.12.2 设置中心重构测试（参照 Agent Orbit 截图：左导航 + 右内容）
 // v3.12.4 模块重整：五导航页 = 连接设置 / 插件(压缩+Bridge) / 设备联动 / 缓存清理 / 关于
 // v3.12.4 修复：面板 hidden 与 .active 同步切换（修复除默认页外全部空白的 bug）
+// v3.45.3 百宝箱：缓存清理页迁入百宝箱（treasure），导航 cache tab→treasure tab（面板结构随迁）
 const assert = require("assert");
 const fs = require("fs");
 const path = require("path");
@@ -26,30 +27,31 @@ function check(name, condition) {
   console.log("── 设置中心结构（index.html）──");
   const html = read("src/renderer/index.html");
   check("左导航容器 settings-nav 存在", /class="settings-nav"/.test(html));
-  check("导航五项：连接设置/插件/设备联动/缓存清理/关于", ["connection", "plugins", "device", "cache", "about"].every((t) => html.includes(`data-settings-tab="${t}"`)));
-  check("五面板齐全", ["connection", "plugins", "device", "cache", "about"].every((t) => html.includes(`data-settings-panel="${t}"`)));
+  check("导航七项：连接/插件/模型/设备/百宝箱/高级/关于", ["connection", "plugins", "models", "device", "treasure", "advanced", "about"].every((t) => html.includes(`data-settings-tab="${t}"`)));
+  check("七面板齐全", ["connection", "plugins", "models", "device", "treasure", "advanced", "about"].every((t) => html.includes(`data-settings-panel="${t}"`)));
+  check("cache 导航 tab 已清零（迁移后不留死口）", !html.includes('data-settings-tab="cache"'));
   check("connection 面板默认 active", /class="settings-panel active" data-settings-panel="connection"/.test(html));
-  check("其余四面板默认隐藏（hidden 属性）", ["plugins", "device", "cache", "about"].every((t) => new RegExp(`data-settings-panel="${t}" hidden`).test(html)));
+  check("其余六面板默认隐藏（hidden 属性）", ["plugins", "models", "device", "treasure", "advanced", "about"].every((t) => new RegExp(`data-settings-panel="${t}" hidden`).test(html)));
   check("close-settings 移入 settings-body（settings-close 类）", /class="close-button settings-close" id="close-settings"/.test(html));
   check("settings-layout/settings-body 壳存在", /class="settings-layout"/.test(html) && /class="settings-body"/.test(html));
 
-  console.log("── 模块归属（v3.12.4 重整：插件页只留聊天链路增强）──");
+  console.log("── 模块归属（v3.12.4 重整：插件页只留聊天链路增强；v3.45.3 缓存清理入百宝箱）──");
   const panelStart = html.indexOf('data-settings-panel="plugins"');
   const panelDevice = html.indexOf('data-settings-panel="device"');
-  const panelCache = html.indexOf('data-settings-panel="cache"');
+  const panelTreasure = html.indexOf('data-settings-panel="treasure"');
   const panelEnd = html.indexOf('data-settings-panel="about"');
-  check("面板顺序：plugins < device < cache < about", panelStart > 0 && panelStart < panelDevice && panelDevice < panelCache && panelCache < panelEnd);
+  check("面板顺序：plugins < device < treasure < about", panelStart > 0 && panelStart < panelDevice && panelDevice < panelTreasure && panelTreasure < panelEnd);
   for (const id of ["compact-settings", "bridge-settings"]) {
     const pos = html.indexOf(`<details id="${id}"`);
     check(`${id} 归入插件页`, pos > panelStart && pos < panelDevice);
   }
   {
     const pos = html.indexOf(`<details id="device-control-settings"`);
-    check("device-control-settings 归入设备联动页", pos > panelDevice && pos < panelCache);
+    check("device-control-settings 归入设备联动页", pos > panelDevice && pos < panelTreasure);
   }
   {
     const pos = html.indexOf(`<details id="cache-settings"`);
-    check("cache-settings 归入缓存清理页", pos > panelCache && pos < panelEnd);
+    check("cache-settings 归入百宝箱页（v3.45.3 迁入）", pos > panelTreasure && pos < panelEnd);
   }
   check("插件页空态提示在位", /更多插件能力规划中/.test(html));
 

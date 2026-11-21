@@ -244,7 +244,7 @@
           <button type="button" class="settings-nav-item" data-settings-tab="plugins">🧩 插件</button>
           <button type="button" class="settings-nav-item" data-settings-tab="models">🧠 模型</button>
           <button type="button" class="settings-nav-item" data-settings-tab="device">🖥️ 设备联动</button>
-          <button type="button" class="settings-nav-item" data-settings-tab="cache">🧹 缓存清理</button>
+          <button type="button" class="settings-nav-item" data-settings-tab="treasure">🎁 百宝箱</button>
           <button type="button" class="settings-nav-item" data-settings-tab="advanced">⚙️ 高级设置</button>
           <button type="button" class="settings-nav-item" data-settings-tab="about">ℹ️ 关于</button>
         </aside>
@@ -700,21 +700,41 @@
           </div>
         </details>
           </section>
-          <section class="settings-panel" data-settings-panel="cache" hidden>
-            <div class="settings-panel-heading"><div><h2>缓存清理</h2><p>扫描并清理本机常见系统缓存（Windows）</p></div></div>
-        <details id="cache-settings" open>
-          <summary>系统缓存清理（Windows）</summary>
-          <p class="hint">扫描并清理本机常见缓存。分级：安全（默认勾选）/ 进阶（手动勾选）/ 管理员（弹出 UAC 确认）。明确不清理 Prefetch、WinSxS、Windows.old。</p>
-          <div class="cache-scan-row">
-            <button type="button" id="cache-scan" class="secondary">扫描缓存</button>
-            <span id="cache-scan-result" class="field-hint" hidden></span>
-          </div>
-          <div id="cache-target-list" class="cache-target-list" hidden></div>
-          <div class="cache-clean-row" hidden id="cache-clean-row">
-            <button type="button" id="cache-clean" class="primary">清理勾选项</button>
-            <span id="cache-clean-result" class="field-hint" hidden></span>
-          </div>
-        </details>
+          <!-- v3.45.3：原「缓存清理」页迁入百宝箱（cache-* 元素 ID 全保留，渲染层逻辑零改动） -->
+          <section class="settings-panel" data-settings-panel="treasure" hidden>
+            <div class="settings-panel-heading"><div><h2>🎁 百宝箱</h2><p>顺手小工具合集：缓存清理 · 内存优化 · 今日幸运值</p></div></div>
+
+            <details id="cache-settings" open>
+              <summary>🧹 缓存清理（Windows）</summary>
+              <p class="hint">扫描并清理本机常见缓存。分级：安全（默认勾选）/ 进阶（手动勾选）/ 管理员（弹出 UAC 确认）。明确不清理 Prefetch、WinSxS、Windows.old。</p>
+              <div class="cache-scan-row">
+                <button type="button" id="cache-scan" class="secondary">扫描缓存</button>
+                <span id="cache-scan-result" class="field-hint" hidden></span>
+              </div>
+              <div id="cache-target-list" class="cache-target-list" hidden></div>
+              <div class="cache-clean-row" hidden id="cache-clean-row">
+                <button type="button" id="cache-clean" class="primary">清理勾选项</button>
+                <span id="cache-clean-result" class="field-hint" hidden></span>
+              </div>
+            </details>
+
+            <details id="treasure-memory">
+              <summary>🧠 内存优化</summary>
+              <p class="hint">主进程垃圾回收 + 应用内存体检：执行后汇报释放量与各进程占用，不中断会话，随时可做。</p>
+              <div class="cache-scan-row">
+                <button type="button" id="memory-optimize" class="secondary">执行内存优化</button>
+                <span id="memory-optimize-result" class="field-hint" hidden></span>
+              </div>
+            </details>
+
+            <details id="treasure-luck">
+              <summary>🍀 今日幸运值</summary>
+              <p class="hint">每日一发：0 或 100 随机抽一个。每个数值各藏十种台词，样样不一样——但一天只能抽一次，抽完今天就这样了。</p>
+              <div class="cache-scan-row">
+                <button type="button" id="luck-draw" class="secondary">抽今日幸运值</button>
+                <span id="luck-result" class="field-hint" hidden></span>
+              </div>
+            </details>
           </section>
           <section class="settings-panel" data-settings-panel="advanced" hidden>
             <div class="settings-panel-heading">
@@ -864,6 +884,8 @@
               <div class="about-row"><dt>作者</dt><dd>jiang1688</dd></div>
               <div class="about-row"><dt>适配器</dt><dd>Claude Code</dd></div>
               <div class="about-row"><dt>连接方式</dt><dd>SSH 远程 · 云端 AI · 本机</dd></div>
+              <!-- v3.45.3：官网直链（a 标签走 v3.15.7 统一外链拦截 → 系统浏览器，主窗口零劫持） -->
+              <div class="about-row"><dt>官网</dt><dd><a id="about-website" class="about-link" href="https://agent-chat-pro.pages.dev">agent-chat-pro.pages.dev</a></dd></div>
             </dl>
             <p class="about-desc">SSH 远程支持内网直连与外网穿透双模式；云端 AI 无需本地 CLI 即可聊天；本机模式使用本机 Claude Code。内置上下文压缩、系统缓存清理、防破解保护体系。</p>
             <p class="about-history">项目沿革：Agent NAS Chat v0.1.11 → Claude Code Connect Chat v0.1.11 → Agent Chat Pro</p>

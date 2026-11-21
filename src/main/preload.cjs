@@ -144,6 +144,8 @@ contextBridge.exposeInMainWorld("agentChatPro", {
   // ── 缓存清理 IPC（v3.10.0）──
   scanSystemCaches: () => ipcRenderer.invoke("cache:scan"),
   cleanSystemCaches: (targets) => ipcRenderer.invoke("cache:clean", targets),
+  // ── 百宝箱·内存优化（v3.45.3：主进程 v8 GC + 内存体检）──
+  optimizeMemory: () => ipcRenderer.invoke("memory:optimize"),
   // ── Markdown 渲染 IPC ──
   renderMarkdown: (source) => ipcRenderer.invoke("markdown:render", source),
   // ── 链接打开 IPC ──

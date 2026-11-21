@@ -592,6 +592,7 @@ dialog form { display: flex; flex-direction: column; gap: 15px; padding: 23px; }
 .about-title:hover { color: var(--accent, #D78787); }
 .about-tagline { font-size: 13px; color: var(--text-muted); }
 .about-info { display: flex; flex-direction: column; gap: 10px; margin: 14px 0 0; padding: 15px; border: 1px solid var(--border-control); border-radius: 12px; background: var(--bg-deep); }
+.about-link { color: var(--accent-bright); text-decoration: underline; cursor: pointer; }
 .about-row { display: flex; justify-content: space-between; gap: 12px; font-size: 13px; }
 .about-row dt { color: var(--text-muted); }
 .about-row dd { margin: 0; color: var(--text-primary); text-align: right; }

@@ -446,9 +446,14 @@ async function runSourceTests() {
 
 /* ── C 组：版本自洽 ── */
 async function runVersionTests() {
-  await test("C1. package.json == README badge == 3.45.2（版本铁则自洽，v3.43.2 D1 教训：写死必在 bump 翻红）", () => {
-    assert.strictEqual(pkg.version, "3.45.2", "package.json 应为 3.45.2");
-    assert.ok(readme.includes("version-3.45.2-blue"), "README badge 应为 3.45.2");
+  await test("C1. package.json ≥ 3.45.2 且 README badge 自洽（44-2 同款下限+自洽滚动形态；硬钉 3.45.2 在 v3.45.3 升位时碎——45-1 B3 同教训）", () => {
+    const m = /^(\d+)\.(\d+)\.(\d+)$/.exec(String(pkg.version || ""));
+    assert.ok(m, `package.json version 应为 x.y.z，实为 ${pkg.version}`);
+    const major = m ? Number(m[1]) : 0;
+    const minor = m ? Number(m[2]) : 0;
+    const patch = m ? Number(m[3]) : 0;
+    assert.ok(major > 3 || (major === 3 && (minor > 45 || (minor === 45 && patch >= 2))), `版本应 ≥ 3.45.2，实为 ${pkg.version}`);
+    assert.strictEqual(String(readme.match(/badge\/version-([v\d.]+)-blue\.svg/)?.[1] || ""), pkg.version, `README badge 与 package.json ${pkg.version} 应自洽`);
   });
 }
 

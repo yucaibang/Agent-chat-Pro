@@ -3645,6 +3645,8 @@ document.querySelector("#cloud-fetch-models")?.addEventListener("click", async (
 
 // v3.15.7 静态初始提示（页面加载时的智谱注册链接）同样接管
 bindExternalLinks(document.querySelector("#cloud-key-hint"));
+// v3.45.3 关于页容器接管：官网直链（.about-info 内所有 <a> 一致走拦截 → 系统浏览器）
+bindExternalLinks(document.querySelector(".about-info"));
 
 document.querySelector("#toggle-cloud-key")?.addEventListener("click", () => {
   const input = document.querySelector("#cloud-api-key");
@@ -3884,6 +3886,115 @@ document.querySelector("#cache-clean")?.addEventListener("click", async () => {
     button.textContent = "清理勾选项";
   }
 });
+
+// ── v3.45.3 百宝箱：内存优化 + 今日幸运值（缓存清理面板 HTML 迁入百宝箱，ID 全保留逻辑零改）──
+
+// 内存优化（IPC → 主进程 v8 GC + 前后堆快照 + app.getAppMetrics() 体检聚合）
+document.querySelector("#memory-optimize")?.addEventListener("click", async () => {
+  const button = document.querySelector("#memory-optimize");
+  const resultEl = document.querySelector("#memory-optimize-result");
+  if (button) button.disabled = true;
+  if (resultEl) { resultEl.hidden = false; resultEl.className = "field-hint"; resultEl.textContent = "正在回收内存……"; }
+  try {
+    const result = await window.agentChatPro.optimizeMemory();
+    if (!result || result.ok !== true) throw new Error(result?.reason || "内存优化不可用");
+    const parts = [`主进程垃圾回收：${result.beforeMb} MB → ${result.afterMb} MB（释放 ${result.freedMb} MB）`];
+    if (!result.gcRan) parts.push("垃圾回收未执行（环境不支持）");
+    if (Array.isArray(result.memoryParts) && result.memoryParts.length) {
+      parts.push(`内存体检：${result.memoryParts.join(" / ")}（共 ${result.totalMb} MB）`);
+    }
+    if (resultEl) { resultEl.hidden = false; resultEl.className = "field-hint ok"; resultEl.textContent = parts.join(" · "); }
+  } catch (error) {
+    if (resultEl) { resultEl.hidden = false; resultEl.className = "field-hint fail"; resultEl.textContent = `内存优化失败：${error?.message || error}`; }
+  } finally {
+    if (button) button.disabled = false;
+  }
+});
+
+// 今日幸运值（v3.45.3 用户定制玩法）：0 或 100 随机抽一个；每个数值各藏 10 种台词，
+// 样样不一样；一天只能抽一次（localStorage 按本地日期记录，抽过=按钮锁死+原句重放）。
+const LUCK_LINES = {
+  0: [
+    "本系统查无幸运，只有限定版倒霉。",
+    "水逆看了你的结果都摇头，说这次不背锅。",
+    "不是你不努力，是玄学今天集体放假。",
+    "别慌，唯一的好运是没抽到负数。",
+    "低谷反弹理论来贺喜：你已经到底了，明天只能向上。",
+    "连抽卡都替你把期望值管理做完了，省心。",
+    "建议把重要决定留给明天，今天只负责活着。",
+    "出门记得看路，今天的万事都带一点卡壳。",
+    "幸运值今天根本没进站，你只是路过站台。",
+    "恭喜获得「今日限定倒霉」体验卡，不可转赠。",
+  ],
+  100: [
+    "满抽！今天你就是欧皇本皇。",
+    "天道酬勤，今天顺便也专酬你。",
+    "本系统今日最高认证：满值含金量，仅此一位。",
+    "挺胸出门，全世界都要给你让路。",
+    "说出口的愿望都灵，兑现自负。",
+    "别浪费这份运气，把拖了很久的事一口气干完。",
+    "连天气预报都会偏爱你，晒不黑淋不着。",
+    "你的脸白到本系统直冒红光。",
+    "玄学今天为你加班，事事顺到离谱。",
+    "今天说啥都顺，麻烦替我们普通人低调一点。",
+  ],
+};
+const LUCK_STORAGE_KEY = "acp-luck-daily";
+
+/** 本地时区当天日期键（yyyy-mm-dd）：跨天自动解锁 */
+function luckLocalYmd() {
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+}
+
+/** 读已存记录：字段/数值/台词全量校验，损坏兜底视为未抽 */
+function luckReadRecord() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(LUCK_STORAGE_KEY) || "null");
+    if (saved && typeof saved.ymd === "string" && (saved.value === 0 || saved.value === 100)
+      && typeof saved.line === "string" && LUCK_LINES[saved.value]?.includes(saved.line)) return saved;
+  } catch { /* 存储不可读 = 未抽 */ }
+  return null;
+}
+
+function luckShow(record, drawn) {
+  const resultEl = document.querySelector("#luck-result");
+  if (!resultEl) return;
+  resultEl.hidden = false;
+  resultEl.className = drawn ? "field-hint ok" : "field-hint";
+  resultEl.textContent = drawn
+    ? `今日幸运值 ${record.value}——${record.line}`
+    : `今天已抽过（${record.value}）：${record.line}（一天一次，明天再来）`;
+}
+
+(function initLuckPanel() {
+  const button = document.querySelector("#luck-draw");
+  if (!button) return;
+  const saved = luckReadRecord();
+  if (saved && saved.ymd === luckLocalYmd()) {
+    button.disabled = true;
+    luckShow(saved, false);
+  }
+})();
+
+document.querySelector("#luck-draw")?.addEventListener("click", () => {
+  const button = document.querySelector("#luck-draw");
+  const saved = luckReadRecord();
+  if (saved && saved.ymd === luckLocalYmd()) {
+    // 一天一次铁规矩：已抽不重抽、不换台词，把记录原话再亮出来
+    if (button) button.disabled = true;
+    luckShow(saved, false);
+    return;
+  }
+  const value = Math.random() < 0.5 ? 0 : 100;
+  const pool = LUCK_LINES[value];
+  const line = pool[Math.floor(Math.random() * pool.length)] || pool[0];
+  const record = { ymd: luckLocalYmd(), value, line };
+  try { localStorage.setItem(LUCK_STORAGE_KEY, JSON.stringify(record)); } catch { /* 存储不可写不影响发牌 */ }
+  if (button) button.disabled = true;
+  luckShow(record, true);
+});
+
 passwordInput.addEventListener("input", () => {
   document.querySelector("#password-hint").textContent = passwordInput.value
     ? `本次输入 ${[...passwordInput.value].length} 个字符，请确认没有重复`

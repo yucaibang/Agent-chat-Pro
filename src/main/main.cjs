@@ -20,6 +20,9 @@ const { appendPlanConvention } = require("./plan-convention.cjs"); // v3.20.0 F5
 const { decideTaskNotification, notificationTitleBody, sanitizeTaskNotifyPayload } = require("./task-notify.cjs");
 const { contextTokensFromUsage } = require("./protocol.cjs");
 const { scanSystemCaches, cleanSystemCaches } = require("./cache-cleaner.cjs");
+// v3.45.3 百宝箱·内存优化（主进程 V8 GC + 堆快照 + 内存体检聚合）
+const { optimizeMemory } = require("./memory-optimizer.cjs");
+const v8 = require("v8");
 const { getDeviceControlStatus, installDeviceControl, preferredAddress, uninstallDeviceControl } = require("./device-control.cjs");
 const { scanCoexistence, summarizeCoexistence } = require("./coexistence-scanner.cjs");
 // v3.44.0 应用内更新：双线路检测（GitCode 默认/GitHub 备用）+ 三层校验下载 + NSIS 静默装
@@ -2131,6 +2134,24 @@ app.whenReady().then(async () => {
     const freedTotal = result.results.reduce((sum, r) => sum + (r.freed || 0), 0);
     writeLog("cache_clean_done", { ok: okCount, failed: result.results.length - okCount, freedTotal });
     return result;
+  });
+  // v3.45.3 百宝箱·内存优化：--expose-gc 动态开 → 注入 global.gc → 堆快照 + 体检聚合
+  ipcMain.handle("memory:optimize", async () => {
+    writeLog("memory_optimize_requested", {});
+    try {
+      v8.setFlagsFromString("--expose-gc");
+      const metrics = app.getAppMetrics().map((m) => ({
+        type: m.type,
+        pid: m.pid,
+        memory: { workingSetSize: (m.memory && m.memory.workingSetSize) || 0 },
+      }));
+      const result = optimizeMemory({ gc: typeof global.gc === "function" ? global.gc : null, metrics });
+      writeLog("memory_optimize_done", { gcRan: result.gcRan, freedMb: result.freedMb, totalMb: result.totalMb });
+      return result;
+    } catch (error) {
+      writeLog("memory_optimize_failed", { error: error.message });
+      return { ok: false, reason: `内存优化失败：${error?.message || error}` };
+    }
   });
   ipcMain.handle("window:is-maximized", () => Boolean(window?.isMaximized()));
   ipcMain.handle("window:focus", () => {
