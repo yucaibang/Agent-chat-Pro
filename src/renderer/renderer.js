@@ -124,7 +124,7 @@ function settingsFromForm() {
     workModeId: currentModeId,
     networkType: document.querySelector("#network-type").value,
     externalMethod: document.querySelector("#external-method").value,
-    // v3.44.0 更新线路：auto（默认）/ gitcode（仅线路一）/ github（仅线路二）
+    // v3.44.0 更新线路（四态，v3.45.0 起含官网 manifest）：auto（默认三线路并查自动降级）/ web / gitcode / github
     updateChannel: ["web", "gitcode", "github"].includes(String(data.get("updateChannel") || "")) ? data.get("updateChannel") : "auto",
     cloudAiProvider: provider,
     // v3.21.0：custom 走模型名手填框（原先恒为字面 "custom" 的隐性 bug 修复）
@@ -2829,8 +2829,18 @@ function describeUpdateAttempts(result) {
       if (item.error) lines.push(`· ${item.label || item.sourceId}：${item.error}`);
     }
   }
-  if (!lines.length) lines.push("· 两条线路均未取得版本信息（网络或远端仓库不可达）");
+  if (!lines.length) lines.push("· 未取得任何线路的版本信息（网络或远端仓库不可达）");
   return lines.join("\n");
+}
+
+/** v3.45.1 修复（自查出品）：借线来源文案三线路态——v3.44.0 的两线路三元硬编码在 v3.45.0 官网
+ *  线路（priority 0 主位）借线时落 else 错报「线路一 GitCode」（核心验收点②显示错报）。
+ *  三态显式映射 + 未知来源兜底「线路 ?」，与 updater.cjs UPDATE_SOURCES id 同源。 */
+function updateSourceLabel(sourceId) {
+  if (sourceId === "web") return "线路三 官网清单（安装包走附件直链）";
+  if (sourceId === "gitcode") return "线路一 GitCode";
+  if (sourceId === "github") return "线路二 GitHub";
+  return `来源 ${String(sourceId || "未知")}`;
 }
 
 function renderUpdateReadyState(result) {
@@ -2902,7 +2912,17 @@ if (aboutCheckUpdateButton && aboutUpdateStatus) {
     aboutUpdateCheckResult = null;
     aboutUpdateStatus.hidden = false;
     aboutUpdateStatus.innerHTML = "";
-    aboutUpdateStatus.textContent = "⏳ 正在检测更新（三线路：官网清单 / GitCode / GitHub 并查，按优先级自动选择可用线路）…";
+    // v3.45.1 修复（自查出品）：检测中文案随 mode 动态——单线路 mode 说「三线路并查」与真实
+    // 行为不符（v3.44.2 曾订正过同款文案与真实行为不符的问题），auto 才是三线路全查。
+    const updateChannelNow = (() => {
+      const select = document.querySelector("#update-channel");
+      const value = select ? String(select.value || "auto") : "auto";
+      return ["auto", "web", "gitcode", "github"].includes(value) ? value : "auto";
+    })();
+    const detectHint = updateChannelNow === "auto"
+      ? "三线路（官网清单 / GitCode / GitHub）并查，按优先级自动选择可用线路"
+      : `仅查单线路 ${updateSourceLabel(updateChannelNow)}（设置中心「更新线路」当前所选）`;
+    aboutUpdateStatus.textContent = `⏳ 正在检测更新（${detectHint}）…`;
     aboutCheckUpdateButton.disabled = true;
     try {
       const result = await window.agentChatPro.checkUpdate();
@@ -2912,7 +2932,7 @@ if (aboutCheckUpdateButton && aboutUpdateStatus) {
       } else if (result.status === "update") {
         aboutUpdateStatus.innerHTML = "";
         const foundLine = document.createElement("div");
-        foundLine.textContent = `🆕 发现新版本 ${result.remoteVersion}（当前 ${result.currentVersion} · 来源 ${result.sourceId === "github" ? "线路二 GitHub" : "线路一 GitCode"}）`;
+        foundLine.textContent = `🆕 发现新版本 ${result.remoteVersion}（当前 ${result.currentVersion} · ${updateSourceLabel(result.sourceId)}）`;
         const downloadButton = document.createElement("button");
         downloadButton.type = "button";
         downloadButton.className = "secondary";

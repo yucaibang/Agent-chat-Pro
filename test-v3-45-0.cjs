@@ -238,11 +238,15 @@ async function runWiringTestsReal() {
     assert.ok(fn[0].includes('"gitcode"') && fn[0].includes('"github"'), "白名单须完整含 gitcode/github（防 web 覆盖式改写）");
   });
 
-  await test("B2. renderer.js 白名单两处含 web + 检测文案三线路", () => {
+  await test("B2. renderer.js 白名单两处含 web + 检测文案随 mode 动态（v3.45.1 修复态对齐：auto=三线路并查、单线路=仅查该线路）", () => {
     assert.ok(rendererSrc.includes('["web", "gitcode", "github"]'), "settings 采集白名单需含 web");
     assert.ok(rendererSrc.includes('["auto", "web", "gitcode", "github"]'), "select 回填白名单需含 web");
-    assert.ok(rendererSrc.includes("正在检测更新（三线路：官网清单 / GitCode / GitHub 并查"), "检测状态行需三线路文案");
+    // v3.45.1 修复：检测中文案不再固定三线路——auto 态三线路并查 + 单线路态「仅查单线路」
+    assert.ok(rendererSrc.includes("三线路（官网清单 / GitCode / GitHub）并查"), "auto 态检测文案（三线路并查）");
+    assert.ok(rendererSrc.includes("仅查单线路"), "单线路态检测文案（仅查单线路）");
+    assert.ok(rendererSrc.includes("updateSourceLabel"), "v3.45.1 借线来源三态映射（官网线路不再错报线路一）");
     assert.ok(!rendererSrc.includes("双线路 GitCode / GitHub 并查"), "旧双线路文案应清零");
+    assert.ok(!rendererSrc.includes("两条线路均未取得"), "旧「两条线路」兜底文案应清零");
   });
 
   await test("B3. 应用内 index.html：web option + 官网清单说明 + 三线路 hint", () => {

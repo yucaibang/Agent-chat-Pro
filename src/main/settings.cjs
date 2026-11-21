@@ -377,7 +377,8 @@ function normalizeLocalEngine(value) {
   return value === "atomcode" || value === "custom" ? value : "claude";
 }
 
-/** v3.44.0 应用更新的线路模式归一：三态 auto（默认双线路自动降级）/ gitcode（仅线路一）/ github（仅线路二） */
+/** v3.44.0 应用更新的线路模式归一（四态，v3.45.0 起含官网 manifest）：
+ *  auto（默认：三线路并查自动降级）/ web（仅官网清单）/ gitcode（仅线路一）/ github（仅线路二） */
 function normalizeUpdateChannel(value) {
   return ["gitcode", "github", "web"].includes(value) ? value : "auto";
 }

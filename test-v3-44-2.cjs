@@ -311,10 +311,13 @@ async function runWiringTests() {
     assert.ok(block.indexOf("updateDownloadInFlight = true") < block.indexOf("downloadUpdateAsset"), "闸置位必须先于下载（对齐 v3.42.3 同步置位教训）");
   });
 
-  await test("B4. 文案订正（auto=双线全查聚合）：renderer 状态行 + index.html 静态说明同步", () => {
-    assert.ok(rendererSrc.includes("双线路 GitCode / GitHub 并查"), "renderer 检测状态行应订正（旧=失败才切线路二，与真实行为不符）");
-    assert.ok(!rendererSrc.includes("失败自动切线路二"), "renderer 旧文案应清除");
-    assert.ok(indexSrc.includes("双线路并查"), "index.html 静态说明应订正");
+  await test("B4. 文案订正（随版本演进对齐）：v3.44.2 订正=检测文案与真实行为相符；v3.45.1=auto/单线路动态形态（updateSourceLabel 三态）", () => {
+    // v3.45.1 修复态：检测中文案不再固定——auto 态三线路并查 + 单线路态「仅查单线路」，旧双线路/三线路固定串均清零
+    assert.ok(rendererSrc.includes("三线路（官网清单 / GitCode / GitHub）并查"), "auto 态检测文案（v3.45.1 动态形态）");
+    assert.ok(rendererSrc.includes("仅查单线路"), "单线路态检测文案（v3.45.1 动态形态）");
+    assert.ok(!rendererSrc.includes("失败自动切线路二"), "renderer 旧文案应清除（v3.44.2 订正语义保持）");
+    assert.ok(!rendererSrc.includes("双线路 GitCode / GitHub 并查"), "旧固定双线路文案随 v3.45.1 动态化清零");
+    assert.ok(indexSrc.includes("三线路并查"), "index.html 静态说明（auto 态=三线路，v3.45.1 对齐）");
     assert.ok(!indexSrc.includes("失败自动切线路二"), "index.html 旧文案应清除");
   });
 
@@ -337,9 +340,9 @@ async function runVersionTests() {
     assert.strictEqual(badge[1], pkg.version, `README badge ${badge[1]} 与 package.json ${pkg.version} 应自洽`);
   });
 
-  await test("C2. test-v3-44-0 B4 锚随文案订正同步（双线路并查断言在场）", () => {
+  await test("C2. test-v3-44-0 B4 锚随文案演进同步（v3.45.1 动态形态锚在场）", () => {
     const src = read("test-v3-44-0.cjs");
-    assert.ok(src.includes("双线路并查"), "test-v3-44-0 B4 应锚新文案");
+    assert.ok(src.includes("三线路并查"), "test-v3-44-0 B4 应随 v3.45.1 动态形态对齐");
   });
 }
 
