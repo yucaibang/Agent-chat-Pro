@@ -2837,7 +2837,7 @@ function describeUpdateAttempts(result) {
  *  线路（priority 0 主位）借线时落 else 错报「线路一 GitCode」（核心验收点②显示错报）。
  *  三态显式映射 + 未知来源兜底「线路 ?」，与 updater.cjs UPDATE_SOURCES id 同源。 */
 function updateSourceLabel(sourceId) {
-  if (sourceId === "web") return "线路三 官网清单（安装包走附件直链）";
+  if (sourceId === "web") return "线路三 Agent chat Pro 官网";
   if (sourceId === "gitcode") return "线路一 GitCode";
   if (sourceId === "github") return "线路二 GitHub";
   return `来源 ${String(sourceId || "未知")}`;
@@ -2920,7 +2920,7 @@ if (aboutCheckUpdateButton && aboutUpdateStatus) {
       return ["auto", "web", "gitcode", "github"].includes(value) ? value : "auto";
     })();
     const detectHint = updateChannelNow === "auto"
-      ? "三线路（官网清单 / GitCode / GitHub）并查，按优先级自动选择可用线路"
+      ? "三线路（Agent chat Pro 官网 / GitCode / GitHub）并查，按优先级自动选择可用线路"
       : `仅查单线路 ${updateSourceLabel(updateChannelNow)}（设置中心「更新线路」当前所选）`;
     aboutUpdateStatus.textContent = `⏳ 正在检测更新（${detectHint}）…`;
     aboutCheckUpdateButton.disabled = true;
@@ -4154,50 +4154,66 @@ function voiceInsertText(text) {
   el.setSelectionRange(caret, caret);
 }
 
+let voiceStarting = false; // v3.45.2 重入闸：voiceInfo IPC + getUserMedia 授权弹窗可达数秒，二连点=双会话（前会话引用被覆盖丢失：麦克风常热不松手、processor 每秒 ~190KB 吃内存、旧 interval 永挂不清）
 async function startVoiceInput() {
-  if (voiceSession) return;
-  const info = await window.agentChatPro.voiceInfo().catch(() => null);
-  if (!info?.ok || !info.supported || !info.hasKey) {
-    voiceIdle();
-    voiceShowTip(info?.reason || (!info?.hasKey ? "尚未在连接设置保存云端 API Key，先去「连接设置 → 云端 AI」保存再用听说。" : "语音输入暂不支持当前云端服务商。"));
-    return;
-  }
-  if (!navigator.mediaDevices?.getUserMedia) {
-    voiceShowTip("当前环境不支持麦克风录音（mediaDevices 不可用）。");
-    return;
-  }
-  let stream;
+  if (voiceSession || voiceStarting) return;
+  voiceStarting = true;
+  if (voiceButton) voiceButton.disabled = true; // 起始 await 窗口按钮不可点（真实 DOM 语义，双保险）
   try {
-    stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, channelCount: 1 } });
-  } catch (error) {
-    const reasonBy = {
-      NotAllowedError: "麦克风权限被拒绝：允许本 App 使用麦克风，或检查 Windows 设置 → 隐私 → 麦克风。",
-      PermissionDeniedError: "麦克风权限被拒绝：允许本 App 使用麦克风，或检查 Windows 设置 → 隐私 → 麦克风。",
-      NotFoundError: "没有找到可用的麦克风设备。",
-      NotReadableError: "麦克风被其他程序占用，关闭占用它的应用后重试。",
-    };
-    voiceShowTip(reasonBy[error?.name] || `无法打开麦克风：${error?.message || error}`);
-    return;
+    const info = await window.agentChatPro.voiceInfo().catch(() => null);
+    if (!info?.ok || !info.supported || !info.hasKey) {
+      voiceShowTip(info?.reason || (!info?.hasKey ? "尚未在连接设置保存云端 API Key，先去「连接设置 → 云端 AI」保存再用听说。" : "语音输入暂不支持当前云端服务商。"));
+      return;
+    }
+    if (!navigator.mediaDevices?.getUserMedia) {
+      voiceShowTip("当前环境不支持麦克风录音（mediaDevices 不可用）。");
+      return;
+    }
+    let stream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, channelCount: 1 } });
+    } catch (error) {
+      const reasonBy = {
+        NotAllowedError: "麦克风权限被拒绝：允许本 App 使用麦克风，或检查 Windows 设置 → 隐私 → 麦克风。",
+        PermissionDeniedError: "麦克风权限被拒绝：允许本 App 使用麦克风，或检查 Windows 设置 → 隐私 → 麦克风。",
+        NotFoundError: "没有找到可用的麦克风设备。",
+        NotReadableError: "麦克风被其他程序占用，关闭占用它的应用后重试。",
+      };
+      voiceShowTip(reasonBy[error?.name] || `无法打开麦克风：${error?.message || error}`);
+      return;
+    }
+    let audioContext;
+    try {
+      audioContext = new (window.AudioContext || window.webkitAudioContext)();
+      const source = audioContext.createMediaStreamSource(stream);
+      const processor = audioContext.createScriptProcessor(4096, 1, 1);
+      const chunks = [];
+      processor.onaudioprocess = (event) => {
+        // 直接持有拷贝，onaudioprocess 的复用缓冲会被内部回收写穿
+        chunks.push(new Float32Array(event.inputBuffer.getChannelData(0)));
+      };
+      source.connect(processor);
+      processor.connect(audioContext.destination); // ScriptProcessor 不连 destination 不出回调
+      const sampleRate = audioContext.sampleRate;
+      const maxSeconds = Math.max(5, Math.min(Number(info.maxSeconds) || 60, 300));
+      voiceSession = { stream, audioContext, source, processor, chunks, sampleRate, startedAt: Date.now(), timer: 0, maxSeconds };
+      voiceButton.classList.add("recording");
+      voiceButton.textContent = "■ 停止";
+      clearTimeout(voiceTipTimer); // 录音提示接管：上一条失败提示的 10s 定时器不能再把「正在听说…」清回默认（v3.45.2）
+      if (elements.prompt) elements.prompt.placeholder = `正在听说…说完点「停止」结束（最长 ${maxSeconds} 秒，Esc 取消）`;
+      voiceSession.timer = setInterval(() => {
+        if (voiceSession && (Date.now() - voiceSession.startedAt) / 1000 >= voiceSession.maxSeconds) stopVoiceInput(true);
+      }, 250);
+    } catch (error) {
+      // AudioContext/连接器构造失败：麦克风流必须收掉，否则录音灯常亮 + 流泄漏（v3.45.2）
+      try { stream.getTracks().forEach((track) => track.stop()); } catch { /* 忽略 */ }
+      try { audioContext?.close(); } catch { /* 忽略 */ }
+      voiceShowTip(`无法启动录音：${error?.message || error}`);
+    }
+  } finally {
+    voiceStarting = false;
+    if (voiceButton) voiceButton.disabled = false;
   }
-  const audioContext = new (window.AudioContext || window.webkitAudioContext)();
-  const source = audioContext.createMediaStreamSource(stream);
-  const processor = audioContext.createScriptProcessor(4096, 1, 1);
-  const chunks = [];
-  processor.onaudioprocess = (event) => {
-    // 直接持有拷贝，onaudioprocess 的复用缓冲会被内部回收写穿
-    chunks.push(new Float32Array(event.inputBuffer.getChannelData(0)));
-  };
-  source.connect(processor);
-  processor.connect(audioContext.destination); // ScriptProcessor 不连 destination 不出回调
-  const sampleRate = audioContext.sampleRate;
-  const maxSeconds = Math.max(5, Math.min(Number(info.maxSeconds) || 60, 300));
-  voiceSession = { stream, audioContext, source, processor, chunks, sampleRate, startedAt: Date.now(), timer: 0, maxSeconds };
-  voiceButton.classList.add("recording");
-  voiceButton.textContent = "■ 停止";
-  if (elements.prompt) elements.prompt.placeholder = `正在听说…说完点「停止」结束（最长 ${maxSeconds} 秒，Esc 取消）`;
-  voiceSession.timer = setInterval(() => {
-    if (voiceSession && (Date.now() - voiceSession.startedAt) / 1000 >= voiceSession.maxSeconds) stopVoiceInput(true);
-  }, 250);
 }
 
 async function stopVoiceInput(commit) {
@@ -4227,13 +4243,13 @@ async function stopVoiceInput(commit) {
     const result = await window.agentChatPro.voiceTranscribe({ audioBase64, seconds: elapsedSeconds });
     if (!result?.ok) {
       voiceShowTip(result?.reason || "语音识别失败，请稍后再试。");
-      return;
+      return; // 失败提示交给 voiceShowTip（10s 还原）——finally 不得再清 placeholder，否则提示被同 tick 吞掉、用户永远看不到失败原因（v3.45.2）
     }
     voiceInsertText(String(result.text || ""));
+    if (elements.prompt) elements.prompt.placeholder = VOICE_DEFAULT_PLACEHOLDER;
   } catch (error) {
     voiceShowTip(`语音识别失败：${error?.message || error}`);
   } finally {
-    if (elements.prompt) elements.prompt.placeholder = VOICE_DEFAULT_PLACEHOLDER;
     voiceIdle();
   }
 }

@@ -313,7 +313,7 @@ async function runWiringTests() {
 
   await test("B4. 文案订正（随版本演进对齐）：v3.44.2 订正=检测文案与真实行为相符；v3.45.1=auto/单线路动态形态（updateSourceLabel 三态）", () => {
     // v3.45.1 修复态：检测中文案不再固定——auto 态三线路并查 + 单线路态「仅查单线路」，旧双线路/三线路固定串均清零
-    assert.ok(rendererSrc.includes("三线路（官网清单 / GitCode / GitHub）并查"), "auto 态检测文案（v3.45.1 动态形态）");
+    assert.ok(rendererSrc.includes("三线路（Agent chat Pro 官网 / GitCode / GitHub）并查"), "auto 态检测文案（v3.45.1 动态形态）");
     assert.ok(rendererSrc.includes("仅查单线路"), "单线路态检测文案（v3.45.1 动态形态）");
     assert.ok(!rendererSrc.includes("失败自动切线路二"), "renderer 旧文案应清除（v3.44.2 订正语义保持）");
     assert.ok(!rendererSrc.includes("双线路 GitCode / GitHub 并查"), "旧固定双线路文案随 v3.45.1 动态化清零");

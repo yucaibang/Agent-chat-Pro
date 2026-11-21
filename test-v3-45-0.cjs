@@ -242,17 +242,17 @@ async function runWiringTestsReal() {
     assert.ok(rendererSrc.includes('["web", "gitcode", "github"]'), "settings 采集白名单需含 web");
     assert.ok(rendererSrc.includes('["auto", "web", "gitcode", "github"]'), "select 回填白名单需含 web");
     // v3.45.1 修复：检测中文案不再固定三线路——auto 态三线路并查 + 单线路态「仅查单线路」
-    assert.ok(rendererSrc.includes("三线路（官网清单 / GitCode / GitHub）并查"), "auto 态检测文案（三线路并查）");
+    assert.ok(rendererSrc.includes("三线路（Agent chat Pro 官网 / GitCode / GitHub）并查"), "auto 态检测文案（三线路并查）");
     assert.ok(rendererSrc.includes("仅查单线路"), "单线路态检测文案（仅查单线路）");
     assert.ok(rendererSrc.includes("updateSourceLabel"), "v3.45.1 借线来源三态映射（官网线路不再错报线路一）");
     assert.ok(!rendererSrc.includes("双线路 GitCode / GitHub 并查"), "旧双线路文案应清零");
     assert.ok(!rendererSrc.includes("两条线路均未取得"), "旧「两条线路」兜底文案应清零");
   });
 
-  await test("B3. 应用内 index.html：web option + 官网清单说明 + 三线路 hint", () => {
+  await test("B3. 应用内 index.html：web option + 线路三官网定位说明 + 三线路 hint", () => {
     assert.ok(indexSrc.includes('<option value="web">'), "web option 缺失");
     assert.ok(indexSrc.includes("三线路并查"), "三线路说明缺失");
-    assert.ok(indexSrc.includes("官网 = 清单线路"), "官网线路定位说明缺失");
+    assert.ok(indexSrc.includes("线路三 Agent chat Pro 官网 = 清单线路"), "官网线路定位说明缺失");
     assert.ok(!indexSrc.includes("双线路并查"), "旧双线路说明应清零");
   });
 

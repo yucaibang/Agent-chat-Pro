@@ -205,19 +205,19 @@ async function runVmSmokeTests() {
     const smoke = sandbox.__acpSmoke;
     assert.ok(smoke, "求值后应挂 __acpSmoke（v3.45.1 导出对位）");
     assert.ok(typeof smoke.updateSourceLabel === "function", "updateSourceLabel 应为顶层函数");
-    vmEq(smoke.updateSourceLabel("web"), "线路三 官网清单（安装包走附件直链）", "web 态文案");
+    vmEq(smoke.updateSourceLabel("web"), "线路三 Agent chat Pro 官网", "web 态文案");
     vmEq(smoke.updateSourceLabel("gitcode"), "线路一 GitCode", "gitcode 态文案");
     vmEq(smoke.updateSourceLabel("github"), "线路二 GitHub", "github 态文案");
     vmEq(smoke.updateSourceLabel("other"), "来源 other", "未知态兜底（不再落 else 错报）");
   });
 
-  await test("A2. Bug#1 修复态：sourceId=web 借线 → 「发现新版本」行显「线路三 官网清单」，不再错报 GitCode（修复前=两线路三元落 else）", async () => {
+  await test("A2. Bug#1 修复态：sourceId=web 借线 → 「发现新版本」行显「线路三 Agent chat Pro 官网」，不再错报 GitCode（修复前=两线路三元落 else）", async () => {
     methodMocks.checkUpdate = async () => ({ status: "update", currentVersion: "3.45.1", remoteVersion: "v3.46.0", sourceId: "web", asset: { name: "Agent Chat Pro-3.46.0-Setup.exe", url: "http://x/n.exe", size: 10 }, sumsAsset: null, sources: [], attempts: [] });
     await rt.getFake("#about-check-update")._listeners.click();
     const status = rt.getFake("#about-update-status");
     const found = status.children.find((el) => String(el.textContent).includes("发现新版本"));
     assert.ok(found, "update 态应有发现新版本行");
-    assert.ok(String(found.textContent).includes("线路三 官网清单"), "官网借线应显线路三（修复核心断言）");
+    assert.ok(String(found.textContent).includes("线路三 Agent chat Pro 官网"), "官网借线应显线路三 Agent chat Pro 官网（修复核心断言）");
     assert.ok(!String(found.textContent).includes("线路一 GitCode"), "不得错报线路一（修复前形态死断言）");
   });
 
@@ -236,7 +236,7 @@ async function runVmSmokeTests() {
     rt.getFake("#update-channel").value = "auto";
     methodMocks.checkUpdate = async () => new Promise((resolve) => { /* 挂住：读检测中文案后再放行 */ });
     const pending = rt.getFake("#about-check-update")._listeners.click();
-    assert.ok(String(rt.getFake("#about-update-status").textContent).includes("三线路（官网清单 / GitCode / GitHub）并查"), "auto 态应显三线路并查");
+    assert.ok(String(rt.getFake("#about-update-status").textContent).includes("三线路（Agent chat Pro 官网 / GitCode / GitHub）并查"), "auto 态应显三线路并查");
     assert.ok(String(rt.getFake("#about-update-status").textContent).includes("正在检测更新"), "检测中文案在场");
     pending.then(() => {}, () => {});
     methodMocks.checkUpdate = async () => ({ status: "latest", currentVersion: "3.45.1", remoteVersion: "3.45.1", sourceId: null, asset: null, sumsAsset: null, sources: [], attempts: [] });
@@ -248,7 +248,7 @@ async function runVmSmokeTests() {
     const pending2 = rt.getFake("#about-check-update")._listeners.click();
     const hint2 = String(rt.getFake("#about-update-status").textContent);
     assert.ok(hint2.includes("仅查单线路"), "web 单线路态应显「仅查单线路」（不再固定三线路并查）");
-    assert.ok(hint2.includes("官网清单"), "单线路名随所选线路");
+    assert.ok(hint2.includes("Agent chat Pro 官网"), "单线路名随所选线路");
     releaseSecond({ status: "latest", currentVersion: "3.45.1", remoteVersion: "3.45.1", sourceId: null, asset: null, sumsAsset: null, sources: [], attempts: [] });
     await pending2;
     assert.ok(!String(rt.getFake("#about-update-status").textContent).includes("仅查单线路"), "悬等放行后检测中态清理");
@@ -270,7 +270,7 @@ async function runVmSmokeTests() {
 async function runSourceTests() {
   await test("B1. renderer.js 源码锚：updateSourceLabel 三态显式映射在场；两线路三元死形态清零", () => {
     assert.ok(rendererSrc.includes('function updateSourceLabel'), "updateSourceLabel 定义缺失");
-    assert.ok(rendererSrc.includes('if (sourceId === "web") return "线路三 官网清单'), "web 态映射缺失");
+    assert.ok(rendererSrc.includes('if (sourceId === "web") return "线路三 Agent chat Pro 官网'), "web 态映射缺失");
     assert.ok(!rendererSrc.includes('sourceId === "github" ? "线路二 GitHub" : "线路一 GitCode"'), "修复前两线路三元残留（v3.44.0 死形态）");
     assert.ok(!rendererSrc.includes("两条线路均未取得"), "修复前「两条线路」兜底文案残留");
   });
@@ -282,9 +282,14 @@ async function runSourceTests() {
     assert.ok(!rendererSrc.includes("v3.44.0 更新线路：auto（默认）/ gitcode（仅线路一）/ github（仅线路二）"), "收集链三态旧注释残留");
   });
 
-  await test("B3. 版本自洽：package.json=3.45.1 且 README badge 对齐（v3.43.2 D1 教训）", () => {
-    assert.strictEqual(pkg.version, "3.45.1", "package.json version");
-    assert.ok(readme.includes("version-3.45.1-blue.svg"), "README version badge");
+  await test("B3. 版本自洽：package.json ≥ 3.45.1 且 README badge 对齐（v3.43.2 D1 教训；硬钉死在 v3.45.2 升位时碎——改 44-2 同款下限+自洽，滚动过版）", () => {
+    const m = /^(\d+)\.(\d+)\.(\d+)$/.exec(String(pkg.version || ""));
+    assert.ok(m, `package.json version 应为 x.y.z，实为 ${pkg.version}`);
+    const major = m ? Number(m[1]) : 0;
+    const minor = m ? Number(m[2]) : 0;
+    const patch = m ? Number(m[3]) : 0;
+    assert.ok(major > 3 || (major === 3 && (minor > 45 || (minor === 45 && patch >= 1))), `版本应 ≥ 3.45.1，实为 ${pkg.version}`);
+    assert.strictEqual(String(readme.match(/badge\/version-([v\d.]+)-blue\.svg/)?.[1] || ""), pkg.version, `README badge 与 package.json ${pkg.version} 应自洽`);
   });
 }
 

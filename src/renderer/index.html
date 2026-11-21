@@ -520,17 +520,17 @@
           <summary>⬇️ 更新线路（关于页「检测更新」用）</summary>
           <div class="device-control-card">
             <div class="device-control-heading">
-              <div><strong>检测更新走哪条线路</strong><small>官网 = 清单线路（版本发现先行，安装包走附件直链）；GitCode = 线路一（国内直连）；GitHub = 线路二（需代理 / VPN）。</small></div>
+              <div><strong>检测更新走哪条线路</strong><small>线路三 Agent chat Pro 官网 = 清单线路（版本发现先行，安装包走附件直链）；GitCode = 线路一（国内直连）；GitHub = 线路二（需代理 / VPN）。</small></div>
             </div>
             <label>线路选择
               <select id="update-channel" name="updateChannel">
                 <option value="auto">自动（默认：三线路并查，按优先级选择可用线路）</option>
-                <option value="web">仅官网清单（latest.json · 版本发现+校验值先行）</option>
+                <option value="web">仅线路三 Agent chat Pro 官网</option>
                 <option value="gitcode">仅线路一 · GitCode（默认线路 · 国内直连）</option>
                 <option value="github">仅线路二 · GitHub（备用线路 · 代理 / VPN 环境下使用）</option>
               </select>
             </label>
-            <span class="field-hint">「自动」= 三线路并查、按优先级自动选择可用线路（官网清单 → GitCode → GitHub）；全部连不上时，关于页会逐行报出每条线路的失败原因。</span>
+            <span class="field-hint">「自动」= 三线路并查、按优先级自动选择可用线路（Agent chat Pro 官网 → GitCode → GitHub）；全部连不上时，关于页会逐行报出每条线路的失败原因。</span>
           </div>
         </details>
         <p id="settings-status" class="status"></p>
