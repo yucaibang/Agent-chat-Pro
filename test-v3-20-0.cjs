@@ -114,11 +114,13 @@ async function main() {
     assert.ok(!body.includes("renderMarkdown(text)"), "不应再渲染原始全文（plan 块不重复显示）");
   });
 
-  await test("C3. finalizeToolList 过滤 TodoWrite（不计入已执行操作数）", () => {
+  await test("C3. finalizeToolList 账本权威（v3.47.0 折叠带滚更：TodoWrite 不入账不计入统计头）", () => {
     const body = rendererSrc.slice(rendererSrc.indexOf("function finalizeToolList"), rendererSrc.indexOf("function friendlyToolName"));
-    assert.ok(body.includes("const shown = tools.filter((tool) => !isPlanTool(tool))"), "应过滤 plan 工具");
+    assert.ok(body.includes("账本是权威"), "折叠带账本权威（tools 参数只兜底补账）");
+    assert.ok(body.includes("TodoWrite 仍是 plan 面板，不入账不计入"), "plan 工具不入账（不计入统计头）");
     assert.ok(body.includes("if (!shown.length) return;"), "全 plan 时不出摘要条");
-    assert.ok(body.includes("已执行 ${shown.length} 个操作"), "计数用过滤后集合");
+    assert.ok(body.includes("refreshToolSummary(list);"), "摘要由 refreshToolSummary 统一刷新");
+    assert.ok(body.includes('clearToolCards(list);') , "折叠态收尾清明细（9000 卡不压 DOM）");
   });
 
   await test("C4. 面板组件关键件齐备（原位更新 / supersede / 折叠 / activeForm / 徽标）", () => {
@@ -225,7 +227,13 @@ async function runSmokeTests(rendererSrc) {
       replaceChildren(...nodes) { children.length = 0; children.push(...nodes); },
       closest() { return null; }, contains() { return false; }, isConnected: true,
       querySelector(sel) { return getFake(sel || "#plan-smoke-inner"); },
-      querySelectorAll() { return []; },
+      // v3.47.0：真 DOM 语义补齐——在自身 children 里按 className 选择器过滤（.a, .b 多选择器支持），
+      // 返回带有效 remove() 的真数组（clearToolCards 依赖 card.remove() 真删）
+      querySelectorAll(sel) {
+        const wanted = String(sel || "").split(",").filter(Boolean).map((token) => token.trim().replace(/^\./, ""));
+        const found = children.filter((child) => wanted.some((name) => String(child.className).split(/\s+/).includes(name)));
+        return found.map((child) => ({ ...child, remove() { const i = children.indexOf(child); if (i >= 0) children.splice(i, 1); } }));
+      },
       focus() {}, blur() {}, click() {}, select() {}, remove() {},
       scrollIntoView() {}, scrollBy() {}, scrollTo() {}, setSelectionRange() {},
       getBoundingClientRect() { return { top: 0, left: 0, right: 0, bottom: 0, width: 0, height: 0 }; }
@@ -357,7 +365,7 @@ async function runSmokeTests(rendererSrc) {
 
   // 尾部挂钩：跨 vm 取不到 let/const 绑定，借闭包把待直调函数暴露出脚本作用域
   const source = rendererSrc
-    + "\n;globalThis.__acpSmoke = { extractPlanBlocks, planTodosFromTool, renderPlanPanel, renderTool, finalizeToolList, isPlanTool, normalizePlanItemStatus, supersedeOtherPlanPanels };";
+    + "\n;globalThis.__acpSmoke = { extractPlanBlocks, planTodosFromTool, renderPlanPanel, renderTool, finalizeToolList, isPlanTool, normalizePlanItemStatus, supersedeOtherPlanPanels, toggleToolList };";
 
   const hooks = () => sandbox.__acpSmoke;
   const makeItem = () => sandbox.document.createElement("article");
@@ -495,12 +503,22 @@ async function runSmokeTests(rendererSrc) {
     const item2 = makeItem();
     hooks().renderTool(item2, { id: "b1", name: "Bash", status: "running", input: { command: "ls" } });
     assert.strictEqual(item2.__planPanel, undefined, "普通工具不建 plan 面板");
-    // fake 的 querySelector 恒 truthy → renderTool 走「已有 list」分支（真 DOM 语义为新建+prepend）；
-    // 语义等价断言：通用卡（.tool-list 缓存对象）收到 tool-card 子节点
-    assert.ok(getFake(".tool-list").children.some((c) => String(c.className).includes("tool-card")), "通用工具卡路径生效");
+    const list2 = getFake(".tool-list");
+    hooks().finalizeToolList(item2, [{ id: "b1", name: "Bash", status: "running", input: { command: "ls" } }]);
+    // v3.47.0 折叠带滚更：默认折叠态——统计头在、明细卡不建（9000 卡不压 DOM）
+    // （className 字符串被子测试缓存污染，折叠态统一用 classList 判）
+    assert.ok(list2.classList.contains("finalized"), "折叠态（finalized）");
+    assert.ok(list2.children.some((c) => String(c.className).includes("tool-summary")), "折叠态统计头在");
+    assert.ok(!list2.children.some((c) => String(c.className).includes("tool-card")), "折叠态不建明细卡");
+    hooks().toggleToolList(list2);
+    assert.ok(list2.classList.contains("expanded"), "toggle 后展开");
+    assert.ok(list2.children.some((c) => String(c.className).includes("tool-card")), "展开后明细卡在（账本重建）");
+    hooks().toggleToolList(list2);
+    assert.ok(!list2.classList.contains("expanded"), "再 toggle 收起");
+    assert.ok(!list2.children.some((c) => String(c.className).includes("tool-card")), "收起即清明细");
   });
 
-  await test("F10. finalizeToolList 过滤冒烟：TodoWrite 不计入「已执行 N 个操作」", () => {
+  await test("F10. finalizeToolList 统计头冒烟（v3.47.0 折叠带滚更）：TodoWrite 不计入 + 类型计数在", () => {
     const item1 = makeItem();
     hooks().renderTool(item1, { id: "b1", name: "Bash", status: "completed", input: { command: "ls" } });
     hooks().renderTool(item1, { id: "tu1", name: "TodoWrite", status: "completed", input: { todos: [{ content: "计划项", status: "completed" }] } });
@@ -510,11 +528,11 @@ async function runSmokeTests(rendererSrc) {
       { id: "tu1", name: "TodoWrite", status: "completed", input: { todos: [{ content: "计划项", status: "completed" }] } }
     ]);
     const summary = list.children.find((child) => String(child.className).includes("tool-summary"));
-    assert.ok(summary, "摘要条存在");
-    assert.strictEqual(summary.textContent, "✓ 已执行 1 个操作 · 查看详情", "TodoWrite 不计入操作数");
+    assert.ok(summary, "统计头存在");
+    assert.strictEqual(summary.textContent, "✓ 已完成 · 1 条 · 命令 1 · 查看详情", "TodoWrite 不计入 + 类型计数（命令 1）");
     const item2 = makeItem();
     hooks().finalizeToolList(item2, [{ id: "t", name: "TodoWrite", status: "completed", input: { todos: [] } }]);
-    assert.strictEqual(item2.children.length, 0, "全 plan 无 list 时零渲染");
+    assert.strictEqual(item2.children.length, 0, "全 plan 无 list 时零渲染（账本空直接 return）");
   });
 
   await test("F11. supersede 冒烟：新一轮面板出现时旧消息面板收成紧凑态、新面板不受牵连", () => {

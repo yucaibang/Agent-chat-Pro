@@ -48,6 +48,7 @@ const OBFUSCATE_FILES = {
   medium: [
     "main/main.cjs",
     "main/splash.cjs",          // 启动动画（splash loading，v3.46.1）——含品牌动画 HTML 资产，主进程模块必登记（v3.45.4 Bug#2 同型教训）
+    "main/dev-ide.cjs",         // v3.47.0 开发面板 IDE 编辑（目录浏览/原位读写）——新主进程模块必登记
     "main/ssh.cjs",
     "main/settings.cjs",
     "main/local.cjs",

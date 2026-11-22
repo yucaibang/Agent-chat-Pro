@@ -213,6 +213,10 @@
           <span class="dev-title">🔧 开发面板</span>
           <button type="button" class="dev-collapse" id="dev-collapse" title="折叠面板">»</button>
         </div>
+        <div class="dev-tabs" role="tablist">
+          <button type="button" class="dev-tab active" id="dev-tab-activity-toggle" title="AI 工具活动流">📋 活动</button>
+          <button type="button" class="dev-tab" id="dev-tab-files-toggle" title="工作目录文件树（点文件直接编辑）">📁 文件</button>
+        </div>
         <div class="dev-role">
           <div class="dev-role-pills">
             <button type="button" class="dev-pill active" id="dev-role-assist" title="AI 只是帮忙检查漏洞，和回答问题">人主机辅</button>
@@ -221,12 +225,28 @@
           <p class="dev-role-desc" id="dev-role-desc">人主机辅：AI 只是帮忙检查漏洞，和回答问题</p>
         </div>
         <div class="dev-body">
-          <div class="dev-empty" id="dev-empty">欣赏一下干净的工作区</div>
-          <div class="dev-active" id="dev-active" hidden>
-            <p class="dev-active-heading"><span class="dev-pulse" id="dev-active-dot"></span>正在编辑</p>
-            <div class="dev-active-file" id="dev-active-file" title=""></div>
+          <div class="dev-tab-activity" id="dev-tab-activity">
+            <div class="dev-empty" id="dev-empty">欣赏一下干净的工作区</div>
+            <div class="dev-active" id="dev-active" hidden>
+              <p class="dev-active-heading"><span class="dev-pulse" id="dev-active-dot"></span>正在编辑</p>
+              <div class="dev-active-file" id="dev-active-file" title=""></div>
+            </div>
+            <div class="dev-feed" id="dev-feed"></div>
           </div>
-          <div class="dev-feed" id="dev-feed"></div>
+          <!-- v3.47.0 IDE 编辑：工作目录文件树（SSH=远端 / 本机·云端=本机） -->
+          <div class="dev-tab-files" id="dev-tab-files" hidden>
+            <div class="dev-files-head">
+              <span class="dev-files-space" id="dev-files-space" title="">工作目录</span>
+              <button type="button" class="dev-files-btn" id="dev-files-refresh" title="刷新文件树">⟳</button>
+              <button type="button" class="dev-files-btn" id="dev-files-new" title="新建文件">＋</button>
+            </div>
+            <div class="dev-files-newbox" id="dev-files-newbox" hidden>
+              <input type="text" class="dev-files-newinput" id="dev-files-newinput" placeholder="相对路径，如 src/new.js" />
+              <button type="button" class="dev-files-btn" id="dev-files-newconfirm" title="创建">✓</button>
+              <button type="button" class="dev-files-btn" id="dev-files-newcancel" title="取消">✕</button>
+            </div>
+            <div class="dev-tree" id="dev-tree"></div>
+          </div>
         </div>
       </aside>
       <aside class="dev-rail" id="dev-rail" title="展开开发面板">
@@ -1192,5 +1212,24 @@
       </form>
     </dialog>
 
+  <!-- ── v3.47.0 开发面板 IDE 编辑弹窗（VS Code 心智：左侧已开文件页签 + 右侧行号编辑区 + 保存 Ctrl+S） ── -->
+  <dialog id="ide-dialog">
+    <div class="ide-layout">
+      <aside class="ide-tabs" id="ide-tabs" aria-label="已开文件"></aside>
+      <div class="ide-main">
+        <div class="ide-head">
+          <span class="ide-title" id="ide-title">编辑器</span>
+          <span class="ide-meta" id="ide-meta"></span>
+          <button type="button" class="ide-save" id="ide-save" title="保存（Ctrl+S）">💾 保存</button>
+          <button type="button" class="ide-close" id="ide-close" title="关闭编辑器">✕</button>
+        </div>
+        <div class="ide-editor-body">
+          <div class="ide-gutter" id="ide-gutter" aria-hidden="true"></div>
+          <textarea class="ide-editor" id="ide-editor" spellcheck="false" wrap="off"></textarea>
+        </div>
+        <div class="ide-status" id="ide-status">就绪</div>
+      </div>
+    </div>
+  </dialog>
   </body>
 </html>

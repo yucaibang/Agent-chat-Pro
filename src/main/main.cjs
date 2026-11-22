@@ -7,7 +7,10 @@ const os = require("os");
 const { randomUUID } = require("crypto");
 const { spawn, spawnSync } = require("child_process"); // v3.16.1 print:detect 调 reg/tasklist；v3.44.0 updater 静默装
 const { clearModelAdminPassword, getConnection, getSettings, getAtomcodeToken, getSshConnection, getCloudAiConfig, sameSshTarget, saveSettings, setModelAdminPassword, switchSshProfile, trustHostFingerprint, verifyModelAdminPassword, ensureAgentBridgeToken, getAgentBridgeConversationId, setAgentBridgeConversationId, setAgentBridgeConfig } = require("./settings.cjs");
-const { connect, connectWithRetry, downloadRemoteFile, ensureDeviceControlKey, exec, finalizeDeviceControl, getAgentSdkBridgeStatus, getClaudeModelStatus, installAgentSdkBridge, markDeviceControlDisabled, readDeviceControlIpTrack, readRemoteFile, runClaude, uninstallAgentSdkBridge, updateClaudeAutoCompactWindow, updateClaudeModel, updateClaudeModelEntry, verifyConnection } = require("./ssh.cjs");
+const { connect, connectWithRetry, createRemoteFile, downloadRemoteFile, ensureDeviceControlKey, exec, finalizeDeviceControl, getAgentSdkBridgeStatus, getClaudeModelStatus, installAgentSdkBridge, listRemoteDir, markDeviceControlDisabled, readDeviceControlIpTrack, readRemoteFile, runClaude, statRemoteFile, uninstallAgentSdkBridge, updateClaudeAutoCompactWindow, updateClaudeModel, updateClaudeModelEntry, verifyConnection, writeRemoteFile } = require("./ssh.cjs");
+// v3.47.0 开发面板 IDE 编辑：文件树/原位读/原位写/新建（SSH=远端 SFTP；本机/云端=本机 fs）
+const { makeIdeToolkit } = require("./dev-ide.cjs");
+const ideToolkit = makeIdeToolkit({ ssh: { statRemoteFile, listRemoteDir, writeRemoteFile, readRemoteFile, createRemoteFile }, fs: fs.promises });
 const { copyLocalFile, getLocalClaudeModelStatus, readLocalFile, runLocalClaude, updateLocalAutoCompactWindow, updateLocalClaudeModel, updateLocalClaudeModelEntry, validatedWorkingDirectory: validatedLocalWorkdir, verifyLocalConnection } = require("./local.cjs");
 const { runAtomCodeChat, verifyAtomCodeConnection } = require("./daemon-chat.cjs");
 // v3.19.0 F3：SSH 远程适配器（qwen/codex/hermes 三家远端 CLI 跑法）
@@ -51,6 +54,7 @@ const {
   setConversationPinned,
   saveConversationSession,
   saveAssistantDraft,
+  flushNowSync, // v3.47.0 Bug③：退出兜底同步落盘（未响应/强杀前的最后状态必须写下去）
   searchConversations,
   sessionForMode,
   truncateConversationMessages, // v3.15.5 修复2：删除单条及下方所有落库消息
@@ -115,6 +119,18 @@ let agentBridgeInstance = null; // Agent HTTP 桥（阉割版 Bridge Edition 专
 const brandManager = new CloudBrandManager();
 const integrityGuard = new IntegrityGuard();
 const activeRequests = new Map();
+
+// v3.47.0 Bug③：异常征兆主动快照——未响应/渲染进程崩溃时主进程通常还活着，此刻把活跃请求
+// 的流式草稿立即落库（兜住 1s 节流的尾巴；「用户未响应后被强杀，对话丢一截」的最坏段收窄）。
+function flushAllDrafts(reason) {
+  let flushed = 0;
+  for (const [, request] of activeRequests) {
+    if (request && typeof request.flushDraft === "function") {
+      try { request.flushDraft(); flushed++; } catch {}
+    }
+  }
+  if (flushed) writeLog("draft_emergency_flush", { reason, count: flushed });
+}
 const networkManager = new NetworkManager();
 let latencyMonitor = null;
 
@@ -296,9 +312,12 @@ function createWindow() {
       if (splashRef) { try { splashRef.close(); } catch {} }
     });
   } catch {}
-  const publishState = () => window?.webContents.send("window:maximized", window.isMaximized());
+  const publishState = () => publishWindowState();
   window.on("maximize", publishState);
   window.on("unmaximize", publishState);
+  // v3.47.0 Bug②：非 Windows 的全屏进出事件挂点（Windows kiosk 走 handleWindowAction 手动触发）
+  window.on("enter-full-screen", publishState);
+  window.on("leave-full-screen", publishState);
   window.on("focus", () => {
     if (window.isDestroyed()) return;
     window.webContents.focus();
@@ -310,8 +329,15 @@ function createWindow() {
     lastWindowBlurAt = Date.now();
   });
   window.webContents.on("did-finish-load", publishState);
-  window.webContents.on("render-process-gone", (_event, details) => writeLog("renderer_process_gone", details));
-  window.on("unresponsive", () => writeLog("window_unresponsive"));
+  // v3.47.0 Bug③：异常征兆即快照——渲染进程崩溃/窗口未响应时刻立即落库活跃草稿（防强杀丢话）
+  window.webContents.on("render-process-gone", (_event, details) => {
+    writeLog("renderer_process_gone", details);
+    try { flushAllDrafts("render-process-gone"); } catch {}
+  });
+  window.on("unresponsive", () => {
+    writeLog("window_unresponsive");
+    try { flushAllDrafts("unresponsive"); } catch {}
+  });
 }
 
 // ── v3.15.8 关于页彩蛋：跳跳龙小游戏（Chrome dino 同款，主角换成 Claude Code 吉祥物）──
@@ -1069,6 +1095,33 @@ app.whenReady().then(async () => {
   });
   ipcMain.handle("conversations:delete", (_event, id) => deleteConversation(id));
   ipcMain.handle("conversations:search", (_event, query, limit, workspaceType) => searchConversations(query, limit, String(workspaceType || "")));
+  // ── v3.47.0 开发面板 IDE 编辑：文件树/读/写/新建（mode 由主进程连接单例裁定，渲染层不可指定） ──
+  const idePayload = () => {
+    const config = getConnection();
+    const mode = String(config.connectionMode || "");
+    if (!config.workingDirectory) {
+      throw new Error(mode === "ssh" ? "SSH 工作目录未配置，请先在连接设置里填写，开发面板才能读写该机器的文件。" : "工作目录未配置，请先在连接设置里填写，开发面板才能读写文件。");
+    }
+    return { config, mode };
+  };
+  const handleIde = (action) => async (_event, payload) => {
+    const { config, mode } = idePayload();
+    const result = await ideToolkit[action]({
+      config,
+      mode,
+      rel: String(payload?.rel || ""),
+      content: payload?.content ?? "",
+      onUnknownHost: (fingerprint) => trustHost(config, fingerprint),
+      onLog: writeLog
+    });
+    // 空间标签随行：渲染层文件树头部据此显示「SSH 远端 / 本机工作目录」（mode 由主进程裁定）
+    return { ...result, mode };
+  };
+  ipcMain.handle("dev-ide:list", handleIde("list"));
+  ipcMain.handle("dev-ide:read", handleIde("read"));
+  ipcMain.handle("dev-ide:write", handleIde("write"));
+  ipcMain.handle("dev-ide:create", handleIde("create"));
+
   ipcMain.handle("file:preview", async (_event, file) => {
     const mimeType = previewMime(file?.name);
     if (!mimeType) throw new Error("此文件类型不支持图片预览。");
@@ -1391,7 +1444,7 @@ app.whenReady().then(async () => {
           // v3.21.3 修复②：round>0 时上一轮工具已执行完，推跨轮标记事件（首轮不推；不再注入正文分隔线）
           if (round > 0 && cloudCallbacks.emitRoundSeparator) cloudCallbacks.emitRoundSeparator(round);
           const promise = requestOnce(loopMessages);
-          activeRequests.set(id, { promise, cancel: () => { promise.cancel?.(); }, conversationId: input.conversationId });
+          activeRequests.set(id, { promise, cancel: () => { promise.cancel?.(); }, conversationId: input.conversationId, flushDraft: persistDraft });
           const result = await promise;
           // v3.21.3 修复①：本轮请求结束后把最终 usage 计入累计，并推「轮末累计」事件供渲染层以真实账目替换估算
           const roundUsageDelta = accumulateUsage(usageTotal, result.usage);
@@ -1528,7 +1581,7 @@ app.whenReady().then(async () => {
 
       sendWorkStatusSignal(event.sender, "chat:event", normalizeAndObserveStatusEvent({ id, type: "lifecycle", status: "connecting" }, { connectionMode: "cloud" }));
       const cloudPromise = runCloudWithTools();
-      activeRequests.set(id, { promise: cloudPromise, cancel: () => { cloudPromise.cancel?.(); }, conversationId: input.conversationId });
+      activeRequests.set(id, { promise: cloudPromise, cancel: () => { cloudPromise.cancel?.(); }, conversationId: input.conversationId, flushDraft: persistDraft });
       // 信号链：四阶段契约（turn → transport → adapter → runner）+ 灯带投影
       const chatChain = safeSignal("chat-chain-create", () => signalMonitor.createRequest({ requestId: id, conversationId: input.conversationId, connectionMode: "cloud", attachmentCount: attachments.length, hasSession: Boolean(input.sessionId) }));
       safeSignal("chain-open", () => { chatChain.turnReceived(); chatChain.turnToTransport({}); chatChain.transportReceived({}); chatChain.transportToAdapter({}); chatChain.adapterReceived({}); chatChain.adapterToRunner({}); chatChain.runnerReceived({}); chatChain.runnerOperation({ promise: cloudPromise }); });
@@ -1759,7 +1812,8 @@ app.whenReady().then(async () => {
       }
     }
     writeLog("work_status_signal", statusSignalEntry({ requestId: id, direction: "main-received", signal: "request-outcome", disposition: "started", eventType: "lifecycle", eventStatus: "started", transport: config.connectionMode === "local" ? `local-${localEngine}` : "ssh" }));
-    activeRequests.set(id, { operation, conversationId: input.conversationId });
+    // v3.47.0 Bug③：flushDraft 闭包随行——未响应/渲染崩溃时刻可立即把流式草稿落库
+    activeRequests.set(id, { operation, conversationId: input.conversationId, flushDraft: persistDraft });
     // 信号链：四阶段契约（turn → transport → adapter → runner）+ 灯带投影
     const chatChain = safeSignal("chat-chain-create", () => signalMonitor.createRequest({ requestId: id, conversationId: input.conversationId, connectionMode: config.connectionMode, attachmentCount: attachments.length, hasSession: Boolean(activeSessionId) }));
     safeSignal("chain-open", () => { chatChain.turnReceived(); chatChain.turnToTransport({}); chatChain.transportReceived({}); chatChain.transportToAdapter({}); chatChain.adapterReceived({}); chatChain.adapterToRunner({}); chatChain.runnerReceived({}); chatChain.runnerOperation({ promise: operation.promise }); });
@@ -1801,6 +1855,9 @@ app.whenReady().then(async () => {
   // ── 上下文压缩（v3.10.0）──
   // 同一会话防重入：手动点击与自动触发共用
   const compactingSessions = new Set();
+  // v3.47.0 Bug①：promise resolve 时刻可能早于最后一个 compact 事件的到达（bridge 路收尾时序），
+  // resolve 时 lastEvent 未终态则宽限短窗再取——不翻案也不冤枉成功/失败。
+  const COMPACT_SETTLE_MS = 1500;
   // 每个对话最近的上下文占用/模型窗口（conversationId → {tokens, limit}），自动压缩判断依据
   const lastKnownContext = new Map();
 
@@ -1891,11 +1948,25 @@ app.whenReady().then(async () => {
     activeRequests.set(compactId, { operation, conversationId: conversationId || "" });
     try {
       await operation.promise;
-      const success = Boolean(lastEvent && lastEvent.phase === "finished" && lastEvent.success);
+      // v3.47.0 Bug①修复：终态权威收敛——finished 事件（push 线）发出后 CLI 进程收尾可能再抛
+      // （bridge 清理/关流等），promise resolve 时的 lastEvent 才是权威终态；resolve 早于最后一个
+      // compact 事件到达的竞态（bridge 路尤甚）用宽限窗兜住：没等到 finished 就再等一个短窗。
+      if (!(lastEvent && lastEvent.phase === "finished")) {
+        await new Promise((resolve) => setTimeout(resolve, COMPACT_SETTLE_MS));
+      }
+      const finished = lastEvent && lastEvent.phase === "finished";
+      const success = Boolean(finished && lastEvent.success);
       writeLog("context_compact_done", { requestId: compactId, sessionId: sid, success, error: lastEvent?.error || "" });
       return { ok: success, event: lastEvent || null, error: success ? "" : (lastEvent?.error || "压缩未完成，请稍后重试。") };
     } catch (error) {
       writeLog("context_compact_failed", { requestId: compactId, sessionId: sid, error: error.message });
+      // v3.47.0 Bug①修复：压缩已终态（finished 事件已发、渲染层已弹「压缩完成 · 会话已保留」）时，
+      // 进程收尾异常不得翻案——原形态无条件补发 finished:false 事件并 throw，渲染层弹完「完成」
+      // 又被 catch 线覆盖成「未完成/失败」文案（用户实锤的双文案根因）。终态事件是权威，只记日志。
+      if (lastEvent && lastEvent.phase === "finished") {
+        const settled = Boolean(lastEvent.success);
+        return { ok: settled, event: lastEvent, error: settled ? "" : (lastEvent.error || "压缩未完成，请稍后重试。") };
+      }
       sendWorkStatusSignal(sender, "chat:context", { id: compactId, type: "compact", phase: "finished", success: false, error: error.message });
       throw error;
     } finally {
@@ -2307,8 +2378,21 @@ app.whenReady().then(async () => {
   }
 
   // 关闭时保存网络状态和停止授权定期检查
-  app.on("before-quit", () => { persistNetworkState(); brandManager.stopPeriodicCheck(); });
+  app.on("before-quit", () => {
+    persistNetworkState();
+    brandManager.stopPeriodicCheck();
+    // v3.47.0 Bug③：退出兜底——异步落盘循环可能还没轮到本轮改动，退出前同步补写一次
+    try { flushNowSync(); } catch {}
+  });
 });
+
+// v3.47.0 Bug②：全屏态广播（模块级——handleWindowAction 在窗口态切换后也要发，createWindow
+// 内的事件挂点共用这一个出口；kiosk 无专门事件，调用点手动触发）
+function publishWindowState() {
+  if (!window || window.isDestroyed()) return;
+  window.webContents.send("window:maximized", window.isMaximized());
+  window.webContents.send("window:fullscreen", window.isKiosk() || window.isFullScreen());
+}
 
 function handleWindowAction(action) {
   if (!window || window.isDestroyed()) return false;
@@ -2322,7 +2406,18 @@ function handleWindowAction(action) {
   else if (action === "zoom-reset") web.setZoomFactor(1);
   else if (action === "zoom-in") web.setZoomFactor(Math.min(2, web.getZoomFactor() + 0.1));
   else if (action === "zoom-out") web.setZoomFactor(Math.max(0.5, web.getZoomFactor() - 0.1));
-  else if (action === "fullscreen") window.setFullScreen(!window.isFullScreen());
+  else if (action === "fullscreen") {
+    // v3.47.0 Bug②修复：主窗是 frame:false + transparent:true 透明无边框窗体，Windows 不把
+    // setFullScreen 的窗口认作全屏应用——任务栏始终浮在窗下方（用户实锤）。Windows 改走 kiosk
+    // 独占式全屏（真盖任务栏）；其他平台保持 setFullScreen 原语义。退出走同一开关。
+    if (process.platform === "win32") {
+      const entering = !window.isKiosk();
+      window.setKiosk(entering);
+      publishWindowState();
+    } else {
+      window.setFullScreen(!window.isFullScreen());
+    }
+  }
   else if (action === "about") dialog.showMessageBox(window, {
     type: "info",
     title: "关于 Agent Chat Pro",

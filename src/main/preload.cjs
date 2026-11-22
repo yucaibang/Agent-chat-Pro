@@ -204,6 +204,11 @@ contextBridge.exposeInMainWorld("agentChatPro", {
   previewRemoteFile: (file) => ipcRenderer.invoke("file:preview", file),
   saveRemoteFile: (file) => ipcRenderer.invoke("file:save", file),
   openRemoteFile: (file) => ipcRenderer.invoke("file:open", file),
+  // ── v3.47.0 开发面板 IDE 编辑 IPC（mode 由主进程连接单例裁定） ──
+  devIdeList: (payload) => ipcRenderer.invoke("dev-ide:list", payload),
+  devIdeRead: (payload) => ipcRenderer.invoke("dev-ide:read", payload),
+  devIdeWrite: (payload) => ipcRenderer.invoke("dev-ide:write", payload),
+  devIdeCreate: (payload) => ipcRenderer.invoke("dev-ide:create", payload),
   // ── 打印联动（v3.16.1，Agent print 生态闭环）──
   printDetect: () => ipcRenderer.invoke("print:detect"),
   printSend: (file) => ipcRenderer.invoke("print:send", file),
@@ -241,6 +246,7 @@ contextBridge.exposeInMainWorld("agentChatPro", {
   // ── 上下文进度条事件（v3.10.0）：model / usage / compact 三类 ──
   onContextEvent: (handler) => ipcRenderer.on("chat:context", (_event, payload) => handler(payload)),
   onWindowMaximized: (handler) => ipcRenderer.on("window:maximized", (_event, value) => handler(value)),
+  onWindowFullscreen: (handler) => ipcRenderer.on("window:fullscreen", (_event, value) => handler(value)), // v3.47.0 Bug②全屏态（kiosk/全屏任一为真）
   onWindowFocus: (handler) => ipcRenderer.on("window:focus", () => handler()),
   onNetworkStatusChange: (handler) => ipcRenderer.on("network:status-change", (_event, event) => handler(event)),
   onNetworkLatency: (handler) => ipcRenderer.on("network:latency", (_event, summary) => handler(summary)),

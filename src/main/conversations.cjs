@@ -38,33 +38,115 @@ function prepareConversationDirectory(currentDirectory, nextDirectory) {
   );
 }
 
-function read() {
+// ── v3.47.0 Bug③加固：大对话存储不再阻塞主进程 ──
+// 原形态 write() 全量 JSON 同步写（9000 条的大对话一写几十上百毫秒，主进程事件循环被拖死，
+// 窗口「未响应」的直接元凶之一）。改造：内存 cache 成为读权威（第一次从盘读入，此后读写都过
+// cache），落盘改「标脏 + 单飞异步循环」（fs.promises 写 tmp → 滚 .bak → rename 原子替换）。
+// 读改写的串行安全性不变：mutations 仍在主进程单线程同步执行，队列只管把最新 cache dump 到盘。
+let storeCache = null;
+let storeCacheSource = "";
+let storeDirty = false;
+let storeFlushing = false;
+
+function readFromDisk(source) {
   try {
-    const value = JSON.parse(fs.readFileSync(storagePath(), "utf8"));
+    const value = JSON.parse(fs.readFileSync(source, "utf8"));
     return Array.isArray(value) ? value : [];
   } catch (error) {
     if (error.code === "ENOENT") return [];
-    const source = storagePath();
+    // 损坏自愈（v3.47.0 Bug③）：原形态只做 corrupt 备份并清空列表（用户实锤「对话全没了」）；
+    // 现在先备份损坏文件，再尝试从滚动 .bak（上一版成功落盘）自动恢复，恢复不了才落空列表。
     const backup = `${source}.corrupt-${new Date().toISOString().replace(/[:.]/g, "-")}.bak`;
     try {
       fs.renameSync(source, backup);
-      recoveryNotice = `检测到损坏的聊天记录，原文件已备份为 ${path.basename(backup)}。`;
-      return [];
     } catch (backupError) {
       throw new Error("无法读取本地聊天记录，且无法创建恢复备份：" + backupError.message);
     }
+    try {
+      const value = JSON.parse(fs.readFileSync(`${source}.bak`, "utf8"));
+      if (Array.isArray(value)) {
+        recoveryNotice = `检测到聊天记录损坏，已从上次备份自动恢复；损坏文件备份为 ${path.basename(backup)}。`;
+        return value;
+      }
+    } catch {}
+    recoveryNotice = `检测到损坏的聊天记录，原文件已备份为 ${path.basename(backup)}。`;
+    return [];
   }
 }
 
+function read() {
+  const source = storagePath();
+  if (storeCache && storeCacheSource === source) return storeCache;
+  const loaded = readFromDisk(source);
+  storeCache = loaded;
+  storeCacheSource = source;
+  return loaded;
+}
+
 function write(conversations) {
-  fs.mkdirSync(path.dirname(storagePath()), { recursive: true });
-  const temporary = `${storagePath()}.tmp-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  storeCacheSource = storagePath(); // 写对齐当前目录（切目录后旧 cache 自然失效）
+  storeCache = conversations;
+  storeDirty = true;
+  // 落盘走异步单飞循环（不 await——调用点同步语义不变，mutation 都先过内存）
+  void flushStoreLoop();
+  return conversations;
+}
+
+// 单飞落盘循环：dirty 在飞途中被反复置位也只由一个循环消化；每轮取最新 cache dump。
+// 失败不清脏的代价是可能丢「本轮」，下一轮 write 会覆盖修复；失败通过 recoveryNotice 如实提示。
+async function flushStoreLoop() {
+  if (storeFlushing) return;
+  storeFlushing = true;
   try {
-    fs.writeFileSync(temporary, JSON.stringify(conversations, null, 2), { mode: 0o600, flag: "wx" });
-    fs.renameSync(temporary, storagePath());
+    while (storeDirty) {
+      storeDirty = false;
+      const source = storagePath();
+      try {
+        await flushStoreAtomically(source, JSON.stringify(storeCache || [], null, 2));
+      } catch (error) {
+        recoveryNotice = `聊天记录保存失败（${error?.message || error}）：本轮改动可能未写入磁盘，请检查存储目录所在磁盘。`;
+        console.warn("[conversations] flush failed:", error);
+      }
+    }
+  } finally {
+    storeFlushing = false;
+  }
+}
+
+async function flushStoreAtomically(source, payload) {
+  await fs.promises.mkdir(path.dirname(source), { recursive: true });
+  const temporary = `${source}.tmp-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  try {
+    await fs.promises.writeFile(temporary, payload, { mode: 0o600, flag: "wx" });
+    // 上一版成功落盘滚进 .bak（自愈源）：temp 写好、rename 替换之前 copy；首写无主文件则跳过
+    try {
+      await fs.promises.copyFile(source, `${source}.bak`);
+    } catch (error) {
+      if (error.code !== "ENOENT") throw error;
+    }
+    await fs.promises.rename(temporary, source);
   } catch (error) {
-    try { fs.unlinkSync(temporary); } catch {}
+    try { await fs.promises.unlink(temporary); } catch {}
     throw error;
+  }
+}
+
+// 退出兜底（v3.47.0 Bug③）：before-quit 时把脏 cache 同步写盘一次——异步循环可能在 quit 一刻
+// 还没轮到（窗口关得快），退出前的最后状态必须落盘。
+function flushNowSync() {
+  const source = storagePath();
+  if (!storeDirty) return;
+  try {
+    fs.mkdirSync(path.dirname(source), { recursive: true });
+    const temporary = `${source}.tmp-quit-${process.pid}`;
+    fs.writeFileSync(temporary, JSON.stringify(storeCache || [], null, 2), { mode: 0o600, flag: "wx" });
+    try {
+      if (fs.existsSync(source)) fs.copyFileSync(source, `${source}.bak`);
+    } catch {}
+    fs.renameSync(temporary, source);
+    storeDirty = false;
+  } catch (error) {
+    console.warn("[conversations] quit flush failed:", error);
   }
 }
 
@@ -466,6 +548,7 @@ module.exports = {
   getConversation,
   getConversationRecoveryNotice,
   listConversations,
+  readFromDisk, // v3.47.0 异步 flush 后的读磁盘真相口径（守门 1.4 存量兼容口径用）
   archiveDirectory,
   prepareConversationDirectory,
   renameConversation,
@@ -481,5 +564,6 @@ module.exports = {
   agentSessionFor,
   setConversationWorkgroup,
   normalizeWorkspaceType,
-  workspaceTypeOf
+  workspaceTypeOf,
+  flushNowSync
 };

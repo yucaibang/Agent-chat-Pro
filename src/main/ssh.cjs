@@ -1169,6 +1169,79 @@ async function downloadRemoteFile(config, remotePath, localPath, onUnknownHost, 
   return localPath;
 }
 
+// ── v3.47.0 开发面板 IDE 编辑（SFTP 原位读写面）────────────────────────
+// 骨架沿用 readRemoteFile/connectWithRetry 同族：连接→openSftp→操作→finally 双层收尾。
+// 注意：这组函数的路径校验只做「绝对路径+无 \0」基础面（isSafeRemotePath），工作目录内的
+// 逃逸防护由 dev-ide.cjs 的护栏（assertInsidePosix）负责——两层各司其职。
+
+async function statRemoteFile(config, remotePath, onUnknownHost, onLog) {
+  if (!isSafeRemotePath(remotePath)) throw new Error("远程路径无效。");
+  const client = await connectWithRetry(config, onUnknownHost, onLog);
+  try {
+    const sftp = await openSftp(client);
+    try {
+      const stat = await sftpStat(sftp, remotePath);
+      return { size: Number(stat.size || 0), isFile: Boolean(stat.isFile && stat.isFile()), isDirectory: Boolean(stat.isDirectory && stat.isDirectory()) };
+    } finally { closeSftp(sftp); }
+  } finally { client.end(); }
+}
+
+async function writeRemoteFile(config, remotePath, data, onUnknownHost, onLog) {
+  if (!isSafeRemotePath(remotePath)) throw new Error("远程文件路径无效。");
+  const client = await connectWithRetry(config, onUnknownHost, onLog);
+  try {
+    const sftp = await openSftp(client);
+    try {
+      await writeSftp(sftp, remotePath, Buffer.isBuffer(data) ? data : Buffer.from(data));
+    } finally { closeSftp(sftp); }
+  } finally { client.end(); }
+  return Buffer.isBuffer(data) ? data.length : Buffer.byteLength(String(data));
+}
+
+async function createRemoteFile(config, remotePath, onUnknownHost, onLog) {
+  if (!isSafeRemotePath(remotePath)) throw new Error("远程文件路径无效。");
+  const client = await connectWithRetry(config, onUnknownHost, onLog);
+  try {
+    const sftp = await openSftp(client);
+    try {
+      // 存在即拒（wx 语义）：stat 命中=拒绝建空文件；ENOENT=继续；其余 stat 错误如实上报
+      try {
+        await sftpStat(sftp, remotePath);
+        throw new Error("该路径已存在文件或目录。");
+      } catch (error) {
+        if (error?.code !== "ENOENT") throw error;
+      }
+      await writeSftp(sftp, remotePath, Buffer.alloc(0));
+    } finally { closeSftp(sftp); }
+  } finally { client.end(); }
+  return remotePath;
+}
+
+async function listRemoteDir(config, remotePath, onUnknownHost, onLog) {
+  if (!isSafeRemotePath(remotePath)) throw new Error("远程目录路径无效。");
+  const client = await connectWithRetry(config, onUnknownHost, onLog);
+  try {
+    const sftp = await openSftp(client);
+    try {
+      const entries = await new Promise((resolve, reject) => sftp.readdir(remotePath, (error, list) => error ? reject(error) : resolve(list)));
+      const items = [];
+      for (const entry of entries || []) {
+        const name = String(entry?.filename || entry?.name || "");
+        if (!name) continue;
+        let type = "file";
+        let size = 0;
+        const stat = entry.stats;
+        if (stat) {
+          if (typeof stat.isDirectory === "function" && stat.isDirectory()) type = "dir";
+          size = Number(stat.size || 0);
+        }
+        items.push({ name, type, size });
+      }
+      return items;
+    } finally { closeSftp(sftp); }
+  } finally { client.end(); }
+}
+
 function readSftp(sftp, remotePath, _expectedSize) {
   return withTimeout("SFTP 文件读取", TUNABLES.sftpTimeoutMs, () => new Promise((resolve, reject) => {
     const chunks = [];
@@ -1249,4 +1322,4 @@ function cleanError(value) {
   return value.replace(/\x1B\[[0-?]*[ -/]*[@-~]/g, "").trim();
 }
 
-module.exports = { buildAttachmentNote, buildDeviceConnectScript, connect, cleanupRemoteAttachments, connectWithRetry, downloadRemoteFile, ensureDeviceControlKey, exec, finalizeDeviceControl, getAgentSdkBridgeStatus, getClaudeModelStatus, handleToolPayload, installAgentSdkBridge, loadDeviceTemplate, markDeviceControlDisabled, mimeFromPath, readDeviceControlIpTrack, readRemoteFile, runClaude, safeRemoteFileName, shellQuote, uninstallAgentSdkBridge, updateClaudeAutoCompactWindow, updateClaudeModel, updateClaudeModelEntry, verifyConnection, withTimeout, writeSftp };
+module.exports = { buildAttachmentNote, buildDeviceConnectScript, connect, cleanupRemoteAttachments, connectWithRetry, createRemoteFile, downloadRemoteFile, ensureDeviceControlKey, exec, finalizeDeviceControl, getAgentSdkBridgeStatus, getClaudeModelStatus, handleToolPayload, installAgentSdkBridge, listRemoteDir, loadDeviceTemplate, markDeviceControlDisabled, mimeFromPath, readDeviceControlIpTrack, readRemoteFile, runClaude, safeRemoteFileName, shellQuote, statRemoteFile, uninstallAgentSdkBridge, updateClaudeAutoCompactWindow, updateClaudeModel, updateClaudeModelEntry, verifyConnection, withTimeout, writeRemoteFile, writeSftp };

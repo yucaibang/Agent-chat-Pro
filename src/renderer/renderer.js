@@ -82,6 +82,9 @@ let hasProxyPassword = false;  // 是否已保存代理密码
 let contextTokens = 0;      // 当前上下文占用（input + cache 写入 + cache 读取）
 let contextLimit = 0;       // 当前模型上下文窗口上限
 let compactingNow = false;  // 是否正在压缩（禁用压缩按钮）
+// v3.47.0 Bug①压缩终态幂等：同一轮压缩的终态文案最多弹一遍（事件流与按钮 IPC 双通道先到者定案，
+// 后到者静默）——防止「压缩完成」弹完几秒后被 catch 线的「未完成/失败」覆盖。
+let compactPromptSettled = false;
 
 // ── 外观设置状态 ──
 let appearanceSettings = {
@@ -1137,6 +1140,347 @@ function renderDevPanelRole(role) {
   localStorage.setItem("acp-dev-panel-role", norm);
 }
 
+// ══════════ v3.47.0 开发面板 IDE 编辑（文件树 + VS Code 式编辑弹窗） ══════════
+// 面板加「📁 文件」页签=工作目录文件树（SSH=远端 SFTP 原位；本机/云端=本机工作目录——与 AI
+// 执行空间同一目录世界）；点文件弹 <dialog> 编辑器：左侧已开文件页签（脏 ●）+ 右侧行号编辑区
+// + Ctrl+S 保存 + 顶部新建文件。路径安全/模式路由/大小与二进制把关全在主进程 dev-ide.cjs。
+const ideState = {
+  tab: "activity",
+  expanded: new Set([""]),       // 已展开目录（rel；"" = 工作目录根）
+  entries: new Map(),            // rel → [{name, type, size, hidden}]
+  truncated: new Map(),          // rel → 目录超限截断标记
+  tabs: [],                      // 已开文件 [{rel, content, initial, dirty, size, mode, lines}]
+  active: -1
+};
+
+function ideModeLabel(mode) {
+  return mode === "ssh" ? "SSH 远端" : mode === "cloud" ? "云·本机目录" : "本机工作目录";
+}
+
+function ideFormatSize(bytes) {
+  const n = Number(bytes) || 0;
+  if (n >= 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)}M`;
+  if (n >= 1024) return `${(n / 1024).toFixed(1)}K`;
+  return `${n}B`;
+}
+
+async function ideLoadDir(rel) {
+  try {
+    const result = await window.agentChatPro.devIdeList({ rel: String(rel || "") });
+    ideState.entries.set(rel, result.entries || []);
+    ideState.truncated.set(rel, Boolean(result.truncated));
+    const head = document.querySelector("#dev-files-space");
+    if (head) head.textContent = `${ideModeLabel(result.mode)} · ${result.abs || ""}`;
+    if (Number(ideState.truncated.get(rel)) === 0) ideState.truncated.delete(rel);
+    renderDevTree();
+  } catch (error) {
+    renderDevTreeMessage(`文件树加载失败：${error?.message || error}`);
+  }
+}
+
+function renderDevTreeMessage(text) {
+  const tree = document.querySelector("#dev-tree");
+  if (tree) {
+    tree.replaceChildren();
+    const row = document.createElement("div");
+    row.className = "dev-tree-note";
+    row.textContent = text;
+    tree.append(row);
+  }
+}
+
+function ideRelOf(entry, parentRel) {
+  return parentRel ? `${parentRel}/${entry.name}` : entry.name;
+}
+
+function renderDevTree() {
+  const tree = document.querySelector("#dev-tree");
+  if (!tree) return;
+  if (!ideState.entries.has("")) {
+    void ideLoadDir("");
+    return;
+  }
+  tree.replaceChildren();
+  const rows = ideBuildRows("", 0);
+  for (const row of rows) tree.append(row);
+}
+
+function ideBuildRows(rel, depth) {
+  const rows = [];
+  const entries = ideState.entries.get(rel) || [];
+  for (const entry of entries) {
+    const childRel = ideRelOf(entry, rel);
+    const expandedDir = entry.type === "dir" && ideState.expanded.has(childRel);
+    const row = document.createElement("div");
+    row.className = `dev-tree-row${entry.hidden ? " hidden-file" : ""}`;
+    row.style.paddingLeft = `${8 + depth * 14}px`;
+    row.title = childRel;
+    const icon = document.createElement("span");
+    icon.className = "tree-icon";
+    icon.textContent = entry.type === "dir" ? (expandedDir ? "📂" : "📁") : "📄";
+    const labelName = document.createElement("span");
+    labelName.className = "tree-name";
+    labelName.textContent = entry.name;
+    row.append(icon, labelName);
+    if (entry.type === "file" && entry.size) {
+      const size = document.createElement("span");
+      size.className = "size";
+      size.textContent = ideFormatSize(entry.size);
+      row.append(size);
+    }
+    row.addEventListener("click", async () => {
+      if (entry.type === "dir") {
+        if (ideState.expanded.has(childRel)) {
+          ideState.expanded.delete(childRel);
+          renderDevTree();
+        } else {
+          ideState.expanded.add(childRel);
+          if (!ideState.entries.has(childRel)) await ideLoadDir(childRel);
+          else renderDevTree();
+        }
+      } else {
+        void ideOpenFile(childRel);
+      }
+    });
+    rows.push(row);
+    if (entry.type === "dir" && expandedDir) rows.push(...ideBuildRows(childRel, depth + 1));
+  }
+  if (ideState.truncated.get(rel)) {
+    const note = document.createElement("div");
+    note.className = "dev-tree-note";
+    note.textContent = `…仅显示前 ${entries.length} 条（目录超限）`;
+    rows.push(note);
+  }
+  return rows;
+}
+
+// ── 编辑弹窗 ──
+function ideTitleOf(tab) {
+  return `${ideModeLabel(tab?.mode)} · ${tab?.rel || ""}${tab?.dirty ? " ●" : ""}`;
+}
+
+function ideRenderStatus(tab, note) {
+  const lines = String(tab?.content || "").split("\n").length;
+  const bytes = String(tab?.content || "").length;
+  const bar = document.querySelector("#ide-status");
+  if (bar) bar.textContent = `${note ? `${note} · ` : ""}${lines} 行 · ${bytes} 字符${tab?.dirty ? " · 未保存" : " · 已保存"}`;
+}
+
+function ideRenderGutter(content, editor) {
+  const gutter = document.querySelector("#ide-gutter");
+  if (!gutter) return;
+  const lines = Math.max(1, Math.min(String(content || "").split("\n").length, 99999));
+  const seq = [];
+  for (let i = 1; i <= lines; i++) seq.push(String(i));
+  gutter.textContent = seq.join("\n");
+  if (editor) gutter.scrollTop = editor.scrollTop;
+}
+
+function ideRenderTabs() {
+  const side = document.querySelector("#ide-tabs");
+  if (!side) return;
+  side.replaceChildren();
+  ideState.tabs.forEach((tab, index) => {
+    const row = document.createElement("div");
+    row.className = `ide-tab-row${index === ideState.active ? " active" : ""}`;
+    row.title = tab.rel;
+    row.addEventListener("click", () => ideActivate(index));
+    const name = document.createElement("span");
+    name.className = "ide-tab-name";
+    name.textContent = tab.rel;
+    row.append(name);
+    if (tab.dirty) {
+      const dot = document.createElement("span");
+      dot.className = "ide-tab-dirty";
+      dot.textContent = "●";
+      row.append(dot);
+    }
+    const close = document.createElement("button");
+    close.type = "button";
+    close.className = "ide-tab-close";
+    close.textContent = "✕";
+    close.title = "关闭此文件";
+    close.addEventListener("click", (event) => {
+      event.stopPropagation();
+      ideCloseTab(index);
+    });
+    row.append(close);
+    side.append(row);
+  });
+}
+
+function ideActivate(index) {
+  if (index < 0 || index >= ideState.tabs.length) return;
+  ideState.active = index;
+  const tab = ideState.tabs[index];
+  const editor = document.querySelector("#ide-editor");
+  editor.value = tab.content;
+  editor.scrollTop = 0;
+  ideRenderGutter(tab.content, editor);
+  const title = document.querySelector("#ide-title");
+  if (title) title.textContent = ideTitleOf(tab);
+  const meta = document.querySelector("#ide-meta");
+  if (meta) meta.textContent = `${String(tab.content).split("\n").length} 行`;
+  ideRenderTabs();
+  ideRenderStatus(tab, "");
+}
+
+async function ideOpenFile(rel) {
+  const dialog = document.querySelector("#ide-dialog");
+  const existing = ideState.tabs.findIndex((tab) => tab.rel === rel);
+  if (existing > -1) {
+    ideActivate(existing);
+    if (dialog && !dialog.open) dialog.showModal();
+    return;
+  }
+  try {
+    const result = await window.agentChatPro.devIdeRead({ rel });
+    const content = String(result?.content ?? "");
+    ideState.tabs.push({ rel, content, initial: content, dirty: false, size: Number(result?.size || 0), mode: result?.mode || "", lines: content.split("\n").length });
+    ideActivate(ideState.tabs.length - 1);
+    if (dialog && !dialog.open) dialog.showModal();
+  } catch (error) {
+    setConnection(`打开文件失败：${error?.message || error}`, "error");
+  }
+}
+
+async function ideSave() {
+  const tab = ideState.tabs[ideState.active];
+  if (!tab) return;
+  try {
+    const result = await window.agentChatPro.devIdeWrite({ rel: tab.rel, content: tab.content });
+    tab.initial = tab.content;
+    tab.dirty = false;
+    tab.size = Number(result?.size ?? tab.content.length);
+    const title = document.querySelector("#ide-title");
+    if (title) title.textContent = ideTitleOf(tab);
+    ideRenderStatus(tab, `已保存 · ${tab.size} 字节`);
+    ideRenderTabs();
+  } catch (error) {
+    ideRenderStatus(tab, `保存失败：${error?.message || error}`);
+  }
+}
+
+function ideCloseTab(index) {
+  const tab = ideState.tabs[index];
+  if (!tab) return;
+  if (tab.dirty && !window.confirm(`「${tab.rel}」有未保存的修改，关闭将放弃这些修改。确定关闭？`)) return;
+  ideState.tabs.splice(index, 1);
+  const next = Math.min(index, ideState.tabs.length - 1);
+  if (next > -1) {
+    ideActivate(next);
+  } else {
+    ideState.active = -1;
+    ideRenderTabs();
+    const dialog = document.querySelector("#ide-dialog");
+    if (dialog?.open) dialog.close();
+  }
+}
+
+function ideCloseDialog() {
+  const dirty = ideState.tabs.some((tab) => tab.dirty);
+  if (dirty && !window.confirm("有未保存的修改（修改会留在编辑器页签里，下次打开继续），确认离开？")) return;
+  const dialog = document.querySelector("#ide-dialog");
+  if (dialog?.open) dialog.close();
+}
+
+// ── 面板页签切换 + 树操作接线（一次性挂点） ──
+function ideSwitchPanelTab(which) {
+  ideState.tab = which;
+  document.querySelector("#dev-tab-activity-toggle")?.classList.toggle("active", which === "activity");
+  document.querySelector("#dev-tab-files-toggle")?.classList.toggle("active", which === "files");
+  document.querySelector("#dev-tab-activity")?.toggleAttribute("hidden", which !== "activity");
+  document.querySelector("#dev-tab-files")?.toggleAttribute("hidden", which !== "files");
+  if (which === "files" && !ideState.entries.has("")) void ideLoadDir("");
+}
+
+async function ideCreateFile() {
+  const input = document.querySelector("#dev-files-newinput");
+  const rel = String(input?.value || "").trim().replace(/\\/g, "/");
+  if (!rel) {
+    renderDevTreeMessage("请输入文件路径（如 src/new.js）");
+    return;
+  }
+  if (rel.startsWith("/")) {
+    renderDevTreeMessage("请输入工作目录内的相对路径");
+    return;
+  }
+  try {
+    await window.agentChatPro.devIdeCreate({ rel });
+    const parent = rel.includes("/") ? rel.slice(0, rel.lastIndexOf("/")) : "";
+    ideState.expanded.add(parent);
+    try {
+      const result = await window.agentChatPro.devIdeList({ rel: parent });
+      ideState.entries.set(parent, result.entries || []);
+      ideState.truncated.set(parent, Boolean(result.truncated));
+      if (!result.truncated) ideState.truncated.delete(parent);
+    } catch { /* 源层刷新失败不挡打开 */ }
+    renderDevTree();
+    document.querySelector("#dev-files-newbox").hidden = true;
+    if (input) input.value = "";
+    void ideOpenFile(rel);
+  } catch (error) {
+    renderDevTreeMessage(`新建失败：${error?.message || error}`);
+  }
+}
+
+document.querySelector("#dev-tab-activity-toggle")?.addEventListener("click", () => ideSwitchPanelTab("activity"));
+document.querySelector("#dev-tab-files-toggle")?.addEventListener("click", () => ideSwitchPanelTab("files"));
+document.querySelector("#dev-files-refresh")?.addEventListener("click", async () => {
+  ideState.entries.clear();
+  ideState.truncated.clear();
+  ideState.expanded = new Set([""]);
+  await ideLoadDir("");
+});
+document.querySelector("#dev-files-new")?.addEventListener("click", () => {
+  const box = document.querySelector("#dev-files-newbox");
+  if (box) box.hidden = !box.hidden;
+  document.querySelector("#dev-files-newinput")?.focus();
+});
+document.querySelector("#dev-files-newcancel")?.addEventListener("click", () => {
+  const box = document.querySelector("#dev-files-newbox");
+  const input = document.querySelector("#dev-files-newinput");
+  if (box) box.hidden = true;
+  if (input) input.value = "";
+});
+document.querySelector("#dev-files-newconfirm")?.addEventListener("click", () => void ideCreateFile());
+document.querySelector("#dev-files-newinput")?.addEventListener("keydown", (event) => {
+  if (event.key === "Enter") void ideCreateFile();
+});
+document.querySelector("#ide-save")?.addEventListener("click", () => void ideSave());
+document.querySelector("#ide-close")?.addEventListener("click", () => ideCloseDialog());
+document.querySelector("#ide-dialog")?.addEventListener("cancel", (event) => {
+  event.preventDefault();
+  ideCloseDialog();
+});
+const ideEditorEl = document.querySelector("#ide-editor");
+ideEditorEl?.addEventListener("scroll", () => {
+  const gutter = document.querySelector("#ide-gutter");
+  if (gutter) gutter.scrollTop = ideEditorEl.scrollTop;
+});
+ideEditorEl?.addEventListener("input", () => {
+  const tab = ideState.tabs[ideState.active];
+  if (!tab) return;
+  tab.content = ideEditorEl.value;
+  tab.dirty = tab.content !== tab.initial;
+  const newLines = String(tab.content).split("\n").length;
+  if (newLines !== tab.lines) {
+    tab.lines = newLines;
+    ideRenderGutter(tab.content, ideEditorEl);
+    const meta = document.querySelector("#ide-meta");
+    if (meta) meta.textContent = `${newLines} 行`;
+  }
+  const title = document.querySelector("#ide-title");
+  if (title) title.textContent = ideTitleOf(tab);
+  ideRenderStatus(tab, "");
+});
+ideEditorEl?.addEventListener("keydown", (event) => {
+  if ((event.ctrlKey || event.metaKey) && !event.shiftKey && !event.altKey && String(event.key).toLowerCase() === "s") {
+    event.preventDefault();
+    void ideSave();
+  }
+});
+
 /** 选择题卡片构建（云端 ipc 应答 / SSH 近似回发两个通道共用骨架；disabled=历史定格） */
 function buildAskUserCard(payload, disabled, onPick) {
   const card = document.createElement("div");
@@ -1238,33 +1582,121 @@ function isAskUserTool(tool) {
   return String(tool?.name || "") === "AskUserQuestion";
 }
 
-function renderTool(item, tool) {
-  // v3.20.0 F5：TodoWrite 走 Agent plan 面板特化渲染（结构化路=SSH 远程+本机 claude 引擎），
-  // 不进通用工具卡列表、不计入 finalizeToolList 的「已执行 N 个操作」
-  if (isPlanTool(tool)) {
-    renderPlanPanel(item, planTodosFromTool(tool), true);
-    return;
+// ══════════ v3.47.0 折叠带：工具流执行中收纳 + 类型统计 ══════════
+// 用户痛点：AI 连跑成千上万条命令时消息流无限拉长，切回来要滑半天才能看全。
+// 改造：每个回复气泡的工具列表**执行中即折叠**（复用 finalized:not(.expanded) 藏明细），
+// 折叠头实时统计「已执行 N 条 + 类型计数（只读/写入/删除/命令/网络/其它）+ 正在执行哪一条」，
+// 点开才建明细卡；明细按到达序只建最近 TOOL_DETAIL_MAX 张，更早的省略（计数仍在统计里）。
+// 账本（per 气泡 WeakMap）是权威：卡片 DOM 只是账本的一个可丢弃视图（收起即清、展开重建）。
+const TOOL_DETAIL_MAX = 200;
+const TOOL_KIND_ORDER = ["read", "write", "delete", "cmd", "net", "other"];
+const TOOL_KIND_LABELS = { read: "只读", write: "写入", delete: "删除", cmd: "命令", net: "网络", other: "其它" };
+
+function toolKindOf(name) {
+  const n = String(name || "").trim().toLowerCase();
+  if (DEV_PANEL_READ_TOOLS.has(n)) return "read";
+  if (DEV_PANEL_WRITE_TOOLS.has(n)) return "write";
+  if (n.includes("delete") || n.includes("remove")) return "delete";
+  if (["bash", "run_command", "execute_command", "exec", "shell", "terminal"].includes(n)) return "cmd";
+  if (["webfetch", "websearch", "web_fetch", "web_search", "fetch", "network_fetch"].includes(n)) return "net";
+  return "other";
+}
+
+const toolLedgers = new WeakMap();
+
+function getToolLedger(list, create = false) {
+  let ledger = toolLedgers.get(list);
+  if (!ledger && create) {
+    ledger = { events: new Map(), summary: null };
+    toolLedgers.set(list, ledger);
   }
-  // v3.24.0 功能B：AskUserQuestion 工具 → 气泡内嵌选择题卡片（不进通用工具牌列表）
-  if (isAskUserTool(tool)) {
-    renderSshAskUserCard(item, tool);
-    return;
+  return ledger || null;
+}
+
+function listToolEvents(list) {
+  const ledger = getToolLedger(list);
+  if (!ledger) return [];
+  return [...ledger.events.values()].filter((tool) => !isPlanTool(tool));
+}
+
+function recentToolIds(list) {
+  return new Set(listToolEvents(list).slice(-TOOL_DETAIL_MAX).map((tool) => String(tool?.id || "")));
+}
+
+function clearToolCards(list) {
+  list.querySelectorAll(".tool-card, .tool-omitted").forEach((card) => card.remove());
+}
+
+function buildOutstandingCards(list) {
+  clearToolCards(list);
+  const events = listToolEvents(list);
+  const overflow = Math.max(0, events.length - TOOL_DETAIL_MAX);
+  if (overflow > 0) {
+    const omitted = document.createElement("div");
+    omitted.className = "tool-omitted";
+    omitted.textContent = `… 更早 ${overflow} 条已省略（计数仍包含在上方统计中）`;
+    list.append(omitted);
   }
-  let list = item.querySelector(".tool-list");
-  if (!list) {
-    list = document.createElement("div");
-    list.className = "tool-list";
-    item.prepend(list);
+  for (const tool of events.slice(-TOOL_DETAIL_MAX)) upsertToolCard(list, tool);
+}
+
+/** 折叠头实时统计：执行中/已完成 + 条数 + 类型计数（+ 需授权警示 + 正在执行的一条） */
+function refreshToolSummary(list) {
+  const shown = listToolEvents(list);
+  if (!shown.length) return;
+  const ledgers = { };
+  for (const tool of shown) {
+    const kind = toolKindOf(tool?.name);
+    ledgers[kind] = (ledgers[kind] || 0) + 1;
   }
-  let card = [...list.children].find((child) => child.dataset.toolId === tool.id);
+  const running = [...shown].reverse().find((tool) => String(tool?.status || "running") === "running");
+  const denied = shown.filter((tool) => normalizedToolStatus(tool) === "denied").length;
+  const expanded = list.classList.contains("expanded");
+  const parts = [];
+  if (denied) parts.push(`⚠ ${denied} 项需授权`);
+  parts.push(running ? `⚙ 执行中 · ${shown.length} 条` : `✓ 已完成 · ${shown.length} 条`);
+  for (const key of TOOL_KIND_ORDER) {
+    if (ledgers[key]) parts.push(`${TOOL_KIND_LABELS[key]} ${ledgers[key]}`);
+  }
+  parts.push(expanded ? "收起详情" : "查看详情");
+  const ledger = getToolLedger(list, true);
+  if (ledger.summary) ledger.summary.remove();
+  const summary = document.createElement("button");
+  summary.type = "button";
+  summary.className = `tool-summary${denied ? " needs-permission" : ""}`;
+  summary.textContent = parts.join(" · ");
+  summary.title = "点击展开/收起命令明细";
+  summary.addEventListener("click", () => toggleToolList(list));
+  // 正在执行的一条（实时滚动）：统计头下方浮现最新工具名+目标，用户扫一眼即知 AI 此刻在干嘛
+  if (running) {
+    const live = document.createElement("span");
+    live.className = "tool-live-line";
+    const target = toolDisplayDetail(running);
+    live.textContent = `● 正在执行：${friendlyToolName(running.name || "")}${target ? ` · ${String(target).slice(0, 70)}` : ""}`;
+    summary.append(live);
+  }
+  list.prepend(summary);
+  ledger.summary = summary;
+}
+
+function toggleToolList(list) {
+  const expanded = list.classList.toggle("expanded");
+  if (expanded) buildOutstandingCards(list);
+  else clearToolCards(list); // 收起即清明细 DOM——账本是权威，重建零成本，9000 卡不再压 DOM
+  refreshToolSummary(list);
+}
+
+function upsertToolCard(list, tool) {
+  const labels = { running: "执行中", completed: "已完成", failed: "执行未成功", denied: "未获得权限" };
+  const status = normalizedToolStatus(tool);
+  const id = String(tool.id || "");
+  let card = [...list.children].find((child) => child.classList.contains("tool-card") && child.dataset.toolId === id);
   if (!card) {
     card = document.createElement("div");
     card.className = "tool-card";
-    card.dataset.toolId = tool.id;
+    card.dataset.toolId = id;
     list.append(card);
   }
-  const labels = { running: "执行中", completed: "已完成", failed: "执行未成功", denied: "未获得权限" };
-  const status = normalizedToolStatus(tool);
   card.className = `tool-card ${status}`;
   card.replaceChildren();
   const icon = document.createElement("span");
@@ -1301,6 +1733,34 @@ function renderTool(item, tool) {
       }
     });
     card.append(action);
+  }
+}
+
+function renderTool(item, tool) {
+  // v3.20.0 F5：TodoWrite 走 Agent plan 面板特化渲染（结构化路=SSH 远程+本机 claude 引擎），
+  // 不进通用工具卡列表、不计入折叠带统计
+  if (isPlanTool(tool)) {
+    renderPlanPanel(item, planTodosFromTool(tool), true);
+    return;
+  }
+  // v3.24.0 功能B：AskUserQuestion 工具 → 气泡内嵌选择题卡片（不进通用工具牌列表）
+  if (isAskUserTool(tool)) {
+    renderSshAskUserCard(item, tool);
+    return;
+  }
+  let list = item.querySelector(".tool-list");
+  if (!list) {
+    list = document.createElement("div");
+    // v3.47.0 折叠带：列表从首张卡起就是折叠态（finalized 不展开即藏明细），统计头实时跟账
+    list.className = "tool-list finalized";
+    item.prepend(list);
+  }
+  const ledger = getToolLedger(list, true);
+  ledger.events.set(String(tool.id || ""), tool);
+  refreshToolSummary(list);
+  // 折叠态只记账（不建卡）；用户已点开时：最近 TOOL_DETAIL_MAX 內的卡实时建/更新
+  if (list.classList.contains("expanded") && recentToolIds(list).has(String(tool.id || ""))) {
+    upsertToolCard(list, tool);
   }
 }
 
@@ -1491,23 +1951,19 @@ function refreshDeniedToolActions() {
 
 function finalizeToolList(item, tools) {
   const list = item.querySelector(".tool-list");
-  if (!list || !tools.length) return;
-  list.querySelector(".tool-summary")?.remove();
-  // v3.20.0 F5：TodoWrite 是 Agent plan 面板（自有组件），不计入「已执行 N 个操作」
-  const shown = tools.filter((tool) => !isPlanTool(tool));
+  if (!list) return;
+  const ledger = getToolLedger(list, true);
+  // v3.47.0 折叠带：账本是权威——tools 参数兜底补账（历史恢复/流式终结两路调用逐条
+  // renderTool 已记齐，此处只兜漏网）。TodoWrite 仍是 plan 面板，不入账不计入。
+  for (const tool of tools || []) {
+    const key = String(tool?.id || "");
+    if (key && !ledger.events.has(key)) ledger.events.set(key, tool);
+  }
+  const shown = listToolEvents(list);
   if (!shown.length) return;
-  const denied = shown.filter((tool) => normalizedToolStatus(tool) === "denied").length;
-  const summary = document.createElement("button");
-  summary.type = "button";
-  summary.className = `tool-summary${denied ? " needs-permission" : ""}`;
-  const label = () => denied ? `⚠ ${denied} 项操作需要权限` : `✓ 已执行 ${shown.length} 个操作`;
-  summary.textContent = `${label()} · 查看详情`;
-  summary.addEventListener("click", () => {
-    const expanded = list.classList.toggle("expanded");
-    summary.textContent = `${label()} · ${expanded ? "收起详情" : "查看详情"}`;
-  });
   list.classList.add("finalized");
-  list.prepend(summary);
+  if (!list.classList.contains("expanded")) clearToolCards(list);
+  refreshToolSummary(list);
 }
 
 function friendlyToolName(name) {
@@ -3759,14 +4215,23 @@ document.querySelector("#context-compact")?.addEventListener("click", async () =
   button.textContent = "✂ 压缩中…";
   try {
     const result = await window.agentChatPro.compactContext({ sessionId, conversationId, instruction: "" });
+    // v3.47.0 Bug①修复：同一轮压缩的终态文案最多弹一遍——先到者定案。
+    // 事件流（push 线）天然更早，若已弹过终态（compactPromptSettled=true）此处一律静默，
+    // 不再由 IPC 返回值弹第二遍（原形态弹完「完成」又被「未完成」覆盖的双文案根因之一）。
+    const resultFinished = result?.event && result.event.phase === "finished" ? result.event : null;
     if (result?.ok) {
-      const post = result.event?.postTokens ? `，当前 ${formatCompactNumber(result.event.postTokens)} tokens` : "";
-      setConnection(`上下文压缩完成${post} · 会话已保留`, "connected");
-    } else {
+      if (!compactPromptSettled) {
+        const post = result.event?.postTokens ? `，当前 ${formatCompactNumber(result.event.postTokens)} tokens` : "";
+        setConnection(`上下文压缩完成${post} · 会话已保留`, "connected");
+      }
+    } else if (resultFinished && resultFinished.success) {
+      // 主进程判定失败但 finished 成功事件已到（收尾时序）：以终态事件为准，不弹失败文案。
+      if (!compactPromptSettled) setConnection("上下文压缩完成 · 会话已保留", "connected");
+    } else if (!compactPromptSettled) {
       setConnection(`上下文压缩未完成${result?.error ? `：${result.error}` : ""}，请稍后重试。`, "error");
     }
   } catch (error) {
-    setConnection(`上下文压缩失败：${error?.message || error}`, "error");
+    if (!compactPromptSettled) setConnection(`上下文压缩失败：${error?.message || error}`, "error");
   } finally {
     button.disabled = false;
     button.classList.remove("compacting");
@@ -5134,6 +5599,7 @@ function handleCompactEvent(event) {
   const button = document.querySelector("#context-compact");
   if (event.phase === "started") {
     compactingNow = true;
+    compactPromptSettled = false; // v3.47.0 Bug①：新一轮压缩开始，终态幂等挡重置
     if (button) {
       button.disabled = true;
       button.classList.add("compacting");
@@ -5145,12 +5611,17 @@ function handleCompactEvent(event) {
     if (Number(event.postTokens) > 0) contextTokens = Number(event.postTokens);
     renderContextBar();
   } else if (event.phase === "finished") {
+    // v3.47.0 Bug①：终态幂等——同一轮压缩首条 finished 定案，后续翻案事件（收尾 catch 线等）
+    // 一律不覆盖已弹文案；按钮态照常复位。
+    const settled = compactPromptSettled;
+    compactPromptSettled = true;
     compactingNow = false;
     if (button) {
       button.disabled = false;
       button.classList.remove("compacting");
       button.textContent = "✂ 压缩";
     }
+    if (settled) return; // 已有终态文案在牌上——重复 finished/翻案事件不得覆盖
     if (event.success === true) {
       const post = event.postTokens ? `，当前 ${formatCompactNumber(event.postTokens)} tokens` : "";
       setConnection(`上下文压缩完成${post} · 会话已保留`, "connected");
@@ -5261,7 +5732,18 @@ function setMaximized(maximized) {
   button.setAttribute("aria-label", maximized ? "还原" : "最大化");
 }
 
+// v3.47.0 Bug②全屏态同步：body 挂 fullscreen 标记（视觉装饰可用）+ 查看菜单里的全屏按钮文字随态切换
+function setFullscreen(on) {
+  document.body.classList.toggle("fullscreen", Boolean(on));
+  const button = document.querySelector('button[data-window-action="fullscreen"]');
+  if (button) {
+    button.textContent = on ? "退出全屏" : "全屏";
+    button.title = on ? "退出全屏（返回窗口模式）" : "切换到全屏";
+  }
+}
+
 window.agentChatPro.onWindowMaximized(setMaximized);
+window.agentChatPro.onWindowFullscreen?.(setFullscreen);
 window.agentChatPro.onWindowFocus(() => {
   const prompt = document.getElementById("prompt");
   if (prompt && !window.getSelection().toString()) prompt.focus();

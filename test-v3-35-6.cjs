@@ -68,9 +68,10 @@ async function runConversationTests() {
     assert.strictEqual(conversations.workspaceTypeOf(conv), "single", "缺省工作区=single");
   });
 
-  await test("1.2 createConversation('team') 落 workspaceType=team 并持久化", () => {
+  await test("1.2 createConversation('team') 落 workspaceType=team 并持久化（v3.47.0 滚更：异步单飞 flush 后以 flushNowSync 落盘兑现）", () => {
     const conv = conversations.createConversation("team");
     assert.strictEqual(conversations.workspaceTypeOf(conv), "team");
+    conversations.flushNowSync(); // v3.47.0：write 只标脏异步单飞，读盘断言走退出兜底同径
     const raw = JSON.parse(fs.readFileSync(storageFile, "utf8"));
     const found = raw.find((item) => item.id === conv.id);
     assert.strictEqual(found.workspaceType, "team", "落库文件带 workspaceType 字段");
@@ -82,13 +83,15 @@ async function runConversationTests() {
     assert.strictEqual(conversations.createConversation("single").workspaceType, "single");
   });
 
-  await test("1.4 存量兼容：无 workspaceType 字段的旧对话视为 single", () => {
+  await test("1.4 存量兼容：无 workspaceType 字段的旧对话视为 single（v3.47.0 滚更：读盘真相口径 readFromDisk）", () => {
     const legacy = { id: "legacy-1", title: "旧对话", createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), pinned: false, messages: [] };
     fs.writeFileSync(storageFile, JSON.stringify([legacy]), "utf8");
     assert.strictEqual(conversations.workspaceTypeOf(null), "single", "null 容错");
-    const listed = conversations.listConversations("single");
-    assert.ok(listed.some((conv) => conv.id === "legacy-1"), "single 列表含旧对话");
-    assert.strictEqual(conversations.listConversations("team").find((conv) => conv.id === "legacy-1"), undefined, "team 列表不含旧对话");
+    // v3.47.0：write 走异步单飞后 read() cache 优先——读盘兼容面直接对 readFromDisk 真相断言
+    const loaded = conversations.readFromDisk(storageFile);
+    assert.ok(Array.isArray(loaded) && loaded.some((conv) => conv.id === "legacy-1"), "读盘含旧对话");
+    assert.strictEqual(conversations.workspaceTypeOf(loaded.find((conv) => conv.id === "legacy-1")), "single", "旧对话读出视为 single");
+    assert.strictEqual(conversations.workspaceTypeOf({ id: "t", workspaceType: "team" }), "team", "显式 team 标不受兼容层改写");
   });
 
   await test("1.5 listConversations 按工作区物理过滤（A 模式对话绝不进 B 模式列表）", () => {
@@ -495,6 +498,7 @@ async function runAgentPoolTests() {
     assert.strictEqual(conversations.agentSessionFor(fetched, "ap-1"), "sess-agent-1", "会话按 agentId 隔离");
     assert.strictEqual(conversations.agentSessionFor(fetched, "ap-2"), "sess-agent-2");
     conversations.addAssistantMessage(conv.id, "@B 你看下", "", [], [], "req-9", "cloud", undefined, undefined, undefined, undefined, undefined, "", { agentId: "ap-1", name: "Astra" });
+    conversations.flushNowSync(); // v3.47.0：异步单飞 flush 后读盘断言走兜底同径
     const withAgent = JSON.parse(fs.readFileSync(storageFile, "utf8")).find((item) => item.id === conv.id).messages.find((msg) => msg.role === "assistant" && msg.agent?.name === "Astra");
     assert.strictEqual(withAgent.agent.name, "Astra", "群消息名牌落库（渲染层气泡可直接归因）");
     conversations.clearConversationSession(conv.id);

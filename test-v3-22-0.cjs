@@ -203,7 +203,8 @@ async function runWiringTests() {
   });
 
   await test("B2 main.cjs：SSH 通道接线（connect/exec require + getSshConnection + 指纹未信任拒问）", () => {
-    assert.ok(mainSrc.includes("connect, connectWithRetry, downloadRemoteFile"), "ssh.cjs connect 未 require");
+    assert.ok(mainSrc.includes("connect, connectWithRetry, createRemoteFile, downloadRemoteFile"), "ssh.cjs connect 未 require"); // v3.47.0 滚更：解构插位 createRemoteFile
+    assert.ok(mainSrc.includes("statRemoteFile") && mainSrc.includes("writeRemoteFile") && mainSrc.includes("listRemoteDir"), "IDE 面四函数应随解构在册（v3.47.0）");
     assert.ok(mainSrc.includes("exec, finalizeDeviceControl"), "exec 未 require");
     assert.ok(mainSrc.includes("sandboxSshClient = await connect("), "沙箱 SSH 建连缺失");
     assert.ok(mainSrc.includes("getSshConnection()"), "SSH 凭证来源缺失");
