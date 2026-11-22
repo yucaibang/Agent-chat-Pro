@@ -87,6 +87,8 @@ const {
 const { journalEntry: statusJournalEntry, signalEntry: statusSignalEntry, toolLifecycleEntry: statusToolLifecycleEntry } = require("./modules/status/status-audit-journal.cjs");
 const { readModelSettings, replaceModelSettings } = require("./model-config.cjs");
 const { CloudBrandManager } = require("./cloud-brand.cjs");
+// v3.46.1 启动动画（splash loading）：覆盖式过渡画面，主窗 did-finish-load 时淡出关闭
+const { createSplash } = require("./splash.cjs");
 const { IntegrityGuard } = require("./integrity-guard.cjs");
 const { createModuleRegistry } = require("./modules/foundation/module-registry.cjs");
 const { createStatusCenter } = require("./modules/status/status-center.cjs");
@@ -105,6 +107,8 @@ function activeSshProfileOf(config) {
 }
 
 let window;
+// v3.46.1：启动动画窗引用（ready-to-show 主关点 + did-finish-load 兜底；splash 自带 10s 强关兜底）
+let splashRef = null;
 // v3.41.0 任务完成系统通知：最近一次失焦时刻——失焦 8s 宽限内完成的回复不弹（用户可能切走一眼就回来）
 let lastWindowBlurAt = 0;
 let agentBridgeInstance = null; // Agent HTTP 桥（阉割版 Bridge Edition 专属；主版恒 null）
@@ -284,6 +288,12 @@ function createWindow() {
       window.webContents.send("theme:init", theme);
       brandManager._pushBrandConfig();
       brandManager._pushVerificationStatus();
+      // v3.46.1：二级兜底——DOM 就绪即触发，splash 未关则关（close 幂等，ready-to-show 先到则此为空操作）
+      if (splashRef) { try { splashRef.close(); } catch {} }
+    });
+    // v3.46.1：主挂点——主窗首帧渲染完成（ready-to-show）→ 淡出启动动画，观感=启动画面被主界面无缝替换
+    window.webContents.on("ready-to-show", () => {
+      if (splashRef) { try { splashRef.close(); } catch {} }
     });
   } catch {}
   const publishState = () => window?.webContents.send("window:maximized", window.isMaximized());
@@ -2270,8 +2280,10 @@ app.whenReady().then(async () => {
     ipcMain.handle("agentBridge:set-target", (_event, conversationId) => { setAgentBridgeConversationId(conversationId); return agentBridgeInstance.info(); });
   }
 
+  // v3.46.1 启动动画：主窗创建前开 splash（覆盖式置顶），did-finish-load 淡出关闭；10s 兜底强关
+  splashRef = createSplash({ BrowserWindow, writeLog });
   createWindow();
-  app.on("activate", () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
+  app.on("activate", () => { if (BrowserWindow.getAllWindows().length === 0) { splashRef = null; createWindow(); } });
 
   // ── 网络状态持久化与自动重连 ──
   // 启动时：如果上次外网连接成功过，自动重连

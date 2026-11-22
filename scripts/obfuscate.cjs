@@ -47,6 +47,7 @@ const OBFUSCATE_FILES = {
   // 🟠 主进程 — 中等混淆
   medium: [
     "main/main.cjs",
+    "main/splash.cjs",          // 启动动画（splash loading，v3.46.1）——含品牌动画 HTML 资产，主进程模块必登记（v3.45.4 Bug#2 同型教训）
     "main/ssh.cjs",
     "main/settings.cjs",
     "main/local.cjs",
