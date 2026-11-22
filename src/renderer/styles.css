@@ -297,8 +297,10 @@ body.maximized .window-shell { border-radius: 0; border: 0; box-shadow: none; }
 .security-note { color: var(--text-muted); font-size: 12px; line-height: 1.45; padding: 0 8px; margin: 0; }
 
 .main { flex: 1 1 auto; width: min(980px, calc(100% - 260px)); height: 100%; min-width: 0; min-height: 0; overflow: hidden; margin: 0 auto; display: flex; flex-direction: column; padding: 18px 40px 10px; }
-/* v3.15.0 功能1：侧边栏收缩（豆包样式——完全收起、主区占满、左上角切换按钮） */
-body.sidebar-collapsed .sidebar { display: none; }
+/* v3.15.0 功能1：侧边栏收缩（豆包样式——完全收起、主区占满、左上角切换按钮）。
+   v3.46.0 真伸缩：display:none 无过渡基础 → margin 滑出（整块平移不出挤压折行，主区跟随占满；
+   transition 声明统一在底部动效层 .sidebar 规则内） */
+body.sidebar-collapsed .sidebar { margin-left: -262px; opacity: 0; pointer-events: none; }
 body.sidebar-collapsed .main { width: min(980px, 100%); }
 #sidebar-toggle { align-self: center; font-size: 17px; flex: none; }
 header { display: flex; justify-content: space-between; align-items: center; min-height: 32px; border-bottom: 1px solid var(--border-sidebar); padding-bottom: 10px; }
@@ -1170,7 +1172,8 @@ textarea { resize: vertical; min-height: 60px; }
 
 /* ── v3.24.6 开发面板（右侧实时观察 AI 编辑中的文件；三模式共用工具事件流） ── */
 .dev-panel { width: 280px; flex: 0 0 280px; height: 100%; min-height: 0; overflow-y: auto; background: var(--bg-sidebar); border-left: 1px solid var(--border-sidebar); display: flex; flex-direction: column; padding: 14px; gap: 12px; }
-body.dev-collapsed .dev-panel { display: none; }
+/* v3.46.0 真伸缩：display:none → margin 滑出（同侧栏，transition 在底部动效层 .dev-panel 规则内） */
+body.dev-collapsed .dev-panel { margin-right: -282px; opacity: 0; pointer-events: none; }
 body:not(.dev-collapsed):not(.sidebar-collapsed) .main { width: min(980px, calc(100% - 260px - 280px)); }
 body:not(.dev-collapsed).sidebar-collapsed .main { width: min(980px, calc(100% - 280px)); }
 .dev-head { display: flex; align-items: center; justify-content: space-between; }
@@ -1379,6 +1382,73 @@ body.devpanel-absent .dev-panel, body.devpanel-absent .dev-rail { display: none 
 #at-popover .at-hint { padding: 4px 8px 2px; font-size: 11px; color: var(--text-muted); }
 /* ── v3.40.0：新手向导（三段分流） ── */
 #onboarding-dialog { width: min(520px, 92vw); }
+
+/* ══════════════════ v3.46.0 全局动效层 ══════════════════
+   用户令动效整包：所有菜单/弹窗开合、上拉（模式弹窗）/下拉（首部菜单）栏、侧栏与开发面板真伸缩、
+   及内部菜单每一选项的全量过渡。纯 CSS 双机理（renderer.js/index.html 逻辑零改动）：
+   ① display:none 或 [hidden]（=UA display:none）隐藏的元素「重新显示」即新动画会话——弹层打开
+      自动重播、关闭保持瞬时（关闭慢动画反拖手感，五弹层初始 hidden 在标=启动零误播侦查实锤）
+   ② dialog showModal=display none→block 同机理——七弹窗统一 dialog[open] 接管（Chromium 134）
+   时长铁则：弹层 135ms/面板侧栏 165ms/hover 120ms——视觉全量动效、操作零拖泥带水 */
+
+:root {
+  --ease-pop: cubic-bezier(.16, 1, .3, 1); /* 强减速：快起稳收 */
+  --dur-pop: 135ms;
+  --dur-panel: 165ms;
+  --dur-hover: 120ms;
+}
+
+@keyframes acp-pop-in { from { opacity: 0; transform: scale(.97) translateY(-3px); } }
+@keyframes acp-slide-in { from { opacity: 0; transform: translateY(7px); } }
+@keyframes acp-fade-in { from { opacity: 0; } }
+@keyframes acp-dialog-in { from { opacity: 0; transform: translateY(9px) scale(.985); } }
+
+/* ── ① 首部菜单六组：弹入 + 内部选项逐项级联（「内部菜单每一个选项」诉求的落点） ── */
+.menu-group.open .menu-dropdown { animation: acp-pop-in var(--dur-pop) var(--ease-pop); transform-origin: top left; }
+.menu-group.open .menu-dropdown > button,
+.menu-group.open .menu-dropdown > label { animation: acp-slide-in var(--dur-pop) var(--ease-pop) backwards; }
+.menu-group.open .menu-dropdown > :nth-child(1) { animation-delay: 0ms; }
+.menu-group.open .menu-dropdown > :nth-child(2) { animation-delay: 14ms; }
+.menu-group.open .menu-dropdown > :nth-child(3) { animation-delay: 28ms; }
+.menu-group.open .menu-dropdown > :nth-child(4) { animation-delay: 42ms; }
+.menu-group.open .menu-dropdown > :nth-child(5) { animation-delay: 56ms; }
+.menu-group.open .menu-dropdown > :nth-child(6) { animation-delay: 70ms; }
+.menu-group.open .menu-dropdown > :nth-child(7) { animation-delay: 84ms; }
+.menu-group.open .menu-dropdown > :nth-child(n+8) { animation-delay: 98ms; }
+
+/* ── ② 弹层/下拉/右键菜单/模型浮层/群面板成员区/@成员浮层：hidden=false 即弹入 ── */
+.workspace-dropdown, #mode-dropdown, .composer-mode-popup, .context-menu,
+.model-popover, #think-group-rows, #at-popover { animation: acp-pop-in var(--dur-pop) var(--ease-pop); }
+.composer-mode-popup, .workspace-dropdown, #mode-dropdown, #at-popover { transform-origin: bottom left; }
+.context-menu { transform-origin: center; }
+
+/* ── ③ 七弹窗统一入场 + 遮罩淡入（showModal 打开自动播；关闭=瞬时，dialog[open] 摘除即隐） ── */
+dialog[open] { animation: acp-dialog-in var(--dur-panel) var(--ease-pop); }
+dialog[open]::backdrop { animation: acp-fade-in calc(var(--dur-panel) - 45ms) linear; }
+
+/* ── ④ 设置中心面板切换滑入（display 切换同机理；details 组只做 summary hover，内容动画因容器名动态不盲挂） ── */
+.settings-panel.active { animation: acp-slide-in var(--dur-panel) var(--ease-pop); }
+
+/* ── ⑤ 侧栏/开发面板真伸缩（301/1175 行改 margin 滑出，内容不挤压不出折行，主区跟随展开） ── */
+.sidebar { transition: margin-left var(--dur-panel) var(--ease-pop), opacity calc(var(--dur-panel) - 45ms) linear; }
+.dev-panel { transition: margin-right var(--dur-panel) var(--ease-pop), opacity calc(var(--dur-panel) - 45ms) linear; }
+
+/* ── ⑥ 选项 hover/按压批挂：菜单项+下拉项+设置导航+会话项+details 摘要（颜色与微位移同批） ── */
+.menu-dropdown button, .workspace-dropdown button, #mode-dropdown button, .context-menu button,
+.settings-nav [data-settings-tab], .sidebar .conversation-item, details > summary,
+#at-popover .at-item, .menu-trigger, .mode-selector .mode-item {
+  transition: background-color var(--dur-hover) ease, color var(--dur-hover) ease,
+    border-color var(--dur-hover) ease, transform var(--dur-hover) var(--ease-pop);
+}
+.menu-dropdown button:hover, .workspace-dropdown button:hover, #mode-dropdown button:hover,
+#at-popover .at-item:hover { transform: translateX(2px); }
+
+/* ── ⑦ 系统减动效偏好全闸（含既有指示动画一并尊重偏好） ── */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0s !important; transition-duration: 0s !important; }
+}
+
+/* ══════════════════ v3.46.0 动效层结束 ══════════════════ */
 .onboarding-question { margin: 10px 0 12px; font-weight: 600; color: var(--text-primary); }
 .onboarding-choices { flex-direction: column; align-items: stretch; }
 .onboarding-detail { margin: 4px 0 10px; color: var(--text-secondary); font-size: 13px; line-height: 1.6; }

@@ -214,7 +214,8 @@ async function runAssetTests() {
     assert.ok(indexSrc.includes('id="sidebar-toggle"'), "缺 #sidebar-toggle");
   });
   await test("CSS 收缩规则：sidebar 隐藏 + main 宽度放开", () => {
-    assert.ok(stylesSrc.includes("body.sidebar-collapsed .sidebar { display: none; }"), "缺 sidebar 隐藏规则");
+    // v3.46.0 滚动锚：隐藏形态升级 margin 滑出（真伸缩过渡基础；display:none 无过渡性已弃）
+    assert.ok(stylesSrc.includes("body.sidebar-collapsed .sidebar { margin-left: -262px; opacity: 0;"), "缺 sidebar 隐藏规则（v3.46.0 margin 滑出形态）");
     assert.ok(stylesSrc.includes("body.sidebar-collapsed .main { width: min(980px, 100%); }"), "缺 main 宽度放开规则");
   });
   await test("CSS 模式徽标与标题 flex 布局（防长标题截断徽标）", () => {
