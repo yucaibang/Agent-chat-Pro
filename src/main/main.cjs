@@ -13,6 +13,8 @@ const { makeIdeToolkit } = require("./dev-ide.cjs");
 const ideToolkit = makeIdeToolkit({ ssh: { statRemoteFile, listRemoteDir, writeRemoteFile, readRemoteFile, createRemoteFile }, fs: fs.promises });
 const { copyLocalFile, getLocalClaudeModelStatus, readLocalFile, runLocalClaude, updateLocalAutoCompactWindow, updateLocalClaudeModel, updateLocalClaudeModelEntry, validatedWorkingDirectory: validatedLocalWorkdir, verifyLocalConnection } = require("./local.cjs");
 const { runAtomCodeChat, verifyAtomCodeConnection } = require("./daemon-chat.cjs");
+// v3.48.0：本机 Agent 一键检测（claude/atomcode daemon 自发现/常见自定义 CLI）——检测到后渲染层「选它」即自动切引擎填配置
+const { detectLocalAgents } = require("./agent-detect.cjs");
 // v3.19.0 F3：SSH 远程适配器（qwen/codex/hermes 三家远端 CLI 跑法）
 const { runQwenCli } = require("./adapters/qwen-cli.cjs");
 const { runCodexCli } = require("./adapters/codex-cli.cjs");
@@ -757,6 +759,15 @@ app.whenReady().then(async () => {
   });
   // v3.18.0 F4：切换 SSH 卡槽（目标槽整套参数物化为活跃连接；密码/指纹随槽走；
   // 运行中任务在开始时已捕获 config+taskProfile，切槽不杀也不串会话——拍板「任务跟原连接走」）
+  // v3.48.0：本机 Agent 一键检测——只读探测（where/which + --version + daemon-*.json 自发现 + TCP），选它即配置
+  ipcMain.handle("local-agents:detect", async () => {
+    try {
+      return await detectLocalAgents({ onLog: writeLog });
+    } catch (error) {
+      writeLog("local_agent_detect_failed", { error: error.message });
+      throw error;
+    }
+  });
   // v3.19.0 F3：SSH 远程适配器在场检测——单次 SSH 连接探测全部远端 CLI（claude/atomcode 内置直接返回）
   ipcMain.handle("settings:detect-ssh-adapter", async (_event, payload = {}) => {
     const requested = String(payload?.adapter || "").trim();

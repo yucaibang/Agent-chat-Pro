@@ -49,6 +49,7 @@ contextBridge.exposeInMainWorld("agentChatPro", {
   switchSshProfile: (profileId) => ipcRenderer.invoke("settings:switch-ssh-profile", profileId),
   // v3.19.0 F3：SSH 远程适配器在场检测（单次连接探测远端 CLI）
   detectSshAdapter: (payload) => ipcRenderer.invoke("settings:detect-ssh-adapter", payload),
+  detectLocalAgents: () => ipcRenderer.invoke("local-agents:detect"), // v3.48.0 本机 Agent 一键检测（只读探测）
   // ── 会话管理 IPC ──
   // v3.35.6：带工作区参数（"" = 全部兼容语义；single/team 按工作区物理过滤）
   listConversations: (workspaceType = "") => ipcRenderer.invoke("conversations:list", workspaceType),

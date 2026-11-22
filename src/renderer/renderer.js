@@ -458,10 +458,30 @@ function renderAdapterDetect(results) {
       note.textContent = hint;
       row.append(note);
     }
+    // v3.48.0：检测到可用（内置/已安装）→ 行内「选它」自动切换 SSH 适配器并保存
+    if (item.status === "builtin" || item.status === "installed") {
+      const applyButton = document.createElement("button");
+      applyButton.type = "button";
+      applyButton.className = "detect-apply";
+      applyButton.textContent = "选它";
+      applyButton.title = `自动切换 SSH 适配器为 ${meta.label} 并保存`;
+      applyButton.addEventListener("click", () => applySshAdapter(item.key, meta.label));
+      row.append(applyButton);
+    }
     rows.push(row);
   }
   box.replaceChildren(...rows);
   box.hidden = false;
+}
+
+// v3.48.0：SSH 适配器「选它」——检测出可用远端 CLI 后一键切换并保存（自动帮用户完成配置）
+async function applySshAdapter(key, label) {
+  const switchButton = document.querySelector(`#adv-panel-adapter [data-adapter-key="${key}"]`);
+  if (switchButton) switchButton.click(); // 走既有切换选择逻辑（pendingAdapterKey+附加面板+renderAdapterCard）
+  else pendingAdapterKey = key;
+  const applyButton = document.querySelector("#adapter-apply");
+  try { if (applyButton) applyButton.click(); } catch (error) { setStatus(error.message, true); }
+  // 保存结果提示由 #adapter-apply 既有 handler 统一给出（含 saveAdvancedGroup 内部错误路径）——此处不再顶掉
 }
 
 function slotProfileLabel(slot) {
@@ -3779,6 +3799,75 @@ document.querySelectorAll("[data-local-engine]").forEach((button) => {
     updateConnectionModeUI();
   });
 });
+
+// ── v3.48.0 本机 Agent 一键检测（选它即自动切引擎+填配置） ──
+document.querySelector("#local-agent-detect-button")?.addEventListener("click", async () => {
+  const button = document.querySelector("#local-agent-detect-button");
+  const box = document.querySelector("#local-agent-result");
+  button.disabled = true;
+  button.textContent = "正在检测本机 Agent…";
+  setStatus("正在探测本机已装的 Claude Code / AtomCode / Aider 等…");
+  try {
+    const result = await window.agentChatPro.detectLocalAgents();
+    renderLocalAgentDetect(result?.agents || []);
+    const ready = (result?.agents || []).filter((agent) => agent.status === "ready").length;
+    setStatus(ready ? `检测到 ${ready} 个可用 Agent——点行内「选它」即可自动配置。` : "未检测到可用 Agent（或都还差一步，见行内提示）。", ready ? false : true);
+  } catch (error) {
+    setStatus(error.message, true);
+  } finally {
+    button.disabled = false;
+    button.textContent = "🔍 重新检测";
+  }
+});
+
+function renderLocalAgentDetect(agents) {
+  const box = document.querySelector("#local-agent-result");
+  if (!Array.isArray(agents)) { box.hidden = true; box.replaceChildren(); return; }
+  const rows = [];
+  for (const agent of agents) {
+    const row = document.createElement("div");
+    row.className = "adv-detect-row";
+    const name = document.createElement("span");
+    name.textContent = String(agent.name || agent.key || "Agent");
+    const state = document.createElement("strong");
+    state.textContent = agent.status === "ready" ? "✅ 可用" : agent.status === "partial" ? "⚠ 差一步" : "❌ 未检测到";
+    row.append(name, state);
+    const hint = String(agent.detail || agent.version || "");
+    if (hint) {
+      const note = document.createElement("span");
+      note.className = "field-hint";
+      note.textContent = [agent.version, agent.detail].filter(Boolean).filter((part, index) => index === 0 ? !part.startsWith("（") : true).join(" · ");
+      row.append(note);
+    }
+    if (agent.status !== "missing" && agent.apply) {
+      const applyButton = document.createElement("button");
+      applyButton.type = "button";
+      applyButton.className = "detect-apply";
+      applyButton.textContent = "选它";
+      applyButton.addEventListener("click", () => applyLocalAgent(agent));
+      row.append(applyButton);
+    }
+    rows.push(row);
+  }
+  box.replaceChildren(...rows);
+  box.hidden = false;
+}
+
+function applyLocalAgent(agent) {
+  const apply = agent?.apply || {};
+  if (!apply.localEngine) return;
+  const engineButton = document.querySelector(`[data-local-engine="${apply.localEngine}"]`);
+  if (engineButton) {
+    elements.form.elements.namedItem("localEngine").value = String(apply.localEngine);
+    updateConnectionModeUI();
+  }
+  if (apply.atomcodeHost) document.querySelector("#atomcode-host").value = String(apply.atomcodeHost);
+  if (apply.atomcodePort) document.querySelector("#atomcode-port").value = String(apply.atomcodePort);
+  if (apply.customCliCommand) document.querySelector("#custom-cli-command").value = String(apply.customCliCommand);
+  // token 留空 = daemon-端口.json 自动读取（daemon-chat.cjs 既有兜底）；不回填不回显
+  const isAtomcode = apply.localEngine === "atomcode";
+  setStatus(`已切换到 ${agent.name || "该 Agent"} 并自动填好配置${isAtomcode ? "（token 留空走 daemon 文件自动读取）" : ""}——点「保存连接」即用。`);
+}
 document.querySelector("#toggle-atomcode-token")?.addEventListener("click", () => {
   const input = document.querySelector("#atomcode-token");
   const showing = input.type === "text";

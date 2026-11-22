@@ -398,9 +398,9 @@ async function runWiringTests() {
 
 /* ── C 组：版本滚动锚 ── */
 async function runVersionTests() {
-  await test("C1. 版本滚动锚：package.json =3.47.0 且 README badge 自洽", () => {
+  await test("C1. 版本滚动锚：package.json ≥3.47.0 且 README badge 自洽（v3.48.0 升版滚更——按 test-v3-46-1 C1 先例放宽不写死）", () => {
     const parts = pkg.version.split(".").map(Number);
-    assert.ok(parts[0] === 3 && parts[1] === 47 && parts[2] === 0, `版本应为 3.47.0（实际 ${pkg.version}）`);
+    assert.ok(parts[0] === 3 && (parts[1] > 47 || (parts[1] === 47 && parts[2] >= 0)), `版本应 ≥3.47.0（实际 ${pkg.version}）`);
     assert.ok(readme.includes(`version-${pkg.version}`), "README badge 应与 package.json 版本一致");
     const badgeTests = (readme.match(/tests-(\d+)%20files/) || [])[1];
     assert.ok(badgeTests && Number(badgeTests) >= 66, `README tests badge 应 ≥66（实际 ${badgeTests}）`);

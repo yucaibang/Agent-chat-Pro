@@ -428,6 +428,11 @@
             <label>命令模板<input id="custom-cli-command" placeholder="例如：aider --message {message}" /></label>
             <span class="field-hint">{message} 会替换成你发送的消息；模板不含 {message} 时消息走标准输入。无原生会话，软件自动回放最近对话作为上下文（纯文本输出，无工具卡片）。</span>
           </div>
+          <div id="local-agent-detect" class="adv-grid">
+            <button type="button" id="local-agent-detect-button">🔍 一键检测本机 Agent</button>
+            <span class="field-hint">自动探测本机已装的 Claude Code、AtomCode（daemon 地址与 token 自动发现）、Aider / OpenCode / Qwen / Codex 等——检测到后点「选它」即自动切换引擎并填好配置，不用手动输入。</span>
+            <div id="local-agent-result" hidden></div>
+          </div>
         </div>
         <label id="wake-name-field">Agent 唤醒命令<input name="wakeName" required placeholder="当前例如：claude 或完整路径" /></label>
         <label>本机标识
