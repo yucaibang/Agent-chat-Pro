@@ -437,6 +437,10 @@ async function runRunnerMemberTurn(ctx, agent, input, group) {
       .join("\n");
     const transcriptBlock = fresh ? `[群聊上下文 · 自你上轮以来的新消息]\n${fresh}\n\n` : "";
     const runnerConfig = getConnection();
+    // v3.45.5 群成员节点级挡位随行：池节点 thinkingLevel（面板拖动落档）随 SSH/本机成员轮进
+    // resolveMode（thinkingLevelOverride 节点级最高优先；云端成员走 thinking.choice 同语义注入）
+    const memberLevel = String(agent.thinkingLevel || "").trim();
+    if (["eco", "none", "low", "medium", "high"].includes(memberLevel)) runnerConfig.thinkingLevelOverride = memberLevel;
     if (agent.kind === "local") runnerConfig.connectionMode = "local";
     if (agent.kind === "local" && agent.engine === "atomcode") runnerConfig.atomcodeToken = ctx.deps.getAtomcodeToken();
     const agentMessage = `${transcriptBlock}${input.message}`;

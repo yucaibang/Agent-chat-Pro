@@ -571,7 +571,9 @@ async function runV3241Tests() {
   });
 
   await test("V2 mode-params.resolveMode 挡位偏好接线（SSH/Bridge/本机三链汇聚点 + 内置常量副本保护）", () => {
-    assert.ok(modeParamsSrc.includes("return applyThinkingChoice(mode, modeId, readThinkingChoices())"), "resolveMode 尾部挂偏好覆盖");
+    // v3.45.5 滚动锚：节点级 override 接入后，偏好覆盖形态由尾式 return 升级为变量重赋值（同语义，且副本绑定随之 const→let）
+    assert.ok(modeParamsSrc.includes("mode = applyThinkingChoice(mode, modeId, readThinkingChoices())"), "resolveMode 挂偏好覆盖（v3.45.5 滚动：重赋值形态）");
+    assert.ok(modeParamsSrc.includes("let mode = { ...(getMode(modeId) || fallback) };"), "resolveMode 副本绑定应为 let（const 重赋值=严格模式运行时炸）");
     assert.ok(modeParamsSrc.includes("{ ...(getMode(modeId) || fallback) }"), "resolveMode 副本保护（不污染 BUILTIN_MODES 常量）");
     assert.ok(modeParamsSrc.includes('require("../settings.cjs").getSettings()'), "延迟读 settings（依赖兜底，不污染纯函数测试）");
     assert.ok(modeParamsSrc.includes("catch { return {}; }"), "settings 不可读时零偏好兜底");

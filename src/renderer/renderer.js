@@ -4636,11 +4636,45 @@ async function refreshComposerModePopup() {
     kindTag.textContent = kindLabel;
     head.append(nameTag, kindTag);
     section.append(head);
+    // v3.45.5 SSH/本机成员滑条（用户实锤「单模式能调群聊为啥不能调」）：claude 系引擎独立五挡，
+    // 存池节点 thinkingLevel（agent-pool 落档）→ runRunnerMemberTurn 随行 thinkingLevelOverride。
+    // atomcode/custom/qwen/codex/hermes 引擎 CLI 无思考参数，如实说明不放假滑条。
     if (node.kind !== "cloud") {
-      const note = document.createElement("div");
-      note.className = "think-member-note";
-      note.textContent = "挡位由实例引擎/工作模式决定，群内不单独注入";
-      section.append(note);
+      const engine = node.kind === "ssh" ? (node.ssh?.adapter || "claude") : (node.local?.engine || "claude");
+      if (engine !== "claude") {
+        const note = document.createElement("div");
+        note.className = "think-member-note";
+        note.textContent = `该引擎（${engine}）暂不支持思考挡位调节`;
+        section.append(note);
+        return section;
+      }
+      const levels = THINK_SSH_LEVELS;
+      const slider = document.createElement("input");
+      slider.type = "range";
+      slider.className = "think-slider think-group-slider";
+      slider.min = "0"; slider.max = String(levels.length - 1); slider.step = "1"; slider.value = "0";
+      const wrap = document.createElement("div");
+      wrap.className = "think-track-wrap";
+      const ticksRow = document.createElement("div");
+      ticksRow.className = "think-ticks";
+      const labelsRow = document.createElement("div");
+      labelsRow.className = "think-levels";
+      const backId = THINK_CLAUDE_LEVEL_REVERSE[String(node.thinkingLevel || "").trim()] || "off";
+      const defaultIdx = Math.max(0, levels.findIndex((level) => level.id === backId));
+      slider.value = String(defaultIdx);
+      renderSliderTheme(slider, levels);
+      renderTrackMarks(ticksRow, labelsRow, levels, Number(slider.value));
+      slider.addEventListener("input", () => { renderSliderTheme(slider, levels); syncMarkActive(ticksRow, labelsRow, Number(slider.value)); });
+      slider.addEventListener("change", async () => {
+        const level = levels[Number(slider.value)] || levels[0];
+        const stored = THINK_CLAUDE_LEVEL_IDS[level?.id] || "none";
+        try {
+          await window.agentChatPro.updateAgentPoolNode(node.id, { thinkingLevel: stored });
+          node.thinkingLevel = stored; // 快照就地同步：面板收展不重拉也能回显真值
+        } catch { /* 存档失败静默（挡位重读=池存档） */ }
+      });
+      wrap.append(slider, ticksRow);
+      section.append(wrap, labelsRow);
       return section;
     }
     const model = node.cloud?.model || "";
@@ -4683,7 +4717,10 @@ async function refreshComposerModePopup() {
     slider.addEventListener("input", () => { renderSliderTheme(slider, levels); syncMarkActive(ticksRow, labelsRow, Number(slider.value)); applyIndex(Number(slider.value)); });
     slider.addEventListener("change", async () => {
       const level = levels[Number(slider.value)] || levels[0];
-      try { await window.agentChatPro.updateAgentPoolNode(node.id, { thinkingLevel: level.id || "" }); } catch { /* 存档失败静默（挡位重读=池存档） */ }
+      try {
+        await window.agentChatPro.updateAgentPoolNode(node.id, { thinkingLevel: level.id || "" });
+        node.thinkingLevel = level.id || ""; // v3.45.5 快照就地同步：面板收展不重拉也能回显真值
+      } catch { /* 存档失败静默（挡位重读=池存档） */ }
     });
     wrap.append(slider, ticksRow);
     section.append(wrap, labelsRow, costRow);
@@ -4710,7 +4747,16 @@ async function refreshComposerModePopup() {
     const fillRows = async () => {
       const stampLocal = ++thinkModelStamp;
       groupRows.replaceChildren();
-      for (const node of groupRosterAgents) {
+      // v3.45.5：展开即拉池现值回显——拖动存档（agent-pool 落档）后重开面板，
+      // 不再被旧 groupRosterAgents 快照拉回默认（存档真实值=面板回显值的唯一真源）
+      let nodes = groupRosterAgents;
+      try {
+        const pool = await window.agentChatPro.listAgentPool();
+        if (Array.isArray(pool) && pool.length) {
+          nodes = groupRosterAgents.map((node) => pool.find((item) => item.id === node.id) || node);
+        }
+      } catch { /* 拉取失败沿用已有快照，回显不低于现状 */ }
+      for (const node of nodes) {
         const section = await buildGroupMemberThinkRow(node);
         if (stampLocal !== thinkModelStamp) return;
         groupRows.append(section);
@@ -4863,8 +4909,16 @@ if (elements.composerModeTrigger) {
   });
 }
 
+// v3.45.5 拖滑条误关修复：关闭判定改看本次按击的起点（pointerdown）——
+// 拖滑条（含群聊逐成员挡位）时习惯把鼠标拖出面板边界再释放，合成 click 的 target
+// 会落在面板外的公共祖先上，旧逻辑按 click 目标判定=拖动一结束面板直接消失，拖好的
+// 挡位来不及走 change 存档。按击起点在面板内 → 这次点击一概不算「点外面」。
+let modePopupPress = { inside: false };
+document.addEventListener("pointerdown", (event) => {
+  modePopupPress.inside = Boolean(event.target?.closest?.(".composer-mode-selector"));
+});
 document.addEventListener("click", (event) => {
-  if (!event.target.closest(".composer-mode-selector")) closeComposerModePopup();
+  if (composerModePopupOpen && !modePopupPress.inside && !event.target.closest(".composer-mode-selector")) closeComposerModePopup();
 });
 elements.filePicker.addEventListener("change", () => { addFiles(elements.filePicker.files); elements.filePicker.value = ""; });
 elements.composer.addEventListener("dragover", (event) => event.preventDefault());

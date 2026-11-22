@@ -138,8 +138,11 @@ function readThinkingChoices() {
  */
 function resolveMode(modeId, config) {
   const fallback = BUILTIN_MODES.regular;
-  // v3.24.1：保证副本——fallback 是 BUILTIN_MODES 常量引用，后续字段覆盖不得污染内置常量
-  const mode = { ...(getMode(modeId) || fallback) };
+  // v3.24.1：保证副本——fallback 是 BUILTIN_MODES 常量引用，后续字段覆盖不得污染内置常量。
+  // v3.45.5 教训：接入节点级 override 时曾把下方尾部 return 改成对 const 绑定重赋值——
+  //   严格模式运行时必炸（Assignment to constant variable，本机引擎/SSH 直连每轮必炸），
+  //   守门 A 组行为级真跑当场揪出；const→let 恢复原语义（字段覆盖+偏好替换均不炸）
+  let mode = { ...(getMode(modeId) || fallback) };
 
   // 全局 skipPermissions 可以覆盖模式设置
   if (config?.skipPermissions && !mode.skipPermissions) {
@@ -148,7 +151,13 @@ function resolveMode(modeId, config) {
   }
 
   // v3.24.1：挡位偏好覆盖（SSH/Bridge/本机三链共用此汇聚点；未调整时用模式默认挡位）
-  return applyThinkingChoice(mode, modeId, readThinkingChoices());
+  // v3.45.5 群成员节点级挡位（最高优先）：workgroup-chat 的 runRunnerMemberTurn 以池节点
+  // thinkingLevel 随行（cloud 成员的 thinking.choice 注入同语义——每成员独立挡位不互相污染）。
+  // 合法值域校验（与 THINKING_LEVEL_VALUES 同域），空/非法=不覆盖，回退会话偏好或模式默认。
+  mode = applyThinkingChoice(mode, modeId, readThinkingChoices());
+  const override = String(config?.thinkingLevelOverride || "").trim();
+  if (THINKING_LEVEL_VALUES.includes(override)) return { ...mode, thinkingLevel: override };
+  return mode;
 }
 
 /**
