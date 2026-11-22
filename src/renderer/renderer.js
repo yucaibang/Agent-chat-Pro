@@ -3898,8 +3898,11 @@ document.querySelector("#memory-optimize")?.addEventListener("click", async () =
   try {
     const result = await window.agentChatPro.optimizeMemory();
     if (!result || result.ok !== true) throw new Error(result?.reason || "内存优化不可用");
-    const parts = [`主进程垃圾回收：${result.beforeMb} MB → ${result.afterMb} MB（释放 ${result.freedMb} MB）`];
-    if (!result.gcRan) parts.push("垃圾回收未执行（环境不支持）");
+    // v3.45.4 自查修复（Bug#3）：!gcRan 时首句不再断言「垃圾回收 X→Y」（与「未执行」自相矛盾）——
+    // 未执行就如实只说体检；gcRan=true（resolveGc 正常取得）才有前后快照差值可讲。
+    const parts = result.gcRan
+      ? [`主进程垃圾回收：${result.beforeMb} MB → ${result.afterMb} MB（释放 ${result.freedMb} MB）`]
+      : ["主进程垃圾回收：未执行（环境不支持，仅体检）"];
     if (Array.isArray(result.memoryParts) && result.memoryParts.length) {
       parts.push(`内存体检：${result.memoryParts.join(" / ")}（共 ${result.totalMb} MB）`);
     }

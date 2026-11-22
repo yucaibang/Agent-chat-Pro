@@ -415,11 +415,11 @@ async function runSourceAnchorTests() {
     assert.ok(!settingsHtml.includes("data-settings-tab=\"cache\">🧹 缓存清理"), "旧导航按钮应清零");
   });
 
-  await test("B3. preload/main 接线齐：optimizeMemory 桥 API + memory:optimize handler + expose-gc 注入", () => {
+  await test("B3. preload/main 接线齐：optimizeMemory 桥 API + memory:optimize handler + gc 注入（v3.45.4 随修复态改写：gc 取得经 resolveGc，不再裸 setFlagsFromString）", () => {
     assert.ok(preloadSrc.includes('optimizeMemory: () => ipcRenderer.invoke("memory:optimize")'), "preload 应暴露 optimizeMemory");
     assert.ok(mainSrc.includes('ipcMain.handle("memory:optimize"'), "main 应接 memory:optimize");
     assert.ok(mainSrc.includes('require("./memory-optimizer.cjs")'), "main 应引 memory-optimizer.cjs");
-    assert.ok(mainSrc.includes('v8.setFlagsFromString("--expose-gc")'), "main 应开 --expose-gc 动态 flag");
+    assert.ok(mainSrc.includes("resolveGc"), "main 应经 resolveGc 注入 gc（v3.45.4 Bug#1 修复态）");
     assert.ok(optimizerSrc.includes("function optimizeMemory"), "memory-optimizer.cjs 应导出 optimizeMemory");
   });
 

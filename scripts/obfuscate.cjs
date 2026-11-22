@@ -73,6 +73,7 @@ const OBFUSCATE_FILES = {
     "main/thinking-levels.cjs",   // 模型思考挡位表 + 四字段族注入（v3.24.0）
     "main/cloud-models.cjs",     // 云端「拉取模型列表」（v3.21.0）
     "main/voice-transcribe.cjs", // 输入栏「听说」语音转文字（v3.36.0）
+    "main/memory-optimizer.cjs", // 百宝箱·内存优化（v3.45.3；v3.45.4 自查补登记——voice-transcribe 同型先例）
     "main/cloud-tools.cjs",     // 云端模式工具执行器（v3.14.0 云办公一期）
     "main/repetition-guard.cjs", // 复读检测折叠（v3.15.5）
     "main/cloud-brand.cjs",      // 品牌验证模块
