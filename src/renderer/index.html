@@ -100,21 +100,8 @@
         </button>
         <div class="workspace-dropdown" id="workspace-dropdown" hidden></div>
       </div>
-      <div class="mode-selector" id="mode-selector">
-        <button type="button" class="mode-trigger" id="mode-trigger" title="工作模式">
-          <span id="mode-icon">🛡</span>
-          <span id="mode-name">高危审批</span>
-          <span class="mode-arrow">▾</span>
-        </button>
-        <div class="mode-dropdown" id="mode-dropdown" hidden>
-          <div class="mode-list" id="mode-list"></div>
-          <div class="mode-actions">
-            <button type="button" id="mode-edit" class="mode-action">编辑模式…</button>
-            <button type="button" id="mode-import" class="mode-action">导入…</button>
-            <button type="button" id="mode-export" class="mode-action">导出…</button>
-          </div>
-        </div>
-      </div>
+      <!-- v3.49.0：侧边栏工作模式选择器移除（用户令：模式选择完整入口收归输入栏思考面板 + 侧栏按钮下编辑组；
+           #mode-list/#mode-trigger/#mode-edit/#mode-import/#mode-export 元素已删，渲染层相应守卫空转） -->
       <button id="new-chat" class="new-chat">＋ 新对话</button>
       <section class="history">
         <div class="history-heading"><p>历史对话</p><span id="history-count"></span></div>
@@ -126,17 +113,18 @@
         <span id="network-mode-label">内网直连</span>
         <span id="network-latency-label"></span>
       </div>
-      <button id="show-settings" class="plain-button">连接设置</button>
+      <!-- v3.49.0：小字提醒上挪（原在「连接设置」按钮下方，用户令上移留出底部更新提醒条空间） -->
       <p id="security-note" class="security-note">密码仅保存在这台 Windows 电脑的系统加密存储中。</p>
+      <button id="show-settings" class="plain-button">连接设置</button>
+      <button id="update-toast" type="button" class="update-toast" hidden title="查看并安装新版本"></button>
     </aside>
 
     <main class="main">
       <header>
+        <!-- v3.49.0：主区顶部文案清理（用户令）——「和 Agent 对话 / 通过 SSH 使用 NAS 上的 Agent CLI /
+             当前模式权限徽标」三处文案移除，头部仅留侧栏开关与外观按钮 -->
         <div class="chat-heading">
           <button id="sidebar-toggle" class="icon-button" type="button" title="收起侧边栏">←</button>
-          <h1>和 Agent 对话</h1>
-          <p id="connection-subtitle">通过 SSH 使用 NAS 上的 Agent CLI</p>
-          <span id="chat-mode-badge" class="chat-mode-badge" title="当前模式">🛡 高危审批</span>
         </div>
         <button id="header-appearance" class="icon-button" title="外观设置">⚙</button>
       </header>
@@ -182,21 +170,28 @@
           <div class="composer-mode-popup" id="composer-mode-popup" hidden>
             <div class="composer-mode-list" id="composer-mode-list" hidden></div>
             <div class="think-panel" id="think-panel">
+              <!-- v3.49.0 面板重排（用户令）：
+                   ①思考程度框（顶行）缩短 + 挡位文案挪到轨道上方（连同顶行一起处于窗口上半部）；
+                   ②底行说明文案（think-meta/彩蛋）挪到面板最下并居中；
+                   ③顶行文案在云端的单聊态可点=快捷切换模型（模型按官方 /models 拉取，
+                     分「视觉 / 文本」两组按返回序排，展开符「∧」收起符「∨」。 -->
               <div class="think-model-row">
                 <div class="think-model" id="think-model">—</div>
+                <button type="button" class="think-model-arrow" id="think-model-arrow" title="切换模型" hidden>∨</button>
                 <button type="button" class="think-reset" id="think-reset" title="恢复默认挡位（清除挡位偏好记忆）" hidden>↻</button>
               </div>
+              <div class="think-model-popover" id="think-model-popover" hidden></div>
+              <div class="think-levels" id="think-levels"></div>
               <div class="think-track-wrap">
                 <input class="think-slider" id="think-slider" type="range" min="0" max="0" step="1" value="0" disabled />
                 <div class="think-ticks" id="think-ticks" aria-hidden="true"></div>
               </div>
-              <div class="think-levels" id="think-levels"></div>
-              <div class="think-meta" id="think-meta"></div>
-              <div class="think-egg" id="think-egg" hidden></div>
               <!-- v3.35.7 群聊思考面板：群里多少个 AI 就按各自模型支持的档位一个一个往上叠（每成员一节独立滑条+预计消耗倍数） -->
               <div class="think-group-rows" id="think-group-rows" hidden></div>
               <div class="think-divider" id="think-divider"></div>
               <div class="think-modes" id="think-modes"></div>
+              <div class="think-egg" id="think-egg" hidden></div>
+              <div class="think-meta" id="think-meta"></div>
             </div>
           </div>
         </div>
@@ -1007,6 +1002,23 @@
           </div>
           <input type="range" id="frosted-opacity-range" min="20" max="100" value="85" class="appearance-range" />
         </label>
+        <div class="appearance-section">
+          <!-- v3.49.0 颜色板（用户令）：鼠标在色域内挪动即取该像素点的颜色，实时应用到
+               设置菜单 / 弹窗 / 模式高亮等全局强调色（--accent 系）；落点持久化，可一键恢复默认 -->
+          <div class="appearance-section-heading">
+            <strong>颜色板（强调色）</strong>
+            <small>在色域里挪动或点击，提取该像素的颜色：应用于设置菜单、弹窗、模式高亮等</small>
+          </div>
+          <div class="accent-palette-row">
+            <canvas id="accent-palette-canvas" width="360" height="140" title="挪动/点击取色：横向=色相，纵向=饱和度（上满·下淡），亮度滑块单独调"></canvas>
+            <div class="accent-palette-side">
+              <span id="accent-palette-preview" class="accent-palette-preview" title="当前强调色预览"></span>
+              <span id="accent-palette-hex" class="accent-palette-hex">—</span>
+              <input type="range" id="accent-brightness-range" min="18" max="92" value="50" class="appearance-range" title="亮度" />
+              <button type="button" id="accent-palette-reset" class="password-toggle">恢复默认</button>
+            </div>
+          </div>
+        </div>
         <div class="appearance-section">
           <div class="appearance-section-heading">
             <strong>背景图片</strong>

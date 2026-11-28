@@ -530,7 +530,7 @@ async function runIconFixTests() {
   });
 
   await test("E2 updateModeDisplay 独占图标渲染（v3.24.1 徽标移除后 icon/title 回归，双写修复保留）", () => {
-    const body = rendererSrc.slice(rendererSrc.indexOf("function updateModeDisplay"), rendererSrc.indexOf('document.querySelector("#mode-trigger").addEventListener'));
+    const body = rendererSrc.slice(rendererSrc.indexOf("function updateModeDisplay"), rendererSrc.indexOf('const modeEditDialog = document.querySelector("#mode-edit-dialog")'));
     assert.ok(body.includes("composerModeTrigger.textContent = mode.icon"), "图标渲染权应回归 updateModeDisplay（v3.24.1）");
     assert.ok(body.includes("composerModeTrigger.title ="), "模式名/描述 title 应回归");
     assert.ok(!body.includes("refreshThinkingBadge()"), "徽标刷新调用应已移除");
@@ -625,21 +625,33 @@ async function runV3242Tests() {
     assert.ok(modeManagerSrc.includes('"eco", "none", "low", "medium", "high"'), "mode-manager validateThinkingLevel 值域含 eco");
   });
 
-  await test("W2 THINKING_MAP.eco 零 flag + eco 注入安全（云/SSH 双链）", () => {
+  await test("W2 THINKING_MAP.eco 真实省 + eco 注入映射该模型最低挡（云/SSH 双链；v3.49.0 任务#1 推翻 v3.24.2 零注入旧语义——用户实测默认档 vs eco 发问号 token 仅差 15=虚假节省实锤）", () => {
     const defaultsSrc = fs.readFileSync(path.join(ROOT, "src", "main", "modes", "mode-defaults.cjs"), "utf8");
-    assert.ok(defaultsSrc.includes('eco: ""'), "THINKING_MAP.eco = 空串（CLI 与默认挡一致，不传 --thinking-level）");
-    // 云端注入器真测：eco 不在任何家族挡位表 → hasChoice=false → 零注入
+    assert.ok(defaultsSrc.includes('eco: "--thinking-level low"'), "THINKING_MAP.eco = --thinking-level low（v3.49.0 真实省：SSH/本机链强制浅思考）");
+    // 云端注入器真测：eco → ecoChoiceFor(levels) 映射该模型真实最低挡（开关系=off 关思考，真省零开销）
     const body = { model: "glm-5", messages: [] };
-    assert.strictEqual(levels.applyOpenAiThinking(body, { provider: "zhipu", model: "glm-5", choice: "eco" }), false, "GLM-5 eco 挡零注入");
-    assert.ok(!("thinking" in body) && !("reasoning_effort" in body), "请求体不残留思考参数");
+    assert.strictEqual(levels.applyOpenAiThinking(body, { provider: "zhipu", model: "glm-5", choice: "eco" }), true, "GLM-5 eco 挡 → 映射 off 注入（真实省）");
+    assert.deepStrictEqual(body.thinking, { type: "disabled" }, "GLM-5 eco=关思考注入（thinking.type=disabled）");
     const body2 = { model: "deepseek-chat", messages: [] };
-    assert.strictEqual(levels.applyOpenAiThinking(body2, { provider: "deepseek", model: "deepseek-chat", choice: "eco" }), false, "DeepSeek eco 挡零注入");
-    // Anthropic 原生链：eco 非预算挡 → 关
-    assert.strictEqual(levels.applyAnthropicThinking({ max_tokens: 8192 }, { provider: "anthropic", model: "claude-sonnet-4", choice: "eco" }), false, "Anthropic eco 挡零注入");
+    assert.strictEqual(levels.applyOpenAiThinking(body2, { provider: "deepseek", model: "deepseek-chat", choice: "eco" }), true, "DeepSeek eco 挡 → 映射 off 注入");
+    assert.deepStrictEqual(body2.thinking, { type: "disabled" }, "DeepSeek eco=关思考注入");
+    // xAI（grok 表仅 low/high，无 off）→ 映射 low
+    const body3 = { model: "grok-4", messages: [] };
+    assert.strictEqual(levels.applyOpenAiThinking(body3, { provider: "xai", model: "grok-4", choice: "eco" }), true, "xAI eco 挡 → 映射 low（无 off 时的次低挡）");
+    assert.strictEqual(body3.reasoning_effort, "low", "xAI eco=reasoning_effort low 强制浅思考");
+    // Anthropic 原生链：eco → off 归一 = 关扩展思考（不注入 thinking 字段=真实省）
+    const body4 = { max_tokens: 8192 };
+    assert.strictEqual(levels.applyAnthropicThinking(body4, { provider: "anthropic", model: "claude-sonnet-4", choice: "eco" }), false, "Anthropic eco → 关扩展思考");
+    assert.ok(!("thinking" in body4), "请求体不残留思考参数（关思考=零思考字段）");
+    // ecoChoiceFor 映射优先级真测（off → minimal → low → 兜底首挡）
+    assert.strictEqual(levels.ecoChoiceFor([{ id: "on" }, { id: "off" }, { id: "low" }]), "off", "ecoChoiceFor 优先级 off 最先（开关族直接关思考）");
+    assert.strictEqual(levels.ecoChoiceFor([{ id: "low" }, { id: "high" }]), "low", "ecoChoiceFor 无 off/minimal → low");
+    assert.strictEqual(levels.ecoChoiceFor([{ id: "on" }, { id: "dynamic" }]), "on", "ecoChoiceFor 兜底取挡位集首挡");
+    assert.strictEqual(levels.ecoChoiceFor([]), "", "ecoChoiceFor 空挡位集 → 空串（调用方 || choice 兜底）");
   });
 
-  await test("W3 云端 eco 显示层前置 + 空偏好对位默认挡（挡位表不动，注入天然安全）", () => {
-    assert.ok(rendererSrc.includes('const levels = [{ id: "eco", label: "ECO", hint: "零思考注入，最省 token（服务商默认挡位）" }, ...profile.levels];'), "云端 levels 前置拼装 eco（profile 原表零改动）");
+  await test("W3 云端 eco 显示层前置 + 空偏好对位默认挡（挡位表不动，v3.49.0 hint=真实省语义）", () => {
+    assert.ok(rendererSrc.includes('const levels = [{ id: "eco", label: "ECO", hint: "真实省 token：强制该模型最低思考（关思考或最低挡）" }, ...profile.levels];'), "云端 levels 前置拼装 eco（v3.49.0 hint 与主进程 ecoChoiceFor 同源真实省）");
     assert.ok(rendererSrc.includes('const defaultIdx = Math.max(0, levels.findIndex((l) => l.id === "off"));'), "空偏好（服务商默认）对位 off 挡，不落 eco");
     assert.ok(rendererSrc.includes("slider.value = String(choice ? Math.max(0, levels.findIndex((l) => l.id === choice)) : defaultIdx);"), "有偏好按记忆对位");
   });

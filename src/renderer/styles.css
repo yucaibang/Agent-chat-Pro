@@ -457,14 +457,18 @@ header p { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .tool-list.finalized:not(.expanded) .tool-card { display: none; }
 /* ── v3.47.0 折叠带：工具流执行中收纳（统计头实时跟账，明细点开才建、收起即清） ── */
 .tool-summary { align-self: flex-start; border: 1px solid #365044; border-radius: 8px; background: #1d2d26; color: #a9d6b6; padding: 6px 9px; font-size: 11px; cursor: pointer; user-select: none; }
+/* v3.49.0：执行中=黄（与折叠卡「未完成=黄」状态色一致；needs-permission 仍最高优先） */
+.tool-summary.running { border-color: #6d5a25; background: #2d2712; color: #e9cf8a; }
 .tool-summary.needs-permission { border-color: #68483e; background: #30231f; color: #efb1a5; }
 .tool-live-line { display: block; margin-top: 4px; color: #7ee0ae; font-size: 10px; letter-spacing: .2px; white-space: pre-wrap; overflow-wrap: anywhere; text-align: left; }
 .tool-omitted { margin: 2px 0; padding: 4px 9px; border: 1px dashed #365044; border-radius: 8px; background: #18221e; color: #7b8590; font-size: 10px; }
 .tool-card { display: grid; grid-template-columns: 25px minmax(0, 1fr) auto; align-items: center; gap: 6px; min-width: 270px; padding: 6px 8px; border: 1px solid var(--border-tool-card); border-radius: 9px; background: var(--bg-tool-card); white-space: normal; }
 .tool-icon { width: 22px; height: 22px; display: grid; place-items: center; border-radius: 50%; background: var(--bg-active); color: var(--text-secondary); font-size: 12px; }
+/* v3.49.0 折叠卡状态色（用户令）：成功=绿（与常显统计头一致）、未完成=黄、执行失败=红（原黄棕改红）、需授权=红（保持） */
 .tool-card.completed .tool-icon { background: #28543a; color: #9cdeb0; }
+.tool-card.running .tool-icon { background: #5c4a21; color: #f0d488; }
 .tool-card.denied .tool-icon { background: #5e342f; color: #f0afa6; }
-.tool-card.failed .tool-icon { background: #59472b; color: #e8c181; }
+.tool-card.failed .tool-icon { background: #5e342f; color: #f0afa6; }
 .tool-card strong, .tool-card small { display: block; }
 .tool-card strong { color: var(--text-secondary); font-size: 12px; font-weight: 600; }
 .tool-card small { color: var(--text-muted); font-size: 10px; margin-top: 1px; }
@@ -1057,8 +1061,23 @@ textarea { resize: vertical; min-height: 60px; }
 .think-panel { padding: 4px 6px 8px; }
 .think-model-row { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
 /* v3.25.1 顶行重写：连接模式•模型 工作模式英标 思考挡英标串变长（如 cloud•GLM 5.3 flash High-Risk Approval middle）
-   → 允许两行换行（word-break）替代单行截断截尾；#think-model 兜 title 全文；↻ 按钮固定右侧 */
-.think-model { font-size: 12px; font-weight: 600; color: var(--text-primary); padding: 6px 6px 10px; letter-spacing: .2px; line-height: 1.45; word-break: break-word; flex: 1 1 auto; min-width: 0; }
+   → 允许两行换行（word-break）替代单行截断截尾；#think-model 兜 title 全文；↻ 按钮固定右侧
+   v3.49.0（用户令）：①思考程度框长度缩短（不再拉满整行，max-width 55% 兜底）；②云端的单聊态
+   顶行可点=快捷切换模型（think-selectable 光标提示）；③右侧展开/收起符 ∨/∧（模型选择菜单） */
+.think-model { font-size: 12px; font-weight: 600; color: var(--text-primary); padding: 6px 6px 10px; letter-spacing: .2px; line-height: 1.45; word-break: break-word; flex: 1 1 auto; min-width: 0; max-width: 55%; }
+.think-model.think-selectable { color: var(--text-secondary); cursor: pointer; }
+.think-model.think-selectable:hover { color: var(--accent, #4f8ef7); }
+.think-model-arrow { flex: 0 0 auto; padding: 2px 7px; border: 0; border-radius: 6px; background: transparent; color: var(--text-secondary); font-size: 12px; line-height: 1.4; cursor: pointer; transition: all .12s; }
+.think-model-arrow:hover { background: var(--bg-input); color: var(--accent, #4f8ef7); }
+/* v3.49.0 模型快捷选择浮层（仅云端单聊态显示）：分「视觉 / 文本」两组，组内按官方 /models 返回序排 */
+.think-model-popover { margin: 2px 0 8px; border: 1px solid var(--border-popover); border-radius: 9px; background: var(--bg-mode-dropdown); padding: 6px; max-height: 240px; overflow-y: auto; display: flex; flex-direction: column; gap: 4px; }
+.think-model-group-label { font-size: 10.5px; color: var(--text-tertiary); letter-spacing: .4px; padding: 2px 4px; position: sticky; top: -6px; background: var(--bg-mode-dropdown); z-index: 1; }
+.think-model-item { display: flex; align-items: center; gap: 7px; padding: 6px 8px; border-radius: 7px; cursor: pointer; color: var(--text-secondary); font-size: 12px; transition: background .12s; }
+.think-model-item:hover { background: var(--bg-active); }
+.think-model-item.active { background: var(--bg-mode-item-active); color: #9eeaaa; }
+.think-model-item .think-model-item-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.think-model-item .think-model-item-tag { flex: 0 0 auto; font-size: 9.5px; padding: 1px 6px; border-radius: 999px; background: color-mix(in srgb, #3b82f6 16%, transparent); color: #6f9fe6; }
+.think-model-note { font-size: 11px; color: var(--text-tertiary); font-style: italic; padding: 4px 4px; }
 .think-reset { flex: 0 0 auto; margin: 4px 4px 0 0; padding: 2px 7px; border: 0; border-radius: 6px; background: transparent; color: var(--text-secondary); font-size: 13px; line-height: 1.4; cursor: pointer; transition: all .12s; }
 .think-reset:hover { background: var(--bg-input); color: var(--accent, #4f8ef7); }
 /* v3.24.2 挡位条重做（用户拍板参考 IMG_2679）：粗条轨道 + 三层背景渐变 + 滑动过渡动画
@@ -1135,7 +1154,9 @@ textarea { resize: vertical; min-height: 60px; }
 .think-tick.eco.active { background: #86efac; }
 /* v3.25.1：挡位文案改绝对定位与刻度点/thumb 同几何（translateX(-50%) 锚中心）——
    原 flex space-between 的文字中心与 thumb 中心存在系统性偏差（首尾挡最明显），本版三点重合 */
-.think-levels { position: relative; height: 20px; margin-top: 2px; }   /* v3.25.4 用户令「拉长」：17px/-2px → 20px/+2px */
+/* v3.49.0（用户令面板重排）#think-levels 移到轨道上方：挡位文案行与思考程度框（轨道）一起
+   处于窗口上半部；margin 改上 6px / 下 1px 顶住轨道；行内文字仍三点重合绝对定位，几何不受顺序影响 */
+.think-levels { position: relative; height: 20px; margin-top: 6px; margin-bottom: 1px; }
 .think-level {
   position: absolute; top: 0;
   transform: translateX(-50%);
@@ -1147,7 +1168,8 @@ textarea { resize: vertical; min-height: 60px; }
 .think-egg { padding: 4px 6px 2px; font-size: 12px; text-align: center; color: #facc15; opacity: 0; transform: translateY(3px); transition: opacity .26s ease, transform .26s ease; }
 .think-egg.show { opacity: 1; transform: translateY(0); }
 .think-unsupported { font-size: 12px; color: var(--text-secondary); opacity: .8; }
-.think-meta { font-size: 11.5px; color: var(--text-secondary); line-height: 1.55; padding: 8px 6px 0; opacity: .9; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* v3.49.0（用户令）：说明文案（#think-meta）挪到面板最下并居中（不再 nowrap 截尾——底部空间富余，允许换行） */
+.think-meta { font-size: 11.5px; color: var(--text-secondary); line-height: 1.55; padding: 8px 6px 2px; opacity: .9; text-align: center; }
 /* v3.25.1 简洁化（用户令）：「当前挡位：X」行删除（挡位名由下方 active 文案+顶行英文标承担），挡位名焦点样式一并移除 */
 .think-divider { height: 1px; background: var(--border-sidebar); margin: 10px 6px; opacity: .6; }
 .think-modes { display: flex; gap: 6px; padding: 0 6px; flex-wrap: wrap; }
@@ -1155,6 +1177,9 @@ textarea { resize: vertical; min-height: 60px; }
 .think-mode-chip:hover { background: var(--bg-input); color: var(--text-primary); }
 .think-mode-chip.active { background: var(--accent, #4f8ef7); border-color: var(--accent, #4f8ef7); color: #fff; font-weight: 600; }
 .think-mode-chip-icon { font-size: 13px; }
+/* v3.49.0：侧边栏模式选择器移除后的承接——自定义模式「编辑 / 导入 / 导出」入口迁入
+   思考面板工作模式行尾（小号 chips，不参与内置模式三 chip 的均分拉伸） */
+.think-mode-manage { flex: 0 0 auto; padding: 6px 8px; font-size: 11px; color: var(--text-tertiary); border-style: dashed; }
 /* v3.24.1：常显思考徽标移除，徽标态样式（.composer-mode-trigger.unsupported）一并清理 */
 /* ── v3.24.0 思考过程折叠块（气泡内 details） ── */
 .thinking-block { margin: 0 0 4px; padding: 6px 10px; border: 1px solid var(--border-sidebar); border-radius: 8px; background: var(--bg-deep); font-size: 12.5px; overflow: hidden; }
@@ -1432,6 +1457,38 @@ body.devpanel-absent .dev-panel, body.devpanel-absent .dev-rail { display: none 
 #at-popover .at-hint { padding: 4px 8px 2px; font-size: 11px; color: var(--text-muted); }
 /* ── v3.40.0：新手向导（三段分流） ── */
 #onboarding-dialog { width: min(520px, 92vw); }
+
+/* ══════════════════ v3.49.0 滚动条随主题（浅色不再显黑） ══════════════════
+   用户报：切浅色（白色）主题后，拉动框（滚动条）在任意位置出现时仍是黑色——
+   根因两面：①:root 只有 color-scheme:dark，data-theme="light" 没跟 color-scheme:light，
+   原生滚动条/下拉等 UA 控件照深色渲染；②全局零自定义滚动条样式，thumb 一律系统黑。
+   修复 = 双管齐下：light 块补 color-scheme:light（原生控件随主题）+ 全局自定义滚动条
+   （thumb 用主题变量，深浅自动跟随应用的强调色/中性色系，不再固定黑色）。 */
+:root[data-theme="light"] { color-scheme: light; }
+
+*::-webkit-scrollbar { width: 10px; height: 10px; }
+*::-webkit-scrollbar-track { background: transparent; }
+*::-webkit-scrollbar-thumb { background: var(--border-popover, #3c474d); border-radius: 6px; }
+*::-webkit-scrollbar-thumb:hover { background: var(--text-dim, #697572); }
+*::-webkit-scrollbar-corner { background: transparent; }
+
+/* ── v3.49.0 侧边栏：工作模式选择器已移除（#mode-selector 块删；.mode-* 系列样式保留为
+   孤儿无害态——面板/顶行英文标与 v3.49.0 前对齐的 UI 仍有 mode 相关类名引用兜底） ── */
+
+/* ── v3.49.0 侧栏底部更新提醒条（启动静默检测发现新版本时出现，点击直达关于页开始更新） ── */
+.update-toast {
+  display: block; width: 100%; margin: 0; padding: 9px 10px; text-align: left;
+  border: 1px solid #7f2d26; border-radius: 9px; background: #5c1f1a; color: #ffb3a8;
+  font-size: 12px; line-height: 1.4; cursor: pointer; transition: background .15s, border-color .15s;
+}
+.update-toast:hover { background: #742620; border-color: #a33c33; }
+
+/* ── v3.49.0 颜色板（外观设置） ── */
+.appearance-section .accent-palette-row { display: flex; gap: 12px; align-items: stretch; margin-top: 8px; }
+#accent-palette-canvas { flex: 0 0 auto; width: 300px; height: 124px; border-radius: 10px; border: 1px solid var(--border-popover); cursor: crosshair; display: block; background: #000; }
+.accent-palette-side { display: flex; flex-direction: column; gap: 8px; flex: 1 1 auto; min-width: 0; align-items: stretch; }
+.accent-palette-preview { height: 34px; border-radius: 9px; border: 1px solid var(--border-popover); background: var(--accent); display: block; }
+.accent-palette-hex { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; color: var(--text-secondary); text-align: center; }
 
 /* ══════════════════ v3.46.0 全局动效层 ══════════════════
    用户令动效整包：所有菜单/弹窗开合、上拉（模式弹窗）/下拉（首部菜单）栏、侧栏与开发面板真伸缩、

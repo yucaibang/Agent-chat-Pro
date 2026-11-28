@@ -82,8 +82,9 @@ const ENERGY_MAP = {
 /** 思考等级映射 */
 const THINKING_MAP = {
   none: "",
-  // v3.24.2：eco 挡=节能零思考注入，CLI 层与默认同（不传 --thinking-level，省 token 靠 CLI 默认策略）
-  eco: "",
+  // v3.24.2 曾=零注入（CLI 与默认同）——v3.49.0 用户实测实锤虚假节省（默认档 vs eco 档
+  // 同发一个问号 token 仅差 15）：零注入=服务商用默认高挡思考。改真实省：eco 强制浅思考档
+  eco: "--thinking-level low",
   low: "--thinking-level low",
   medium: "--thinking-level medium",
   high: "--thinking-level high"

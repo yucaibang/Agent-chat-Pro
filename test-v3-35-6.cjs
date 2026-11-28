@@ -199,8 +199,9 @@ async function runStaticTests() {
     assert.ok(stylesSrc.includes(".workspace-item .workspace-check[hidden]") , "✔ 未选中隐藏规则在册");
     assert.ok(stylesSrc.includes(".workspace-item.active"), "选中态样式在册");
   });
-  await test("4.3 旧模式下拉（mode-selector）不受影响（并存不冲突）", () => {
-    assert.ok(indexHtmlSrc.includes('id="mode-selector"') && stylesSrc.includes(".mode-dropdown"), "工作模式下拉完整保留");
+  await test("4.3 旧模式侧栏下拉（mode-selector）已随 v3.49.0 任务#5 删除（工作区选择器不背锅）", () => {
+    assert.ok(!indexHtmlSrc.includes('id="mode-selector"') && !indexHtmlSrc.includes('id="mode-list"'), "侧栏模式选择块整体删除（模式编辑/导入/导出迁思考面板 manage chips）");
+    assert.ok(stylesSrc.includes(".workspace-dropdown"), "工作区下拉样式保留（本组主角不受影响）");
   });
 
   /* ── 第 5 组：渲染层群聊 UI 断言（模块三四 + 红线①） ── */

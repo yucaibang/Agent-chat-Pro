@@ -183,7 +183,7 @@ function validateMaxTokens(value) {
 }
 
 function validateThinkingLevel(value) {
-  // v3.24.2：加入 eco 挡（节能零思考注入，CLI 与默认同=不传 --thinking-level）
+  // v3.24.2：加入 eco 挡；v3.49.0：eco 改真实省（--thinking-level low，旧零注入口径已证伪）
   return ["eco", "none", "low", "medium", "high"].includes(value) ? value : "none";
 }
 

@@ -393,6 +393,12 @@ function clampAppearanceRange(value, min, max, fallback) {
   return Math.min(max, Math.max(min, Math.round(num)));
 }
 
+/** v3.49.0 颜色板强调色归一：仅接受 #rrggbb（大小写不敏感），非法/空 → ""（默认主题色） */
+function normalizeAccentColor(value) {
+  const text = String(value || "").trim();
+  return /^#[0-9a-f]{6}$/i.test(text) ? text.toLowerCase() : "";
+}
+
 function normalizeAtomcodePort(value) {
   const port = Number(value);
   return Number.isInteger(port) && port >= 1 && port <= 65535 ? port : 13456;
@@ -534,6 +540,8 @@ function getSettings() {
     advancedEffective: advancedEffective(advancedState),
     // 主题
     theme: raw.theme || "dark",
+    // v3.49.0 外观自定义强调色（颜色板取色）：#rrggbb / 空=默认
+    accentColor: normalizeAccentColor(raw.accentColor),
     // 背景设置
     backgroundImage: raw.backgroundImage || "",
     backgroundBlur: clampAppearanceRange(raw.backgroundBlur, 0, 30, 0),
@@ -725,6 +733,8 @@ function saveSettings(input) {
     advanced: sanitizeAdvanced(input.advanced !== undefined ? input.advanced : previous.advanced),
     // 主题
     theme: input.theme || previous.theme || "dark",
+    // v3.49.0 外观自定义强调色（颜色板取色）：input 显式带（含清空=""）才接管
+    accentColor: input.accentColor !== undefined ? normalizeAccentColor(input.accentColor) : (previous.accentColor || ""),
     // 背景
     backgroundImage: input.backgroundImage !== undefined ? input.backgroundImage : previous.backgroundImage || "",
     backgroundBlur: input.backgroundBlur !== undefined ? clampAppearanceRange(input.backgroundBlur, 0, 30, 0) : clampAppearanceRange(previous.backgroundBlur, 0, 30, 0),

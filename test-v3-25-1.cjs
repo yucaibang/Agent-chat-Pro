@@ -411,24 +411,24 @@ async function runVmSmokeTests() {
       ["ssh", "GLM 5.3 flash", "automatic", "medium", "ssh•GLM 5.3 flash auto middle"],
       ["ssh", "GLM 5.3 flash", "automatic", "high", "ssh•GLM 5.3 flash auto high"],
       ["cloud", "GLM 5.3 flash", "automatic", "ultra", "cloud•GLM 5.3 flash auto ultra"], // 云端特有挡
-      ["cloud", "GLM 5.3 flash", "automatic", "max", "cloud•GLM 5.3 flash auto Max"], // 云端特有挡
-      // 高危审批（regular→High-Risk Approval）
-      ["ssh", "GLM 5.3 flash", "regular", "eco", "ssh•GLM 5.3 flash High-Risk Approval eco"],
-      ["ssh", "GLM 5.3 flash", "regular", "off", "ssh•GLM 5.3 flash High-Risk Approval"],
-      ["ssh", "GLM 5.3 flash", "regular", "medium", "ssh•GLM 5.3 flash High-Risk Approval middle"],
-      // 按需审批（eco→On-Demand Approval）
-      ["ssh", "GLM 5.3 flash", "eco", "eco", "ssh•GLM 5.3 flash On-Demand Approval eco"],
+      ["cloud", "GLM 5.3 flash", "automatic", "max", "cloud•GLM 5.3 flash auto max"], // 云端特有挡（v3.49.0 任务#3：英文挡标统一小写）
+      // 高危审批（regular→high-risk approval；v3.49.0 任务#3：英文标统一小写）
+      ["ssh", "GLM 5.3 flash", "regular", "eco", "ssh•GLM 5.3 flash high-risk approval eco"],
+      ["ssh", "GLM 5.3 flash", "regular", "off", "ssh•GLM 5.3 flash high-risk approval"],
+      ["ssh", "GLM 5.3 flash", "regular", "medium", "ssh•GLM 5.3 flash high-risk approval middle"],
+      // 按需审批（eco→on-demand approval；v3.49.0 小写统一）
+      ["ssh", "GLM 5.3 flash", "eco", "eco", "ssh•GLM 5.3 flash on-demand approval eco"],
       // 本机连接 + 自定义模式（无英标省略）+ 空模型域
-      ["local", "GLM 5.6", "regular", "high", "local•GLM 5.6 High-Risk Approval high"],
-      ["ssh", "", "regular", "medium", "ssh•High-Risk Approval middle"], // 模型待取：模型域自动省略
+      ["local", "GLM 5.6", "regular", "high", "local•GLM 5.6 high-risk approval high"],
+      ["ssh", "", "regular", "medium", "ssh•high-risk approval middle"], // 模型待取：模型域自动省略
       ["cloud", "", "custom-mode", "off", "cloud•未设置模型"] // 自定义模式无英标+未设置模型占位
     ];
     for (const [conn, model, modeId, levelId, expect] of CASES) {
       assert.strictEqual(top(conn, model, modeId, levelId), expect, `composeThinkTop(${conn},${model || '∅'},${modeId},${levelId})`);
     }
     assert.strictEqual(sandbox.__acpSmoke.WORK_MODE_EN.automatic, "auto", "完全权限→auto");
-    assert.strictEqual(sandbox.__acpSmoke.WORK_MODE_EN.regular, "High-Risk Approval", "高危审批→High-Risk Approval");
-    assert.strictEqual(sandbox.__acpSmoke.WORK_MODE_EN.eco, "On-Demand Approval", "按需审批→On-Demand Approval");
+    assert.strictEqual(sandbox.__acpSmoke.WORK_MODE_EN.regular, "high-risk approval", "高危审批→high-risk approval（v3.49.0 小写统一）");
+    assert.strictEqual(sandbox.__acpSmoke.WORK_MODE_EN.eco, "on-demand approval", "按需审批→on-demand approval（v3.49.0 小写统一）");
     assert.strictEqual(sandbox.__acpSmoke.THINK_LEVEL_EN.off, "", "默认挡不加英文");
     assert.strictEqual(sandbox.__acpSmoke.THINK_LEVEL_EN.xhigh, "xhigh", "GLM5「超高」用户表未列→补字面 xhigh（汇报说明项）");
     assert.strictEqual(sandbox.__acpSmoke.THINK_LEVEL_EN.on, "", "kimi/qwen「开」=默认态不加英文");
@@ -468,7 +468,7 @@ async function runSourceTests() {
     assert.ok(!stylesSrc.includes(".think-ticks { position: absolute; inset: 0;"), "inset:0 形态清除（垂直偏移源）");
     assert.ok(stylesSrc.includes(".think-tick.eco"), "eco 刻度点绿系");
     assert.ok(stylesSrc.includes("transform: translateX(-50%)"), "文案中心锚定（对齐刻度）");
-    assert.ok(stylesSrc.includes(".think-levels { position: relative; height: 20px; margin-top: 2px; }"), "文案行定高容器（v3.25.4 拉长 20px/+2px）");
+    assert.ok(stylesSrc.includes(".think-levels { position: relative; height: 20px; margin-top: 6px; margin-bottom: 1px; }"), "文案行定高容器（v3.49.0 任务#2/3：缩短间距+文案挪到轨道上方，margin-top 2→6px、margin-bottom 1px）");
     assert.ok(stylesSrc.includes("width: 460px;"), "浮层定宽 460px（v3.25.5 用户复验「没拉宽」→ min-width 无效改定宽硬拉）");
     // v3.35.8：扫描收窄到思考面板区段（.think-panel … .think-group-slider）——原全域字符串扫描误伤
     // 其他组件的 min-width（如空态容器 .empty-state { min-width: 300px }，与浮层撑宽路线无关）
@@ -541,11 +541,12 @@ async function runVersionTests() {
       "三内置 name 域旧名全清除（desc 保留「原 XX」溯引帮助老用户认知）"
     );
     assert.strictEqual(BUILTIN_MODES.automatic.name.indexOf("自动化"), -1, "「自动化模式」退场");
-    assert.ok(indexSrc.includes('id="mode-name">高危审批') && indexSrc.includes("🛡 高危审批"), "index.html 静态模式文案同步");
+    assert.ok(!indexSrc.includes('id="mode-name">高危审批') && !indexSrc.includes('id="mode-selector"'), "v3.49.0 任务#5：侧栏模式选择块整体删除（模式切换唯一入口=输入栏浮层弹出菜单，编辑/导入/导出迁思考面板 manage chips）");
+    assert.ok(indexSrc.includes('id="composer-mode-selector"'), "输入栏浮层模式入口完整保留（侧栏删除只砍入口块）");
     assert.ok(!indexSrc.includes("常规模式"), "旧静态文案清除");
     assert.ok(rendererSrc.includes("modelEl.textContent = composeThinkTop("), "云端顶行唯一写入=composeThinkTop 全串");
     assert.ok(rendererSrc.includes("modelEl.textContent = stampTop("), "SSH/本机顶行走 stampTop（含后台渐显重拼）");
-    assert.ok(rendererSrc.includes('const WORK_MODE_EN = { automatic: "auto", regular: "High-Risk Approval", eco: "On-Demand Approval" };'), "工作模式英标映射表在册");
+    assert.ok(rendererSrc.includes('const WORK_MODE_EN = { automatic: "auto", regular: "high-risk approval", eco: "on-demand approval" };'), "工作模式英标映射表在册（v3.49.0 小写统一）");
     assert.ok(rendererSrc.includes("meta.innerHTML = \"\";"), "「当前挡位」行已删（用户令简洁化）");
   });
 

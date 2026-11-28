@@ -578,7 +578,9 @@ function updateConnectionModeUI() {
       ? "通过自定义命令接入本机终端 AI。"
       : "直接使用这台 Windows 电脑上的 Claude Code。")
     : "通过 SSH 使用 NAS 或服务器上的 Agent CLI（当前适配 Claude Code）。";
-  document.querySelector("#connection-subtitle").textContent = isCloud
+  // v3.49.0 任务#6：头部副标题（"和 Agent 对话…"+#connection-subtitle）已删——守卫空转
+  const connectionSubtitle = document.querySelector("#connection-subtitle");
+  if (connectionSubtitle) connectionSubtitle.textContent = isCloud
     ? "使用云端 AI API 聊天（无需本地 CLI）"
     : isLocal
     ? (localEngine === "atomcode" ? "使用本机 AtomCode" : localEngine === "custom" ? "使用本机自定义命令" : "使用本机 Windows 上的 Agent CLI")
@@ -1697,7 +1699,8 @@ function refreshToolSummary(list) {
   if (ledger.summary) ledger.summary.remove();
   const summary = document.createElement("button");
   summary.type = "button";
-  summary.className = `tool-summary${denied ? " needs-permission" : ""}`;
+  // v3.49.0 任务#7：折叠卡状态色——执行中=黄、需授权=红（denied）、完成=绿（默认）；可叠加
+  summary.className = `tool-summary${running ? " running" : ""}${denied ? " needs-permission" : ""}`;
   summary.textContent = parts.join(" · ");
   summary.title = "点击展开/收起命令明细";
   summary.addEventListener("click", () => toggleToolList(list));
@@ -3444,6 +3447,48 @@ if (aboutCheckUpdateButton && aboutUpdateStatus) {
   });
 }
 
+// ── v3.49.0 任务#10 启动自动检测新版 + 侧栏底部红条提醒 ──────────
+// 每次打开应用静默检测一次（延时 4s 等 boot/edition 门控就位；Bridge Edition 版本线
+// 1.x 与主版 3.x 不同源，检测必误报——点击流程同款收口）；检到 update 态才亮红条，
+// 失败/latest 全静默不弹。红条点击 → 跳设置中心关于页 → 复用「检测更新」按钮同一实现
+// 跑检测 → 轮询检测结果，检到新版即自动开始下载安装（用户原话「检测完更新就开始做更新的东西」）。
+const updateToast = document.querySelector("#update-toast");
+let startupUpdateFlowActive = false;
+
+if (updateToast) {
+  updateToast.addEventListener("click", async () => {
+    if (startupUpdateFlowActive) return;
+    startupUpdateFlowActive = true;
+    updateToast.hidden = true;
+    await openSettings();
+    switchSettingsTab("about");
+    if (!aboutCheckUpdateButton) { startupUpdateFlowActive = false; return; }
+    aboutCheckUpdateButton.click(); // 复用关于页检测体（文案/线路选择/disabled 态同源）
+    const updateFlowTimer = setInterval(() => {
+      if (aboutUpdateCheckResult && aboutUpdateCheckResult.status === "update") {
+        clearInterval(updateFlowTimer);
+        startupUpdateFlowActive = false;
+        runAboutUpdateDownload(); // 检测完自动开始更新（下载校验安装全链复用）
+      } else if (!aboutCheckUpdateButton.disabled) {
+        // 检测已结束但非 update 态（latest/失败/缺失）——停在关于页给用户看详情，不自动更新
+        clearInterval(updateFlowTimer);
+        startupUpdateFlowActive = false;
+      }
+    }, 400);
+  });
+}
+
+setTimeout(async () => {
+  if (editionState.edition === "bridge") return; // 应用内更新仅主版（applyEdition 门控同语义）
+  try {
+    const result = await window.agentChatPro.checkUpdate();
+    if (result && result.status === "update" && updateToast) {
+      updateToast.textContent = `🆕 发现新版本 v${result.remoteVersion} · 点击立即更新`;
+      updateToast.hidden = false;
+    }
+  } catch { /* 静默：启动检测失败不惊扰用户，关于页手动检测仍可用 */ }
+}, 4000);
+
 // ── v3.15.8 关于页彩蛋：点击「Agent Chat Pro」标题弹出跳跳龙小游戏 ──
 // 阉割版 Bridge Edition：easterEgg 门控关闭 → 不注册点击（主进程 app:open-dino-game 也不注册）
 if (editionState.gates.easterEgg !== false) {
@@ -4960,8 +5005,11 @@ function closeComposerModePopup() {
 // v3.24.0 输入栏模式选择 → 思考调节（Codex 风格面板：上=模型名，下滑条按模型原生挡位；底部=工作模式快捷 chips）。
 // 挡位表主进程 thinking-levels.cjs 维护（provider+model 匹配，四字段族映射注入）；SSH/本机 claude 走工作模式 thinkingLevel。
 // v3.24.2：挡位序 eco 最前（用户拍板）→ 默认 → 强度递增；文案统一 轻度/中等/最高
+// v3.49.0：ECO 改真实省（原「零注入」被用户实测证伪：默认档 vs eco 档同发一个问号 token 仅差 15
+// ——零注入=服务商用默认高挡思考）。云端映射该模型最低挡（开关族 off/effort 族 minimal|low），
+// SSH/本机 claude 强制 --thinking-level low（主进程 mode-defaults THINKING_MAP 同步改）。
 const THINK_SSH_LEVELS = [
-  { id: "eco", label: "ECO", hint: "零思考注入，最省 token（CLI 与默认挡一致）" },
+  { id: "eco", label: "ECO", hint: "真实省 token：强制浅思考（--thinking-level low）" },
   { id: "off", label: "默认", hint: "不传 --thinking-level（CLI 默认）" },
   { id: "low", label: "轻度", hint: "较浅思考，省 token 且更快" },
   { id: "medium", label: "中等", hint: "常规深度（Claude 默认档位）" },
@@ -5004,8 +5052,9 @@ let thinkModelCache = null; // { model: string, at: number }
 // v3.25.1 顶行体系（用户令 2026-10-24）：（连接模式）•（模型 工作模式英文标 思考挡英文标）——例 ssh•GLM 5.3 flash auto eco；
 // 「当前挡位」行删除（挡位名由下方 active 文案+顶行英文标承担）。工作模式三改 id 保留（完全权限 auto/高危审批 High-Risk Approval/按需审批 On-Demand Approval）；
 // 思考挡英标：默认(off)不加字/eco/low/middle/high；ultra/Max 仅云端挡位表存在；kimi/qwen 的 on（开=默认态）同 off 无标；GLM5「超高」(xhigh) 用户表未列，补字面 xhigh。
-const WORK_MODE_EN = { automatic: "auto", regular: "High-Risk Approval", eco: "On-Demand Approval" };
-const THINK_LEVEL_EN = { eco: "eco", off: "", low: "low", medium: "middle", high: "high", xhigh: "xhigh", ultra: "ultra", max: "Max", on: "" };
+// v3.49.0（用户令「解决大小写问题」）：顶行英标统一小写（high-risk approval / on-demand approval / max）。
+const WORK_MODE_EN = { automatic: "auto", regular: "high-risk approval", eco: "on-demand approval" };
+const THINK_LEVEL_EN = { eco: "eco", off: "", low: "low", medium: "middle", high: "high", xhigh: "xhigh", ultra: "ultra", max: "max", on: "" };
 const composeThinkTop = (conn, model, modeId, levelId) => {
   const connLabel = conn === "cloud" ? "cloud" : conn === "local" ? "local" : "ssh";
   const modeEn = WORK_MODE_EN[modeId] || ""; // 自定义模式无英标：省略，模型名原样
@@ -5241,7 +5290,7 @@ async function refreshComposerModePopup() {
         } catch { /* 存档失败静默（挡位重读=池存档） */ }
       });
       wrap.append(slider, ticksRow);
-      section.append(wrap, labelsRow);
+      section.append(labelsRow, wrap); // v3.49.0 任务#3：挡位文案移到轨道上方（与单聊一致）
       return section;
     }
     const model = node.cloud?.model || "";
@@ -5290,13 +5339,21 @@ async function refreshComposerModePopup() {
       } catch { /* 存档失败静默（挡位重读=池存档） */ }
     });
     wrap.append(slider, ticksRow);
-    section.append(wrap, labelsRow, costRow);
+    section.append(labelsRow, wrap, costRow); // v3.49.0 任务#3：挡位文案移到轨道上方（与单聊一致）
     return section;
   };
   const renderGroupThinkPanel = async (stamp) => {
     const trackWrap = document.querySelector(".think-track-wrap");
     const resetBtn = document.querySelector("#think-reset");
     const groupRows = document.querySelector("#think-group-rows");
+    // v3.49.0：群聊态模型快捷切换让位给逐成员挡位（modelEl 点击=展开成员堆叠）——
+    // 收起模型浮层+隐藏箭头+去除顶行可点态
+    const arrowGroupEl = document.querySelector("#think-model-arrow");
+    const popoverGroupEl = document.querySelector("#think-model-popover");
+    if (arrowGroupEl) arrowGroupEl.hidden = true;
+    if (popoverGroupEl) { popoverGroupEl.hidden = true; popoverGroupEl.replaceChildren(); }
+    modelEl.classList.remove("think-selectable");
+    thinkModelSwitcherOpen = false;
     levelsRow.replaceChildren();
     meta.innerHTML = "";
     if (trackWrap) trackWrap.hidden = true;
@@ -5339,6 +5396,171 @@ async function refreshComposerModePopup() {
     }
   };
 
+  // ── v3.49.0 模型快捷选择（任务#4，用户令）：云端的单聊态点「思考程度框文案」弹出选择框 ──
+  // 数据=官方 GET /models 实拉（与设置中心「拉取」同链 fetchCloudModels，密钥留空主进程兜底已存）；
+  // 分类分「视觉 / 文本」两组按返回序排（命中视觉命名词根→视觉组）；顶行右侧展开「∧」收起「∨」。
+  // 豆包无列表端点→回退内置在役清单；拉取其他失败→同样回退内置清单并如实标注。
+  let thinkModelSwitcherOpen = false;
+  let renderThinkModelPopoverSeq = 0; // 浮层拉取竞态序号（独立于面板 thinkModelStamp，防相互作废）
+  const thinkModelSwitcherCtx = { provider: "", model: "", bound: false };
+
+  /** 视觉模型词根表（命中→视觉组）：各家官方视觉系命名实锤清单 + 通用 vision/vl 词根 */
+  const THINK_VISION_MODEL_RE = [
+    /vision/i,
+    /^glm-[\d.]+v(?:[-.].*)?$/i,   // 智谱 glm-5v-turbo / glm-4.6v / glm-4.1v-thinking-flash / glm-4v-flash
+    /(?:^|[-.])vl(?:[-.]|$)/i,     // qwen-vl 系（QwenVL / -vl-）
+    /^gpt-4o(?:-.*)?$/i,           // OpenAI 4o 全模态
+    /omni/i,
+    /^deepseek-flash$/i            // DeepSeek V4.1-Flash（官方标注支持视觉）
+  ];
+  const isThinkVisionModel = (value) => {
+    const id = String(value || "").toLowerCase();
+    return THINK_VISION_MODEL_RE.some((re) => re.test(id));
+  };
+  const splitThinkModelGroups = (models) => {
+    const vision = [];
+    const text = [];
+    for (const m of Array.isArray(models) ? models : []) {
+      (isThinkVisionModel(m?.value) ? vision : text).push(m);
+    }
+    return { vision, text };
+  };
+
+  const setThinkModelSwitcher = (open) => {
+    thinkModelSwitcherOpen = open;
+    const arrowEl = document.querySelector("#think-model-arrow");
+    const popoverEl = document.querySelector("#think-model-popover");
+    if (arrowEl) arrowEl.textContent = open ? "∧" : "∨";
+    if (popoverEl) {
+      popoverEl.hidden = !open;
+      if (open && thinkModelSwitcherCtx.provider) {
+        renderThinkModelPopover(popoverEl, thinkModelSwitcherCtx.provider, thinkModelSwitcherCtx.model, null);
+      }
+    }
+  };
+
+  const bindThinkModelSwitcher = (provider, model) => {
+    thinkModelSwitcherCtx.provider = provider;
+    thinkModelSwitcherCtx.model = model;
+    if (thinkModelSwitcherCtx.bound) return; // 面板重建复用静态骨架：事件只绑一次，ctx 每次刷新
+    thinkModelSwitcherCtx.bound = true;
+    modelEl.classList.add("think-selectable");
+    modelEl.title = "点击切换模型（按官方模型列表，分视觉 / 文本两组）";
+    const toggle = () => setThinkModelSwitcher(!thinkModelSwitcherOpen);
+    modelEl.addEventListener("click", toggle);
+    document.querySelector("#think-model-arrow")?.addEventListener("click", (event) => {
+      event.stopPropagation();
+      toggle();
+    });
+  };
+
+  async function renderThinkModelPopover(popoverEl, provider, currentModel, snapshot) {
+    popoverEl.replaceChildren();
+    const loading = document.createElement("div");
+    loading.className = "think-model-note";
+    loading.textContent = "正在拉取该密钥可用的模型…";
+    popoverEl.append(loading);
+    let models = null;
+    let failReason = "";
+    try {
+      const result = await window.agentChatPro.fetchCloudModels({ provider, baseUrl: (CLOUD_PROVIDERS[provider] || {}).baseUrl || "" });
+      if (result?.ok && Array.isArray(result.models) && result.models.length) models = result.models;
+      else failReason = String(result?.reason || "拉取失败，请检查密钥和网络");
+    } catch (error) {
+      failReason = String(error?.message || error);
+    }
+    let usedFallback = false;
+    if (!models && Array.isArray((CLOUD_PROVIDERS[provider] || {}).models) && (CLOUD_PROVIDERS[provider] || {}).models.length) {
+      models = CLOUD_PROVIDERS[provider].models; // 豆包无列表端点/其它失败：回退内置在役清单
+      usedFallback = true;
+    }
+    popoverEl.replaceChildren();
+    if (!models) {
+      const fail = document.createElement("div");
+      fail.className = "think-model-note";
+      fail.textContent = `⚠️ ${failReason || "暂无可用模型清单"}`;
+      popoverEl.append(fail);
+      return;
+    }
+    if (usedFallback) {
+      const note = document.createElement("div");
+      note.className = "think-model-note";
+      note.textContent = failReason ? `ℹ️ ${failReason}，已用内置在役清单` : "ℹ️ 该服务商无模型列表接口，显示内置在役清单";
+      popoverEl.append(note);
+    }
+    // custom 手填框语义不进快捷菜单（模型任意粘贴由设置中心承载）
+    if (provider === "custom") {
+      const note = document.createElement("div");
+      note.className = "think-model-note";
+      note.textContent = "自定义服务商请在「连接设置 → 云端 AI」填写 Model ID";
+      popoverEl.append(note);
+      return;
+    }
+    const seq = ++renderThinkModelPopoverSeq; // 拉取期间面板可能重开关：仅最新一帧可渲染（独立序号，不劫 thinkModelStamp）
+    const { vision, text } = splitThinkModelGroups(models);
+    const buildGroup = (labelText, list) => {
+      if (!list.length) return null;
+      const wrap = document.createElement("div");
+      const label = document.createElement("div");
+      label.className = "think-model-group-label";
+      label.textContent = `${labelText} · ${list.length}`;
+      wrap.append(label);
+      for (const m of list) {
+        const item = document.createElement("div");
+        item.className = "think-model-item";
+        if (String(m.value) === String(currentModel)) item.classList.add("active");
+        const name = document.createElement("span");
+        name.className = "think-model-item-name";
+        name.textContent = String(m.value || "");
+        item.append(name);
+        if (m.label && m.label !== m.value) name.title = String(m.label);
+        // 保守：label 全文兜 title；视觉项加小标签（内置清单已有「（视觉）」标注，API 拉取项按词根判定）
+        if (isThinkVisionModel(m.value) && !/视觉/.test(String(m.label || ""))) {
+          const tag = document.createElement("span");
+          tag.className = "think-model-item-tag";
+          tag.textContent = "视觉";
+          item.append(tag);
+        }
+        item.addEventListener("click", async () => {
+          try {
+            const fresh = await window.agentChatPro.loadSettings();
+            const providerNow = fresh.cloudAiProvider || "zhipu";
+            await window.agentChatPro.saveSettings({ ...fresh, cloudAiModel: String(m.value || "") });
+            // 设置页模型下拉同步（在场即补选项，防快捷选的模型不在静态清单里被回填回退名）
+            const modelSelect = document.querySelector("#cloud-model");
+            if (modelSelect) {
+              let option = Array.from(modelSelect.options).find((o) => o.value === String(m.value));
+              if (!option) {
+                option = document.createElement("option");
+                option.value = String(m.value || "");
+                option.textContent = String(m.label === m.value ? "" : (m.label ?? m.value ?? ""));
+                modelSelect.append(option);
+              }
+              modelSelect.value = String(m.value || "");
+            }
+            setThinkModelSwitcher(false);
+            await refreshComposerModePopup();
+          } catch (error) { setConnection("模型切换失败：" + (error?.message || error), "error"); }
+        });
+        wrap.append(item);
+      }
+      return wrap;
+    };
+    // 过期回包守卫（更新的拉取帧已接管/浮层已被收起 → 本帧放弃渲染）
+    if (seq !== renderThinkModelPopoverSeq || popoverEl.hidden) return;
+    const visionGroup = buildGroup("视觉", vision);
+    const textGroup = buildGroup("文本", text);
+    if (visionGroup) popoverEl.append(visionGroup);
+    if (textGroup) popoverEl.append(textGroup);
+    const total = vision.length + text.length;
+    if (!total) {
+      const empty = document.createElement("div");
+      empty.className = "think-model-note";
+      empty.textContent = "该密钥未开通任何模型";
+      popoverEl.append(empty);
+    }
+  }
+
   const buildSlider = async () => {
     const stamp = ++thinkModelStamp; // v3.24.3：面板重建计数（作废旧型号异步回包）
     // v3.35.7 群聊分支：成员堆叠面板（群工作区绑定了工作组的对话）——不叠建群设置滑条，挡位进群聊面板独立调
@@ -5365,6 +5587,13 @@ async function refreshComposerModePopup() {
       let profile = null;
       try { profile = (await window.agentChatPro.getThinkingProfile({ provider, model })).profile; } catch {}
       modelEl.textContent = `cloud•${model || "未设置模型"}`; // 顶行先占位（模型域），挡位解出后重拼含英文标全串（composeThinkTop）
+      // v3.49.0 顶行可点=快捷切换模型（任务#4：云端模式仅此入口，群聊态在 buildSlider 前已 return）
+      const arrowEl = document.querySelector("#think-model-arrow");
+      const popoverEl = document.querySelector("#think-model-popover");
+      bindThinkModelSwitcher(provider, model);
+      if (arrowEl) { arrowEl.hidden = false; arrowEl.textContent = thinkModelSwitcherOpen ? "∧" : "∨"; }
+      else { /* 桥版兼容：无箭头元素时仅靠顶行文案点击 */ }
+      if (popoverEl && thinkModelSwitcherOpen) { popoverEl.hidden = false; renderThinkModelPopover(popoverEl, provider, model, snapshot); }
       if (!profile || !Array.isArray(profile.levels) || !profile.levels.length) {
         slider.disabled = true;
         slider.value = 0;
@@ -5373,9 +5602,10 @@ async function refreshComposerModePopup() {
         if (meta) meta.textContent = "思考挡位按模型原生支持显示；未列出时不注入任何思考参数。";
         return;
       }
-      // v3.24.2：ECO 挡显示层前置（各家挡位表不动——注入器 hasChoice 对 eco 零注入，天然安全）；
+      // v3.24.2：ECO 挡显示层前置；v3.49.0：ECO=真实省（映射该模型最低挡注入——开关族 off=关思考、
+      // OpenAI 系 minimal、其余 effort 族 low；主进程 thinking-levels ecoChoiceFor 同源）
       // 未选挡位（服务商默认）时滑块对位 off/默认挡，不再落在 eco
-      const levels = [{ id: "eco", label: "ECO", hint: "零思考注入，最省 token（服务商默认挡位）" }, ...profile.levels];
+      const levels = [{ id: "eco", label: "ECO", hint: "真实省 token：强制该模型最低思考（关思考或最低挡）" }, ...profile.levels];
       slider.disabled = false;
       slider.min = 0;
       slider.max = String(levels.length - 1);
@@ -5392,6 +5622,14 @@ async function refreshComposerModePopup() {
     } else {
       // SSH / 本机 claude 引擎：挡位=会话偏好（settings.thinkingChoices.ssh[工作模式]），
       // 未调整时用模式默认挡位（内置三模式 none/medium/none 继续生效）
+      // v3.49.0：模型快捷切换仅云端模式（任务#4）——非云端收起浮层+隐藏箭头+去可点态
+      const arrowSshEl = document.querySelector("#think-model-arrow");
+      const popoverSshEl = document.querySelector("#think-model-popover");
+      if (arrowSshEl) arrowSshEl.hidden = true;
+      if (popoverSshEl) { popoverSshEl.hidden = true; popoverSshEl.replaceChildren(); }
+      modelEl.classList.remove("think-selectable");
+      modelEl.title = "工作模式";
+      thinkModelSwitcherOpen = false;
       const snapshot = await window.agentChatPro.loadSettings();
       const modesRaw = window._cachedModes && window._cachedModes.length ? window._cachedModes : await window.agentChatPro.listModes();
       const modes = Array.isArray(modesRaw) ? modesRaw : [];
@@ -5435,7 +5673,8 @@ async function refreshComposerModePopup() {
     }
   };
 
-  // 工作模式快捷切换（三内置 chips——模式选择完整入口仍在侧边栏）
+  // 工作模式快捷切换（三内置 chips）+ 模式管理 chips（v3.49.0 任务#5：侧边栏模式块删除后，
+  // 编辑/导入/导出三入口迁入此行尾 manage chips）
   modesRow.replaceChildren();
   slider.onchange = null;
   const modesRaw = window._cachedModes && window._cachedModes.length ? window._cachedModes : await window.agentChatPro.listModes();
@@ -5458,6 +5697,18 @@ async function refreshComposerModePopup() {
     });
     modesRow.append(chip);
   }
+  const manageChip = (label, title, handler) => {
+    const chip = document.createElement("button");
+    chip.type = "button";
+    chip.className = "think-mode-manage";
+    chip.textContent = label;
+    chip.title = title;
+    chip.addEventListener("click", handler);
+    modesRow.append(chip);
+  };
+  manageChip("编辑", "编辑工作模式参数（自定义模式可增删改）", () => openModeEditDialog());
+  manageChip("导入", "导入自定义工作模式（粘贴 JSON）", () => importWorkModes());
+  manageChip("导出", "导出全部自定义工作模式（复制 JSON 到剪贴板）", () => exportWorkModes());
 
   await buildSlider();
 }
@@ -5867,9 +6118,13 @@ if (window.agentChatPro.onTaskNotificationActivated) {
 let currentModeId = "regular";
 let modeDropdownOpen = false;
 
+// v3.49.0 任务#5：侧边栏模式选择块已删（HTML 留注释），以下函数保留骨架+null 守卫空转——
+// 模式编辑/导入/导出三入口迁移到思考面板 think-modes 行（manage chips）。
+
 function closeModeDropdown() {
   modeDropdownOpen = false;
-  document.querySelector("#mode-dropdown").hidden = true;
+  const dropdown = document.querySelector("#mode-dropdown");
+  if (dropdown) dropdown.hidden = true;
 }
 
 async function refreshModeSelector() {
@@ -5877,6 +6132,7 @@ async function refreshModeSelector() {
     const modes = await window.agentChatPro.listModes();
     window._cachedModes = modes;
     const list = document.querySelector("#mode-list");
+    if (!list) return; // v3.49.0：侧栏列表已删，仅刷缓存（_cachedModes 供思考面板/编辑弹窗用）
     list.replaceChildren();
     for (const mode of modes) {
       const item = document.createElement("div");
@@ -5906,9 +6162,13 @@ async function refreshModeSelector() {
 }
 
 function updateModeDisplay(mode) {
-  document.querySelector("#mode-icon").textContent = mode.icon;
-  document.querySelector("#mode-name").textContent = mode.name;
-  document.querySelector("#mode-trigger").title = `${mode.name}：${mode.description}`;
+  // v3.49.0：侧栏三件（icon/name/trigger 标题）随块删除——守卫空转（composer 图标与 badge 渲染权不变）
+  const iconEl = document.querySelector("#mode-icon");
+  if (iconEl) iconEl.textContent = mode.icon;
+  const nameEl = document.querySelector("#mode-name");
+  if (nameEl) nameEl.textContent = mode.name;
+  const triggerEl = document.querySelector("#mode-trigger");
+  if (triggerEl) triggerEl.title = `${mode.name}：${mode.description}`;
   setToolModeAppearance(mode.skipPermissions);
   // v3.24.0 修复保留：populateSettings 里 setToolModeAppearance(全局 skipPermissions) 不再覆盖图标，
   // 图标渲染权仍独占于此处（双写互踩不复发）；v3.24.1 徽标移除后图标/标题回归本函数渲染
@@ -5917,7 +6177,7 @@ function updateModeDisplay(mode) {
     elements.composerModeTrigger.title = `${mode.name}：${mode.description}`;
     elements.composerModeTrigger.className = `composer-mode-trigger ${mode.skipPermissions ? "automatic" : "safe"}`;
   }
-  // 同步更新聊天区模式 badge
+  // 同步更新聊天区模式 badge（v3.49.0 任务#6：badge 元素已随头部文案删除——守卫空转）
   const badge = document.querySelector("#chat-mode-badge");
   if (badge) {
     badge.textContent = `${mode.icon} ${mode.name}`;
@@ -5925,19 +6185,30 @@ function updateModeDisplay(mode) {
   }
 }
 
-document.querySelector("#mode-trigger").addEventListener("click", (event) => {
-  event.stopPropagation();
-  modeDropdownOpen = !modeDropdownOpen;
-  document.querySelector("#mode-dropdown").hidden = !modeDropdownOpen;
-});
+// v3.49.0 任务#5：模式导入/导出抽函数（原侧栏 #mode-import/#mode-export 绑定体，
+// 迁入思考面板 manage chips 后复用同一实现）
+async function importWorkModes() {
+  try {
+    const json = prompt("粘贴导出的模式 JSON：");
+    if (!json) return;
+    const result = await window.agentChatPro.importModes(json);
+    await refreshModeSelector();
+    setConnection(`导入成功：新增 ${result.added} 个模式`, "connected");
+  } catch (error) { alert("导入失败：" + error.message); }
+}
 
+async function exportWorkModes() {
+  try {
+    const json = await window.agentChatPro.exportModes();
+    await navigator.clipboard.writeText(json);
+    alert("自定义模式已复制到剪贴板。");
+  } catch (error) { alert("导出失败：" + error.message); }
+}
+
+// v3.49.0 任务#5：#mode-trigger/#mode-edit 顶层绑定删除（元素已不存在，绑定会 TypeError 白屏）；
+// 点外关闭监听保留（closest 空转安全——旧下拉 DOM 删除后恒判 true，closeModeDropdown 空转无害）
 document.addEventListener("click", (event) => {
   if (!event.target.closest(".mode-selector")) closeModeDropdown();
-});
-
-document.querySelector("#mode-edit").addEventListener("click", async () => {
-  closeModeDropdown();
-  openModeEditDialog();
 });
 
 // ── 模式编辑弹窗 ──────────────────────────────────
@@ -6113,25 +6384,8 @@ modeEditDialog.addEventListener("close", () => {
   modeEditStatus.classList.remove("error");
 });
 
-document.querySelector("#mode-import").addEventListener("click", async () => {
-  closeModeDropdown();
-  try {
-    const json = prompt("粘贴导出的模式 JSON：");
-    if (!json) return;
-    const result = await window.agentChatPro.importModes(json);
-    await refreshModeSelector();
-    setConnection(`导入成功：新增 ${result.added} 个模式`, "connected");
-  } catch (error) { alert("导入失败：" + error.message); }
-});
-
-document.querySelector("#mode-export").addEventListener("click", async () => {
-  closeModeDropdown();
-  try {
-    const json = await window.agentChatPro.exportModes();
-    await navigator.clipboard.writeText(json);
-    alert("自定义模式已复制到剪贴板。");
-  } catch (error) { alert("导出失败：" + error.message); }
-});
+// v3.49.0 任务#5：#mode-import/#mode-export 顶层绑定删除（元素随侧栏块删除）——
+// 实现抽为 importWorkModes/exportWorkModes，由思考面板 manage chips 承接
 
 // ── 网络配置 UI ─────────────────────────────────
 
@@ -6445,6 +6699,144 @@ window.agentChatPro.onThemeInit((theme) => initTheme(theme));
 setTimeout(() => {
   if (!themeInitialized) initTheme(localStorage.getItem("theme") || "dark");
 }, 1000);
+
+// ── v3.49.0 任务#8 外观颜色板 ────────────────────────────────
+// 画布=x 轴色相全谱、y 轴饱和度（上满下淡），亮度滑块单独调明度；
+// 挪动实时提取像素色并应用到全 UI（--accent/--accent-bright 行内覆盖，两主题共用），
+// 离开画布 / 明确点击 / 亮度落定=持久化 saveSettings.accentColor（主进程 normalizeAccentColor 校验）。
+
+const hslToHex = (h, s, l) => {
+  const channel = (n) => {
+    const k = (n + h / 30) % 12;
+    const a = s * Math.min(l, 1 - l);
+    const v = l - a * Math.max(-1, Math.min(k - 3, 9 - k, 1));
+    return Math.round(255 * v).toString(16).padStart(2, "0");
+  };
+  return `#${channel(0)}${channel(8)}${channel(4)}`;
+};
+
+const hexToHsl = (hex) => {
+  const raw = String(hex || "").replace("#", "").toLowerCase();
+  const r = parseInt(raw.slice(0, 2), 16) / 255, g = parseInt(raw.slice(2, 4), 16) / 255, b = parseInt(raw.slice(4, 6), 16) / 255;
+  const max = Math.max(r, g, b), min = Math.min(r, g, b);
+  const l = (max + min) / 2;
+  const d = max - min;
+  const s = d === 0 ? 0 : d / (1 - Math.abs(2 * l - 1));
+  let h = 0;
+  if (d !== 0) {
+    if (max === r) h = ((g - b) / d) % 6;
+    else if (max === g) h = (b - r) / d + 2;
+    else h = (r - g) / d + 4;
+    h *= 60;
+    if (h < 0) h += 360;
+  }
+  return { h, s, l };
+};
+
+const brightenAccent = (hex) => {
+  const { h, s, l } = hexToHsl(hex);
+  return hslToHex(h, s, Math.min(0.92, l + 0.08));
+};
+
+const paletteCanvas = document.querySelector("#accent-palette-canvas");
+const palettePreview = document.querySelector("#accent-palette-preview");
+const paletteHex = document.querySelector("#accent-palette-hex");
+const paletteBright = document.querySelector("#accent-brightness-range");
+const paletteReset = document.querySelector("#accent-palette-reset");
+let paletteCursor = { h: 31, s: 0.62 }; // 默认档位近似（#d99d5c 的 HSL），挪动后即替换
+let paletteLastSaved = ""; // 去重落盘（同一色反复离开画布不重复写档）
+
+const drawAccentPalette = () => {
+  // v3.49.0 守门兼容：测试套 mock DOM 画布无 2D 上下文（getContext 缺失）——防御返回不炸启动链
+  if (!paletteCanvas || typeof paletteCanvas.getContext !== "function") return;
+  const ctx = paletteCanvas.getContext("2d");
+  const w = paletteCanvas.width, h = paletteCanvas.height;
+  const image = ctx.createImageData(w, h);
+  const light = Number(paletteBright ? paletteBright.value : 50) / 100;
+  const data = image.data;
+  for (let y = 0; y < h; y++) {
+    const s = 1 - y / (h - 1);
+    for (let x = 0; x < w; x++) {
+      const hex = hslToHex((x / (w - 1)) * 360, s, light);
+      const idx = (y * w + x) * 4;
+      data[idx] = parseInt(hex.slice(1, 3), 16);
+      data[idx + 1] = parseInt(hex.slice(3, 5), 16);
+      data[idx + 2] = parseInt(hex.slice(5, 7), 16);
+      data[idx + 3] = 255;
+    }
+  }
+  ctx.putImageData(image, 0, 0);
+};
+
+const applyAccentColor = (hex) => {
+  const root = document.documentElement;
+  const normalized = /^#[0-9a-f]{6}$/.test(String(hex || "")) ? hex.toLowerCase() : "";
+  if (normalized) {
+    root.style.setProperty("--accent", normalized);
+    root.style.setProperty("--accent-bright", brightenAccent(normalized));
+  } else {
+    root.style.removeProperty("--accent");
+    root.style.removeProperty("--accent-bright");
+  }
+  const shown = normalized || getComputedStyle(root).getPropertyValue("--accent").trim();
+  if (palettePreview) palettePreview.style.background = shown;
+  if (paletteHex) paletteHex.textContent = shown;
+};
+
+const persistAccent = async () => {
+  const hex = paletteHex ? paletteHex.textContent.trim() : "";
+  if (!/^#[0-9a-f]{6}$/.test(hex) || hex === paletteLastSaved) return;
+  paletteLastSaved = hex;
+  try {
+    await window.agentChatPro.saveSettings({ ...(await window.agentChatPro.loadSettings()), accentColor: hex });
+  } catch { /* 存档失败静默（会话内已生效，重开回落默认） */ }
+};
+
+if (paletteCanvas && paletteBright) {
+  const pickAccent = (event) => {
+    const rect = paletteCanvas.getBoundingClientRect();
+    const xRatio = Math.min(Math.max(event.clientX - rect.left, 0), rect.width - 1) / rect.width;
+    const yRatio = Math.min(Math.max(event.clientY - rect.top, 0), rect.height - 1) / rect.height;
+    paletteCursor = { h: xRatio * 360, s: 1 - yRatio };
+    applyAccentColor(hslToHex(paletteCursor.h, paletteCursor.s, Number(paletteBright.value) / 100));
+  };
+  paletteCanvas.addEventListener("mousemove", pickAccent); // 挪动=实时提取该像素色并应用
+  paletteCanvas.addEventListener("mousedown", (event) => {
+    pickAccent(event);
+    persistAccent(); // 明确点击=选定落盘
+  });
+  paletteCanvas.addEventListener("mouseleave", () => persistAccent()); // 挪完离开=以最后停留色落盘
+  paletteBright.addEventListener("input", () => {
+    drawAccentPalette();
+    applyAccentColor(hslToHex(paletteCursor.h, paletteCursor.s, Number(paletteBright.value) / 100));
+  });
+  paletteBright.addEventListener("change", () => persistAccent());
+}
+paletteReset?.addEventListener("click", async () => {
+  paletteCursor = { h: 31, s: 0.62 };
+  if (paletteBright) paletteBright.value = "50";
+  paletteLastSaved = "";
+  applyAccentColor(""); // 行内变量移除→回落主题默认（深/浅各自默认档）
+  try { await window.agentChatPro.saveSettings({ ...(await window.agentChatPro.loadSettings()), accentColor: "" }); } catch {}
+});
+
+// 启动恢复：读存档强调色（空=默认档不覆盖）→ 对位光标/亮度 → 绘制画布
+(async () => {
+  try {
+    const accentSettings = await window.agentChatPro.loadSettings();
+    const savedHex = String(accentSettings.accentColor || "");
+    if (/^#[0-9a-f]{6}$/.test(savedHex)) {
+      paletteLastSaved = savedHex;
+      const { h, s, l } = hexToHsl(savedHex);
+      paletteCursor = { h, s };
+      if (paletteBright) paletteBright.value = String(Math.round(l * 100));
+    }
+    drawAccentPalette();
+    if (/^#[0-9a-f]{6}$/.test(savedHex)) applyAccentColor(savedHex);
+  } catch {
+    drawAccentPalette();
+  }
+})();
 
 window.agentChatPro.onNetworkLatency((summary) => {
   const latencyLabel = document.querySelector("#network-latency-label");

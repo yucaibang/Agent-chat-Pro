@@ -21,6 +21,20 @@
 
 const SS = { off: "关", minimal: "最低", low: "低", medium: "中", high: "高", xhigh: "超高", ultra: "Ultra", max: "Max", on: "开", auto: "自动", none: "关", dynamic: "动态" };
 
+/** v3.49.0 ECO 挡「真实省」映射（用户实测：默认档 vs eco 档发一个问号 token 仅差 15
+ *  ——旧 v3.24.2 语义「eco=零注入」实锤虚假节省：零注入=服务商用其默认思考挡（各家旗舰默认
+ *  是高挡思考），与默认档同耗。本版改语义：eco=强制该模型真实最低思考注入。
+ *  优先级：off（开关族=关思考，真省零开销）→ minimal（OpenAI 最省挡）→ low（其余 effort 族最省挡）
+ *  → 兜底取挡位集首挡。开关族有 off 的（deepseek/zhipu/kimi/glm/qwen/豆包/硅基）直接关思考；
+ *  OpenAI 系无 off 映射到 minimal；xAI 只有 low/high 映射到 low。 */
+function ecoChoiceFor(levels) {
+  const ids = (Array.isArray(levels) ? levels : []).map((l) => l && l.id);
+  for (const cand of ["off", "minimal", "low"]) {
+    if (ids.includes(cand)) return cand;
+  }
+  return ids.length ? ids[0] : "";
+}
+
 /** 挡位 → UI 标签（label 优先取挡位表自带，缺省查 SS） */
 function levelLabel(level) {
   const raw = typeof level === "object" && level !== null ? level : { id: level };
@@ -29,9 +43,10 @@ function levelLabel(level) {
 }
 
 /** SSH / 本机 claude 引擎挡位（模式 thinkingLevel 同款语义，none=不传 --thinking-level）
- *  v3.24.2：eco 挡插最前（节能零注入，CLI 与 off 同=不传参），挡位文案统一 默认/轻度/中等/最高 */
+ *  v3.24.2：eco 挡插最前；v3.49.0：eco 改真实省（--thinking-level low 强制浅思考，
+ *  旧「零注入=CLI 默认挡」被用户实测证伪为虚假节省），挡位文案统一 默认/轻度/中等/最高 */
 const SSH_LEVELS = [
-  { id: "eco", label: "ECO", hint: "零思考注入，最省 token（CLI 与默认挡一致）" },
+  { id: "eco", label: "ECO", hint: "真实省 token：强制浅思考（--thinking-level low）" },
   { id: "off", label: "默认", hint: "不传 --thinking-level（CLI 默认）" },
   { id: "low", label: "轻度", hint: "较浅思考，省 token 且更快" },
   { id: "medium", label: "中等", hint: "常规深度（Claude 默认档位）" },
@@ -261,13 +276,16 @@ function levelsRaw(kind, extra) {
 
 /**
  * OpenAI 兼容请求体注入（buildChatBody 末尾调用；未命中/无 choice/无效 choice=零注入）
+ * v3.49.0：ECO 挡不再零注入（虚假节省实测实锤）——映射到该模型真实最低挡：
+ * 开关族→off（关思考最省）、OpenAI 系→minimal、xAI 等→low；
  * @returns {boolean} 是否发生注入（供测试断言与日志）
  */
 function applyOpenAiThinking(body, context) {
-  const { provider, model, choice } = context || {};
+  let { provider, model, choice } = context || {};
   if (!body || typeof body !== "object" || !choice) return false;
   const profile = resolveThinkingProfile(provider, model);
   if (!profile) return false;
+  if (choice === "eco") choice = ecoChoiceFor(profile.levels) || choice; // ECO=真实最低挡注入
   const { family, levels } = profile;
   switch (family) {
     case "anthropic_budget":
@@ -316,11 +334,15 @@ function applyOpenAiThinking(body, context) {
 /**
  * Anthropic 原生 Messages 请求体注入（buildAnthropicBody 末尾调用）
  * 挡位→thinking.budget_tokens（数字挡）；off=不注入 thinking（官方默认关闭）。
+ * v3.49.0：ECO 挡同语义走 off——Claude 官方默认关闭扩展思考，不注入即零思考开销（真实省）。
  * budget 必须 < max_tokens（官方硬约束），超限自动钳到 max_tokens - 1024，最低 1024。
  * @returns {boolean}
  */
 function applyAnthropicThinking(body, context) {
-  const { provider, model, choice, maxTokens } = context || {};
+  const { provider, model, choice: rawChoice, maxTokens } = context || {};
+  // v3.49.0：ECO→off 归一（Claude 关扩展思考=零思考开销=真实省，挡位集无 eco 由这里收敛）
+  const eco = rawChoice === "eco";
+  const choice = eco ? "off" : rawChoice;
   if (!body || typeof body !== "object" || !choice || choice === "off") return false;
   const profile = resolveThinkingProfile(provider, model);
   if (!profile || profile.family !== "anthropic_budget") return false;
@@ -357,6 +379,7 @@ module.exports = {
   ANTHROPIC_BUDGET,
   levelLabel,
   resolveThinkingProfile,
+  ecoChoiceFor,
   applyOpenAiThinking,
   applyAnthropicThinking,
   normalizeThinkingChoices
