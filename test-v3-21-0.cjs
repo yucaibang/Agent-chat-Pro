@@ -171,7 +171,9 @@ async function main() {
   await test("B1. main.cjs：require cloud-models + cloud:fetch-models handler + 已存密钥兜底（getCloudAiConfig）", () => {
     assert.ok(mainSrc.includes('require("./cloud-models.cjs")'), "cloud-models.cjs 已引入");
     assert.ok(mainSrc.includes('ipcMain.handle("cloud:fetch-models"'), "handler 已注册");
-    assert.ok(mainSrc.includes("getCloudAiConfig().apiKey"), "留空时用已存密钥兜底");
+    // v3.49.1 自查轮滚更：handler 兜底改经 savedConfig 读（兜底语义不变；并新增 custom 侧 baseUrl 兜底）
+    assert.ok(mainSrc.includes("const savedConfig = getCloudAiConfig();"), "已存配置读取在册");
+    assert.ok(mainSrc.includes('savedApiKey = String(savedConfig.apiKey || "");'), "留空时用已存密钥兜底（v3.49.1 形态）");
   });
 
   await test("B2. preload.cjs：fetchCloudModels 桥暴露到 cloud:fetch-models", () => {

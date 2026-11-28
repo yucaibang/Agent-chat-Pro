@@ -3483,7 +3483,10 @@ setTimeout(async () => {
   try {
     const result = await window.agentChatPro.checkUpdate();
     if (result && result.status === "update" && updateToast) {
-      updateToast.textContent = `🆕 发现新版本 v${result.remoteVersion} · 点击立即更新`;
+      // v3.49.1 自查修复：remoteVersion 由主进程 maxVersion 取原始串（官网 manifest=`v${版本}`、
+      // GitCode/GitHub tag=`v3.49.0`）恒带 v 前缀——文案再拼 `v${remoteVersion}` 会显示「vv3.49.0」。
+      // 与关于页同形态（remoteVersion 已带 v，不再二次加前缀）。
+      updateToast.textContent = `🆕 发现新版本 ${result.remoteVersion} · 点击立即更新`;
       updateToast.hidden = false;
     }
   } catch { /* 静默：启动检测失败不惊扰用户，关于页手动检测仍可用 */ }
@@ -4997,9 +5000,28 @@ if (voiceButton) {
 
 let composerModePopupOpen = false;
 
+// v3.49.1 自查修复（Bug#3 定案=事件重复绑定）：模型快捷切换三态必须模块顶层持有——原先声明在
+// refreshComposerModePopup 体内，每次面板重建（开面板/切模式/挡位变化后的刷新）都重置 bound=false，
+// 「事件只绑一次」的门从未生效：cloud 态每次重建都给 #think-model 与 #think-model-arrow 各重复绑 1 个
+// click 监听器——长时间会话监听器泄漏 + 点击顶行 toggle 连翻 N 次=浮层点击闪断/点不开。
+// 拔到顶层后 bound 跨 refresh 持久=事件真只绑一次；provider/model/bound 由每次 bind 调用刷新。
+// 声明位置在 closeComposerModePopup/refreshComposerModePopup 两者之前（closeComposerModePopup
+// 的面板收起收口要写 Open——TDZ 扫描器先例：声明必须先于全部使用点）。
+let thinkModelSwitcherOpen = false;
+let renderThinkModelPopoverSeq = 0; // 浮层拉取竞态序号（独立于面板 thinkModelStamp，防相互作废）
+const thinkModelSwitcherCtx = { provider: "", model: "", bound: false };
+
 function closeComposerModePopup() {
   composerModePopupOpen = false;
   if (elements.composerModePopup) elements.composerModePopup.hidden = true;
+  // v3.49.1 自查修复收口：模型快捷浮层三态已拔至模块顶层（thinkModelSwitcherOpen 跨面板持久）——
+  // 面板收起时必须同步收起浮层，否则下次重开面板时 buildSlider 见 open=true 会自动重新拉取+弹出
+  // （v3.49.0 原版 Open 在 refresh 体内随面板重开重置 false，此处不需要收口；拔顶层后语义补全）。
+  thinkModelSwitcherOpen = false;
+  const arrowCloseEl = document.querySelector("#think-model-arrow");
+  const popoverCloseEl = document.querySelector("#think-model-popover");
+  if (arrowCloseEl) { arrowCloseEl.hidden = true; arrowCloseEl.textContent = "∨"; }
+  if (popoverCloseEl) { popoverCloseEl.hidden = true; popoverCloseEl.replaceChildren(); }
 }
 
 // v3.24.0 输入栏模式选择 → 思考调节（Codex 风格面板：上=模型名，下滑条按模型原生挡位；底部=工作模式快捷 chips）。
@@ -5400,9 +5422,7 @@ async function refreshComposerModePopup() {
   // 数据=官方 GET /models 实拉（与设置中心「拉取」同链 fetchCloudModels，密钥留空主进程兜底已存）；
   // 分类分「视觉 / 文本」两组按返回序排（命中视觉命名词根→视觉组）；顶行右侧展开「∧」收起「∨」。
   // 豆包无列表端点→回退内置在役清单；拉取其他失败→同样回退内置清单并如实标注。
-  let thinkModelSwitcherOpen = false;
-  let renderThinkModelPopoverSeq = 0; // 浮层拉取竞态序号（独立于面板 thinkModelStamp，防相互作废）
-  const thinkModelSwitcherCtx = { provider: "", model: "", bound: false };
+  // v3.49.1：三态（Open/Seq/Ctx）已拔至模块顶层（thinkModelStamp 旁）——见顶层修复注记。
 
   /** 视觉模型词根表（命中→视觉组）：各家官方视觉系命名实锤清单 + 通用 vision/vl 词根 */
   const THINK_VISION_MODEL_RE = [
@@ -5442,10 +5462,14 @@ async function refreshComposerModePopup() {
   const bindThinkModelSwitcher = (provider, model) => {
     thinkModelSwitcherCtx.provider = provider;
     thinkModelSwitcherCtx.model = model;
-    if (thinkModelSwitcherCtx.bound) return; // 面板重建复用静态骨架：事件只绑一次，ctx 每次刷新
-    thinkModelSwitcherCtx.bound = true;
+    // v3.49.1 自查修复：可点态与标题必须在 bound 早退**之前**每次重挂——SSH/本机/群聊态的
+    // 让位清理（v3.49.0）会 removeClass("think-selectable")+title 改写为「工作模式/逐成员挡位」，
+    // 切回云端时若被 bound 早退吞掉，顶行永远停留在 SSH/群聊提示态（实际点击仍弹浮层，
+    // 显示与功能错位）。事件绑定仍只绑一次（早退之下不会重复 addEventListener）。
     modelEl.classList.add("think-selectable");
     modelEl.title = "点击切换模型（按官方模型列表，分视觉 / 文本两组）";
+    if (thinkModelSwitcherCtx.bound) return; // 面板重建复用静态骨架：事件只绑一次，ctx 每次刷新
+    thinkModelSwitcherCtx.bound = true;
     const toggle = () => setThinkModelSwitcher(!thinkModelSwitcherOpen);
     modelEl.addEventListener("click", toggle);
     document.querySelector("#think-model-arrow")?.addEventListener("click", (event) => {

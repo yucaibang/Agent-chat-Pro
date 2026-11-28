@@ -416,14 +416,25 @@ app.whenReady().then(async () => {
   }
   ipcMain.handle("settings:load", () => ({ ...getSettings(), conversationRecoveryNotice: getConversationRecoveryNotice() }));
   // v3.21.0 云端「拉取模型列表」：密钥用渲染层现值，留空时兜底已保存密钥（custom 用现填 baseUrl）
+  // v3.49.1 自查修复（快捷切换模型浮层 custom 死胡同）：输入栏浮层对 custom 只传静态表 baseUrl=""，
+  // 而本 handler 原先只兜底 apiKey——已存的自定义 API 地址（cloudAiBaseUrl）永远传不到拉取端点，
+  // custom 用户恒报「请先填写 API 地址再拉取」（明明已填过）。修复=custom 时兜底已存地址；
+  // 非 custom 的拉取端点不读 baseUrl（PULL_ENDPOINTS 官方固定端点），兜底对其零侵入。
   ipcMain.handle("cloud:fetch-models", async (_event, payload = {}) => {
     let savedApiKey = "";
+    let savedBaseUrlForCustom = "";
     try {
-      savedApiKey = String(getCloudAiConfig().apiKey || "");
+      const savedConfig = getCloudAiConfig();
+      savedApiKey = String(savedConfig.apiKey || "");
+      if (String(savedConfig.provider || "") === "custom") savedBaseUrlForCustom = String(savedConfig.baseURL || "").trim();
     } catch {
       savedApiKey = "";
     }
-    const merged = { ...payload, apiKey: String(payload.apiKey || "").trim() || savedApiKey };
+    const merged = {
+      ...payload,
+      apiKey: String(payload.apiKey || "").trim() || savedApiKey,
+      baseUrl: String(payload.baseUrl || "").trim() || savedBaseUrlForCustom,
+    };
     const result = await fetchProviderModels(merged);
     if (!result.ok) writeLog("cloud_fetch_models_failed", { provider: payload.provider, reason: result.reason });
     else writeLog("cloud_fetch_models_ok", { provider: payload.provider, count: result.count });

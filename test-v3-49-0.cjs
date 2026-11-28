@@ -205,7 +205,10 @@ async function runAnchorTests() {
     assert.ok(rendererSrc.includes('aboutCheckUpdateButton.click(); // 复用关于页检测体'), "点击红条→复用关于页检测（同一实现）");
     assert.ok(rendererSrc.includes("runAboutUpdateDownload(); // 检测完自动开始更新"), "检测完自动下载安装（用户原话「检测完更新就开始做更新的东西」）");
     assert.ok(rendererSrc.includes("result.remoteVersion"), "红条文案含版本号");
-    assert.ok(rendererSrc.includes('🆕 发现新版本 v${result.remoteVersion} · 点击立即更新'), "红条文案在册");
+    // v3.49.1 自查轮滚更：红条文案去双 v（remoteVersion=主进程 maxVersion 原始串恒带 v 前缀，
+    // v${} 二次拼接会显示「vv3.49.0」——与关于页同形态单 v）
+    assert.ok(rendererSrc.includes('🆕 发现新版本 ${result.remoteVersion} · 点击立即更新'), "红条文案在册（单 v）");
+    assert.ok(!rendererSrc.includes("发现新版本 v${result.remoteVersion}"), "旧双 v 文案不得再现（v3.49.1 自查修复）");
   });
 
   await test("B11 群聊成员节 labelsRow 上移（SSH+云端两分支与单聊对齐）", () => {
