@@ -131,6 +131,19 @@ function makeFakeFs(opts = {}) {
         error.code = "EEXIST";
         throw error;
       }
+      if (options?.flag !== "wx" && opts.failWrite?.has(target)) { // v3.48.1 事务写滚更：可注入写失败
+        const error = new Error("ENOSPC");
+        error.code = "ENOSPC";
+        throw error;
+      }
+    },
+    // v3.48.1 事务写滚更：本地保存改「临时件→改名替换」——rename/rm 进装置（缺=not a function）
+    rename: async (from, to) => {
+      calls.push(["rename", from, to]);
+      if (opts.failRename) { const e = new Error("rename fail"); e.code = "EPERM"; throw e; }
+    },
+    rm: async (target) => {
+      calls.push(["rm", target]);
     }
   };
 }
@@ -226,10 +239,17 @@ async function runIdeRuntimeTests() {
     const fakeFsBig = makeFakeFs({ exists: { [`${abs}/big.js`]: { size: 200 * 1024 } } });
     await assert.rejects(() => ide.makeIdeToolkit({ ssh, fs: fakeFsBig }).read({ config: { workingDirectory: abs }, mode: "local", rel: "big.js" }), () => true, "超上限应拒打开");
 
-    // write：护栏后的绝对路径+Buffer 负载
+    // write（v3.48.1 事务写滚更）：先临时件后改名替换——目标应为「护栏后绝对路径 + 临时件痕」，改名两参同框
     await local.write({ config: { workingDirectory: abs }, mode: "local", rel: "out.js", content: "你好" });
     const writeCall = fakeFs.calls.find((call) => call[0] === "writeFile");
-    assert.ok(writeCall[1] === `${abs}/out.js`, "写目标应为护栏后绝对路径");
+    assert.ok(writeCall[1] === `${abs}/out.js.agent-chat-pro-part`, "写目标应为临时件（原位直写已被事务写替代）");
+    const renameCall = fakeFs.calls.find((call) => call[0] === "rename");
+    assert.ok(renameCall[1] === `${abs}/out.js.agent-chat-pro-part` && renameCall[2] === `${abs}/out.js`, "改名应从临时件替换到护栏后绝对路径");
+    // 临时件写失败：rm 清理临时件 + 错误如实上抛（原文件不被触碰）
+    const fakeFsFail = makeFakeFs({ exists: {}, failWrite: new Set([`${abs}/boom.js.agent-chat-pro-part`]) });
+    const failTool = ide.makeIdeToolkit({ ssh, fs: fakeFsFail });
+    await assert.rejects(() => failTool.write({ config: { workingDirectory: abs }, mode: "local", rel: "boom.js", content: "x" }), /ENOSPC/, "临时件写失败应如实上抛");
+    assert.ok(fakeFsFail.calls.some((call) => call[0] === "rm" && call[1] === `${abs}/boom.js.agent-chat-pro-part`), "写失败应清理临时件");
 
     // create：不存在→wx 新建；已存在→拒
     await local.create({ config: { workingDirectory: abs }, mode: "local", rel: "fresh.js" });

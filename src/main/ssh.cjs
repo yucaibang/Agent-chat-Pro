@@ -1169,10 +1169,50 @@ async function downloadRemoteFile(config, remotePath, localPath, onUnknownHost, 
   return localPath;
 }
 
+/**
+ * SFTP 层「资源不存在」判定（v3.48.1 抽出导出，dev-ide.cjs createRemoteFile 同族语义）。
+ * ⚠ ssh2 的 SFTP 错误 code 是**协议数字**（SSH_FX_NO_SUCH_FILE=2），不是 Node 文件系统风格的
+ * "ENOENT" 字符串——v3.47.0 初版 createRemoteFile 只判字符串常量，把「不存在」当异常上抛，
+ * SSH 侧新建文件对不存在路径（正常场景）恒炸；此处双形态兼容（数字码 / ENOENT / message）。
+ */
+function isSshResourceMissing(error) {
+  if (!error) return false;
+  return error.code === 2 || error.code === "ENOENT" || /no such file/i.test(String(error.message || ""));
+}
+
 // ── v3.47.0 开发面板 IDE 编辑（SFTP 原位读写面）────────────────────────
 // 骨架沿用 readRemoteFile/connectWithRetry 同族：连接→openSftp→操作→finally 双层收尾。
 // 注意：这组函数的路径校验只做「绝对路径+无 \0」基础面（isSafeRemotePath），工作目录内的
 // 逃逸防护由 dev-ide.cjs 的护栏（assertInsidePosix）负责——两层各司其职。
+// v3.48.1 加固：writeRemoteFile 事务化（临时件+改名替换）——直写流式覆盖在 ENOSPC/
+// 断连半程会把原文件截断成半文件（IDE 保存丢用户原文）；改名用 OpenSSH posix-rename
+// 原子覆盖、不支持时退传统 rename→目标存在拒→unlink+rename（失败面与旧直写等价不更差）。
+
+/** 同目录临时件后缀（与 downloadRemoteFile 先例同族；dev-ide 列表按此过滤不显自产临时件） */
+function sftpTemporaryPath(remotePath) {
+  return `${remotePath}.agent-chat-pro-part-${process.pid}`;
+}
+
+function sftpUnlink(sftp, target) {
+  return new Promise((resolve, reject) => sftp.unlink(target, (error) => error ? reject(error) : resolve()));
+}
+
+/** 覆盖目标改名：posix-rename 扩展（OpenSSH≥6.5 原子覆盖）→ 传统 rename → unlink+rename */
+async function renameSftpReplace(sftp, from, to) {
+  try {
+    await new Promise((resolve, reject) => {
+      try { sftp.ext_openssh_rename(from, to, (error) => error ? reject(error) : resolve()); }
+      catch (error) { reject(error); } // 服务器不支持扩展=同步抛，转传统改名
+    });
+    return;
+  } catch { /* 无 posix-rename=继续 */ }
+  try {
+    await new Promise((resolve, reject) => sftp.rename(from, to, (error) => error ? reject(error) : resolve()));
+    return;
+  } catch { /* 传统 rename 对已存在目标拒（SSH_FX_FAILURE）=继续 unlink+改名 */ }
+  await sftpUnlink(sftp, to);
+  await new Promise((resolve, reject) => sftp.rename(from, to, (error) => error ? reject(error) : resolve()));
+}
 
 async function statRemoteFile(config, remotePath, onUnknownHost, onLog) {
   if (!isSafeRemotePath(remotePath)) throw new Error("远程路径无效。");
@@ -1188,14 +1228,28 @@ async function statRemoteFile(config, remotePath, onUnknownHost, onLog) {
 
 async function writeRemoteFile(config, remotePath, data, onUnknownHost, onLog) {
   if (!isSafeRemotePath(remotePath)) throw new Error("远程文件路径无效。");
+  const payload = Buffer.isBuffer(data) ? data : Buffer.from(data);
   const client = await connectWithRetry(config, onUnknownHost, onLog);
   try {
     const sftp = await openSftp(client);
     try {
-      await writeSftp(sftp, remotePath, Buffer.isBuffer(data) ? data : Buffer.from(data));
+      // v3.48.1 事务写：先写同目录临时件再覆盖改名（直写半程失败=原文件被截断）
+      const temporary = sftpTemporaryPath(remotePath);
+      try {
+        await writeSftp(sftp, temporary, payload);
+      } catch (error) {
+        try { await sftpUnlink(sftp, temporary); } catch { /* 收尾尽力 */ }
+        throw error;
+      }
+      try {
+        await renameSftpReplace(sftp, temporary, remotePath);
+      } catch (error) {
+        try { await sftpUnlink(sftp, temporary); } catch { /* 收尾尽力 */ }
+        throw error;
+      }
     } finally { closeSftp(sftp); }
   } finally { client.end(); }
-  return Buffer.isBuffer(data) ? data.length : Buffer.byteLength(String(data));
+  return payload.length;
 }
 
 async function createRemoteFile(config, remotePath, onUnknownHost, onLog) {
@@ -1204,12 +1258,14 @@ async function createRemoteFile(config, remotePath, onUnknownHost, onLog) {
   try {
     const sftp = await openSftp(client);
     try {
-      // 存在即拒（wx 语义）：stat 命中=拒绝建空文件；ENOENT=继续；其余 stat 错误如实上报
+      // v3.48.1 修复：存在即拒（wx 语义）——不存在=正常新建场景继续，不能当异常上抛。
+      // ssh2 的 SFTP 错误 code 是协议数字（NO_SUCH_FILE=2），旧判只认 "ENOENT" 字符串常量，
+      // 把「不存在」也当异常透传 → SSH 侧新建文件恒炸（守门装置假 ENOENT 形态掩盖了它）。
       try {
         await sftpStat(sftp, remotePath);
         throw new Error("该路径已存在文件或目录。");
       } catch (error) {
-        if (error?.code !== "ENOENT") throw error;
+        if (!isSshResourceMissing(error)) throw error;
       }
       await writeSftp(sftp, remotePath, Buffer.alloc(0));
     } finally { closeSftp(sftp); }
@@ -1322,4 +1378,4 @@ function cleanError(value) {
   return value.replace(/\x1B\[[0-?]*[ -/]*[@-~]/g, "").trim();
 }
 
-module.exports = { buildAttachmentNote, buildDeviceConnectScript, connect, cleanupRemoteAttachments, connectWithRetry, createRemoteFile, downloadRemoteFile, ensureDeviceControlKey, exec, finalizeDeviceControl, getAgentSdkBridgeStatus, getClaudeModelStatus, handleToolPayload, installAgentSdkBridge, listRemoteDir, loadDeviceTemplate, markDeviceControlDisabled, mimeFromPath, readDeviceControlIpTrack, readRemoteFile, runClaude, safeRemoteFileName, shellQuote, statRemoteFile, uninstallAgentSdkBridge, updateClaudeAutoCompactWindow, updateClaudeModel, updateClaudeModelEntry, verifyConnection, withTimeout, writeRemoteFile, writeSftp };
+module.exports = { buildAttachmentNote, buildDeviceConnectScript, connect, cleanupRemoteAttachments, connectWithRetry, createRemoteFile, downloadRemoteFile, ensureDeviceControlKey, exec, finalizeDeviceControl, getAgentSdkBridgeStatus, getClaudeModelStatus, handleToolPayload, installAgentSdkBridge, isSshResourceMissing, listRemoteDir, loadDeviceTemplate, markDeviceControlDisabled, mimeFromPath, readDeviceControlIpTrack, readRemoteFile, runClaude, safeRemoteFileName, shellQuote, statRemoteFile, uninstallAgentSdkBridge, updateClaudeAutoCompactWindow, updateClaudeModel, updateClaudeModelEntry, verifyConnection, withTimeout, writeRemoteFile, writeSftp };

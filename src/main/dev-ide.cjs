@@ -23,6 +23,17 @@ const path = require("path");
 
 const IDE_MAX_FILE_BYTES = 128 * 1024;
 const IDE_DIR_MAX = 500;
+/** 自产临时件名痕（与 ssh.cjs sftpTemporaryPath / 本地事务写同族）；文件树里过滤不显 */
+const IDE_TEMP_FILE_MARK = ".agent-chat-pro-part";
+
+/**
+ * SSH 层「资源不存在」判定（v3.48.1；ssh.cjs isSshResourceMissing 同族语义互指）。
+ * ⚠ ssh2 的 SFTP 错误 code 是协议数字（SSH_FX_NO_SUCH_FILE=2），不是 "ENOENT" 字符串。
+ */
+function isSshResourceMissing(error) {
+  if (!error) return false;
+  return error.code === 2 || error.code === "ENOENT" || /no such file/i.test(String(error.message || ""));
+}
 
 /** 远端 POSIX 路径护栏：目标必须落在工作目录内（绝对/越界/\0 全拒；工作目录自身=浏览根） */
 function assertInsidePosix(workdir, relativePath) {
@@ -96,17 +107,27 @@ function makeSshIde(deps) {
         type: entry?.type === "dir" ? "dir" : "file",
         size: Number(entry?.size || 0),
         hidden: String(entry?.name || "").startsWith(".")
-      })).filter((entry) => entry.name && entry.name !== "."); // 去自引用项（树层去重）
+      })).filter((entry) => entry.name && entry.name !== "." // 去自引用项（树层去重）
+        && !entry.name.includes(IDE_TEMP_FILE_MARK)); // 过滤自身事务写临时件（v3.48.1）
       const clipped = clipEntries(sortEntries(entries));
       return { entries: clipped.entries, truncated: clipped.truncated, abs };
     },
     async read({ config, rel, onUnknownHost, onLog }) {
       const abs = assertInsidePosix(config.workingDirectory, rel);
-      const meta = await ssh.statRemoteFile(config, abs, onUnknownHost, onLog);
+      let meta;
+      try {
+        meta = await ssh.statRemoteFile(config, abs, onUnknownHost, onLog);
+      } catch (error) {
+        // v3.48.1：不存在=友好文案（对齐本机路「文件不存在或不可读。」），其余错误如实上抛
+        if (isSshResourceMissing(error)) throw new Error("文件不存在或不可读。");
+        throw error;
+      }
       if (meta.isDirectory) throw new Error("这是一个目录，请在文件树上浏览。");
       if (meta.size > IDE_MAX_FILE_BYTES) throw new Error(`文件超过 ${Math.round(IDE_MAX_FILE_BYTES / 1024)} KB 编辑打开上限。`);
       const data = await ssh.readRemoteFile(config, abs, IDE_MAX_FILE_BYTES + 1, onUnknownHost, onLog);
-      return { content: decodeText(data), size: data.length };
+      // stat 与 read 之间远端被追加的竞态兜底：截到上限内再解码，防止多字节字符跨端截半被误判二进制
+      const clamped = data.length > IDE_MAX_FILE_BYTES ? data.subarray(0, IDE_MAX_FILE_BYTES) : data;
+      return { content: decodeText(clamped), size: clamped.length };
     },
     async write({ config, rel, content, onUnknownHost, onLog }) {
       const abs = assertInsidePosix(config.workingDirectory, rel);
@@ -132,7 +153,7 @@ function makeLocalIde(deps) {
       const entries = [];
       for (const dirent of dirents || []) {
         const name = String(dirent.name || "");
-        if (!name || name === ".") continue;
+        if (!name || name === "." || name.includes(IDE_TEMP_FILE_MARK)) continue; // 过滤自身事务写临时件（v3.48.1）
         const type = dirent.isDirectory() ? "dir" : "file";
         let size = 0;
         if (type === "file") {
@@ -161,7 +182,21 @@ function makeLocalIde(deps) {
     async write({ config, rel, content }) {
       const abs = assertInsideLocal(config.workingDirectory, rel);
       const data = checkTextPayload(content);
-      await fs.writeFile(abs, data);
+      // v3.48.1 事务写：直写流式覆盖在磁盘满/进程被杀半程会把原文件截断成半文件——
+      // 先写同目录临时件、成功后原子改名覆盖；两步任一失败都清理临时件并如实上抛。
+      const temporary = `${abs}${IDE_TEMP_FILE_MARK}`;
+      try {
+        await fs.writeFile(temporary, data);
+      } catch (error) {
+        try { await fs.rm(temporary, { force: true }); } catch { /* 收尾尽力 */ }
+        throw error;
+      }
+      try {
+        await fs.rename(temporary, abs); // 同目录改名不跨卷；Node/Win 语义均覆盖已存在目标
+      } catch (error) {
+        try { await fs.rm(temporary, { force: true }); } catch { /* 收尾尽力 */ }
+        throw error;
+      }
       return { size: data.length };
     },
     async create({ config, rel }) {
@@ -194,10 +229,12 @@ module.exports = {
   makeIdeToolkit,
   assertInsidePosix,
   assertInsideLocal,
+  isSshResourceMissing,
   decodeText,
   checkTextPayload,
   sortEntries,
   clipEntries,
   IDE_MAX_FILE_BYTES,
-  IDE_DIR_MAX
+  IDE_DIR_MAX,
+  IDE_TEMP_FILE_MARK
 };

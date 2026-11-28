@@ -99,8 +99,22 @@ async function resolveOnPath(deps, cli) {
 /** --version 抓首行（失败=版本未知，不影响在册判定） */
 async function probeVersion(deps, cli, path) {
   const runProbe = deps.runProbe || defaultRunProbe;
-  const probe = await runProbe(path || cli, ["--version"], 3000, deps.platform || process.platform);
-  const line = String(probe.stdout || "").split(/\r?\n/).find((item) => item.trim()) || "";
+  const platform = deps.platform || process.platform;
+  const target = path || cli;
+  // v3.48.1 修：Windows 上 npm 全局 CLI 全是 .cmd/.ps1 shim——Node ≥18.20 起 execFile 直跑
+  // .cmd 抛 EINVAL（CVE-2024-27980 后的默认拒绝），版本探测恒空。走 cmd.exe /d /s /c 包装：
+  // /d 禁 AutoRun；/s 保守引号剥离；内层整体引号吃带空格的安装路径（C:\Program Files\...）。
+  if (platform === "win32") {
+    const probe = await runProbe("cmd.exe", ["/d", "/s", "/c", `""${target}" --version"`], 3000, platform);
+    return firstVersionLine(probe.stdout);
+  }
+  const probe = await runProbe(target, ["--version"], 3000, platform);
+  return firstVersionLine(probe.stdout);
+}
+
+/** --version 输出抓首个非空行（最多 60 字） */
+function firstVersionLine(stdout) {
+  const line = String(stdout || "").split(/\r?\n/).find((item) => item.trim()) || "";
   return line.trim().slice(0, 60);
 }
 
@@ -150,8 +164,6 @@ async function detectLocalAgents(deps = {}) {
       probed.sort((a, b) => a.port - b.port);
       daemonRunning = probed[0] || null;
     } catch { /* 无 ~/.atomcode 目录=零 daemon 配置 */ }
-    const daemons = [];
-    if (daemonRunning) daemons.push(daemonRunning);
     if (daemonRunning) {
       agents.push({
         key: "atomcode", engine: "atomcode", name: "AtomCode", status: "ready",
@@ -186,4 +198,4 @@ async function detectLocalAgents(deps = {}) {
   return { agents, platform: platformF };
 }
 
-module.exports = { detectLocalAgents, parseDaemonPort, parseDaemonToken, applyOf, resolveOnPath, probeVersion, CUSTOM_TEMPLATES, CUSTOM_LABELS, defaultRunProbe, defaultTcpProbe };
+module.exports = { detectLocalAgents, parseDaemonPort, parseDaemonToken, applyOf, resolveOnPath, probeVersion, firstVersionLine, CUSTOM_TEMPLATES, CUSTOM_LABELS, defaultRunProbe, defaultTcpProbe };

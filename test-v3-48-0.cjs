@@ -245,9 +245,10 @@ async function runWiringTests() {
 }
 
 async function runVersionTests() {
-  await test("C1. 版本滚动锚：package.json =3.48.0 且 README badge 自洽", () => {
+  await test("C1. 版本滚动锚：package.json ≥3.48.0 且 README badge 自洽（本代升版滚更——死版等值锚按 test-v3-46-1 C1 先例改滚动式）", () => {
     const parts = pkg.version.split(".").map(Number);
-    assert.ok(parts[0] === 3 && parts[1] === 48 && parts[2] === 0, `版本应为 3.48.0（实际 ${pkg.version}）`);
+    const atLeast = (other) => parts[0] > other[0] || (parts[0] === other[0] && (parts[1] > other[1] || (parts[1] === other[1] && parts[2] >= other[2])));
+    assert.ok(atLeast([3, 48, 0]), `版本应 ≥3.48.0（实际 ${pkg.version}）`);
     assert.ok(readme.includes(`version-${pkg.version}`), "README badge 应与 package.json 一致");
     const badge = (readme.match(/tests-(\d+)%20files/) || [])[1];
     assert.ok(badge && Number(badge) >= 68, `README tests badge 应 ≥68（实际 ${badge}）`);

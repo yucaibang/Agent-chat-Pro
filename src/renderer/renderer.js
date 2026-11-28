@@ -1170,7 +1170,8 @@ const ideState = {
   entries: new Map(),            // rel → [{name, type, size, hidden}]
   truncated: new Map(),          // rel → 目录超限截断标记
   tabs: [],                      // 已开文件 [{rel, content, initial, dirty, size, mode, lines}]
-  active: -1
+  active: -1,
+  spaceMode: ""                  // 当前工作空间（主进程裁定 ssh/cloud/local；v3.48.1 空间守卫）
 };
 
 function ideModeLabel(mode) {
@@ -1187,6 +1188,18 @@ function ideFormatSize(bytes) {
 async function ideLoadDir(rel) {
   try {
     const result = await window.agentChatPro.devIdeList({ rel: String(rel || "") });
+    // v3.48.1 空间守卫：连接模式切换后主进程裁定的工作空间变了——旧树缓存/已开页签属于旧
+    // 空间，保留会视图欺骗（树上显旧空间目录而读写落新空间）且陈旧页签内容可能覆盖新空间
+    // 同名文件。检测到换空间即清树缓存+展开态+收掉全部编辑页签（弹窗开着也一并关）重建。
+    if (ideState.spaceMode && ideState.spaceMode !== result.mode) {
+      ideState.entries.clear();
+      ideState.truncated.clear();
+      ideState.expanded = new Set([""]);
+      ideState.tabs = [];
+      ideState.active = -1;
+      ideCloseDialogForced();
+    }
+    ideState.spaceMode = result.mode;
     ideState.entries.set(rel, result.entries || []);
     ideState.truncated.set(rel, Boolean(result.truncated));
     const head = document.querySelector("#dev-files-space");
@@ -1196,6 +1209,12 @@ async function ideLoadDir(rel) {
   } catch (error) {
     renderDevTreeMessage(`文件树加载失败：${error?.message || error}`);
   }
+}
+
+/** 空间切换收口：不经确认静默关编辑弹窗（旧空间页签已随守卫清空，无可失） */
+function ideCloseDialogForced() {
+  const dialog = document.querySelector("#ide-dialog");
+  if (dialog?.open) dialog.close();
 }
 
 function renderDevTreeMessage(text) {
@@ -1429,13 +1448,8 @@ async function ideCreateFile() {
     await window.agentChatPro.devIdeCreate({ rel });
     const parent = rel.includes("/") ? rel.slice(0, rel.lastIndexOf("/")) : "";
     ideState.expanded.add(parent);
-    try {
-      const result = await window.agentChatPro.devIdeList({ rel: parent });
-      ideState.entries.set(parent, result.entries || []);
-      ideState.truncated.set(parent, Boolean(result.truncated));
-      if (!result.truncated) ideState.truncated.delete(parent);
-    } catch { /* 源层刷新失败不挡打开 */ }
-    renderDevTree();
+    // v3.48.1：刷新统一走 ideLoadDir（空间守卫+截断态+空间标签全部在同一处口径，分叉面归零）
+    await ideLoadDir(parent);
     document.querySelector("#dev-files-newbox").hidden = true;
     if (input) input.value = "";
     void ideOpenFile(rel);
@@ -3803,7 +3817,6 @@ document.querySelectorAll("[data-local-engine]").forEach((button) => {
 // ── v3.48.0 本机 Agent 一键检测（选它即自动切引擎+填配置） ──
 document.querySelector("#local-agent-detect-button")?.addEventListener("click", async () => {
   const button = document.querySelector("#local-agent-detect-button");
-  const box = document.querySelector("#local-agent-result");
   button.disabled = true;
   button.textContent = "正在检测本机 Agent…";
   setStatus("正在探测本机已装的 Claude Code / AtomCode / Aider 等…");
